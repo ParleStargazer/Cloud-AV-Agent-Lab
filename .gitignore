@@ -35,3 +35,7 @@ malware/
 *.dll
 *.scr
 *.ps1
+
+# Personal daily reports and notes
+daily-reports/
+reference-doc/
