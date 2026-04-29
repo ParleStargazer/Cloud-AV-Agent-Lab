@@ -1,0 +1,6 @@
+[submodule "Spore"]
+	path = Spore
+	url = https://github.com/miunasu/Spore.git
+[submodule "vmware-mcp"]
+	path = vmware-mcp
+	url = https://github.com/ZacharyZcR/vmware-mcp.git
