@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Local secrets and runtime state
+.env
+.env.*
+configs/*.local.toml
+configs/lab.toml
+configs/*secret*.toml
+configs/*secrets*.toml
+*.log
+reports/*.md
+reports/*.json
+reports/*.html
+reports/screenshots/
+artifacts/
+state/
+
+# This project intentionally must not store samples locally.
+samples/
+malware/
+*.7z
+*.zip
+*.rar
+*.exe
+*.dll
+*.scr
+*.ps1

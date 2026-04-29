@@ -1,0 +1,105 @@
+[lab]
+name = "cloud-av-agent-lab"
+artifact_dir = "reports"
+local_sample_storage = "forbidden"
+require_cloud_isolation = true
+max_case_seconds = 900
+
+[cloud]
+provider = "tencent-cloud-cvm"
+mode = "mock" # mock / real; real mode still uses dry_run until Tencent Cloud signing is wired.
+dry_run = true
+region = "ap-guangzhou"
+credential_profile_env = "TENCENTCLOUD_PROFILE"
+secret_id = ""
+secret_key = ""
+artifact_bucket = "cos://replace-me-av-lab-artifacts"
+network_profile = "isolated-egress-deny-by-default"
+api_endpoint = "https://cvm.tencentcloudapi.com"
+
+[network.proxy]
+# 开发阶段临时代理：用于本地主机跨网络访问云 API 或云端 Guest Agent。
+# 正式交付时保持 enabled=false，或删除本节和 src/cloud_av_agent_lab/network/proxy.py。
+enabled = false
+type = "socks5"
+host = "127.0.0.1"
+port = 7890
+
+[[products]]
+id = "tencent-pc-manager"
+display_name = "Tencent PC Manager"
+vendor = "Tencent"
+log_paths = [
+  'C:\ProgramData\Tencent\Logs',
+  'C:\Program Files\Tencent\QQPCMgr\Logs',
+]
+ui_window_titles = ["Tencent PC Manager", "QQPCMgr"]
+detection_keywords = ["blocked", "quarantine", "virus", "trojan", "malware", "risk"]
+
+[[products]]
+id = "huorong"
+display_name = "Huorong Internet Security"
+vendor = "Huorong"
+log_paths = [
+  'C:\ProgramData\Huorong\Sysdiag',
+  'C:\Program Files\Huorong\Sysdiag\log',
+]
+ui_window_titles = ["Huorong", "火绒"]
+detection_keywords = ["blocked", "quarantine", "virus", "trojan", "malware", "拦截", "隔离"]
+
+[[products]]
+id = "qihoo-360"
+display_name = "360 Total Security"
+vendor = "Qihoo 360"
+log_paths = [
+  'C:\ProgramData\360safe\logs',
+  'C:\Program Files (x86)\360\360Safe\logs',
+]
+ui_window_titles = ["360 Total Security", "360安全卫士"]
+detection_keywords = ["blocked", "quarantine", "virus", "trojan", "malware", "拦截", "隔离"]
+
+[[vms]]
+id = "win10-tencent-manager"
+provider = "tencent-cloud-cvm"
+region = "ap-guangzhou"
+image = "img-av-baseline-win10"
+baseline_snapshot = "snap-clean-tencent-manager"
+product_id = "tencent-pc-manager"
+network_profile = "isolated-egress-deny-by-default"
+instance_id = "ins-replace-tencent-manager"
+
+[[vms]]
+id = "win10-huorong"
+provider = "tencent-cloud-cvm"
+region = "ap-guangzhou"
+image = "img-av-baseline-win10"
+baseline_snapshot = "snap-clean-huorong"
+product_id = "huorong"
+network_profile = "isolated-egress-deny-by-default"
+instance_id = "ins-replace-huorong"
+
+[[vms]]
+id = "win10-qihoo-360"
+provider = "tencent-cloud-cvm"
+region = "ap-guangzhou"
+image = "img-av-baseline-win10"
+baseline_snapshot = "snap-clean-qihoo-360"
+product_id = "qihoo-360"
+network_profile = "isolated-egress-deny-by-default"
+instance_id = "ins-replace-qihoo-360"
+
+[[samples]]
+id = "case-001"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000001"
+category = "persistence"
+cloud_object_uri = "cos://replace-me-sample-bucket/redacted/case-001.bin"
+expected_behaviors = ["persistence"]
+notes = "Synthetic placeholder. Replace with an approved cloud object reference only."
+
+[[samples]]
+id = "case-002"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000002"
+category = "privilege-escalation"
+cloud_object_uri = "cos://replace-me-sample-bucket/redacted/case-002.bin"
+expected_behaviors = ["privilege_escalation"]
+notes = "Synthetic placeholder. Do not place the sample in this repository."
