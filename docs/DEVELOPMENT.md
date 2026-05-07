@@ -57,14 +57,14 @@ $env:TENCENTCLOUD_REGION="ap-guangzhou"
 ```toml
 [[vms]]
 id = "win10-tencent-manager"
-instance_id = "ins-xxxxxxxx"
+instance_id = "lhins-xxxxxxxx"
 ```
 
 也可以用环境变量覆盖：
 
 ```powershell
-$env:TENCENTCLOUD_INSTANCE_ID="ins-xxxxxxxx"
-$env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="ins-yyyyyyyy"
+$env:TENCENTCLOUD_INSTANCE_ID="lhins-xxxxxxxx"
+$env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="lhins-yyyyyyyy"
 ```
 
 带 VM ID 后缀的变量优先级最高。后缀规则是把 VM ID 转成大写，并把非字母数字字符替换为 `_`。
@@ -75,7 +75,7 @@ $env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="ins-yyyyyyyy"
 
 当前已完成真实接入前的结构准备：
 
-- `TencentCloudVmAdapter`
+- `TencentCloudLighthouseAdapter`
 - `TencentCloudAuth`
 - `TencentCloudOperation`
 - `VMOperationResponse`
@@ -94,10 +94,10 @@ $env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="ins-yyyyyyyy"
 
 `mode = "mock"` 时不会访问网络，只返回统一的 `VMOperationResponse`。`mode = "real"` 时准备进入真实 API 路径，但只要 `dry_run = true`，所有写操作都会被拦截。
 
-真实 API 后续接入点集中在 `TencentCloudVmAdapter._call_api()`，应在这里补充：
+真实 API 后续接入点集中在 `TencentCloudLighthouseAdapter._call_api()`，应在这里补充：
 
 - 腾讯云 TC3-HMAC-SHA256 请求签名；
-- CVM / CBS API action 到请求参数的映射；
+- Lighthouse API action 到请求参数的映射，快照回滚使用 `ApplyInstanceSnapshot`；
 - 通过 `NetworkClient` 发起请求；
 - 腾讯云错误码到 `CloudProviderError` 的统一转换；
 - 真实返回值到 `VMOperationResponse` 的统一转换。
@@ -107,7 +107,7 @@ $env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="ins-yyyyyyyy"
 `dry_run = true` 是当前默认安全设置。开启后，适配器不会调用 `_call_api()`，而是返回并打印清晰的计划信息：
 
 ```text
-[DRY-RUN] Would call: StartInstances with Params: {'InstanceIds': ['ins-xxxx']}
+[DRY-RUN] Would call: StartInstances with Params: {'InstanceIds': ['lhins-xxxx']}
 ```
 
 测试中通过 mock `_call_api()` 验证了即使 `mode = "real"`，dry-run 也不会触发真实逻辑。
@@ -162,4 +162,3 @@ python -m cloud_av_agent_lab plan --config configs/lab.example.toml
 - `tests/test_network.py`：代理开启/关闭时的网络客户端行为。
 - `tests/test_tencent_cloud_adapter.py`：腾讯云适配器初始化和响应结构。
 - `tests/test_adapter.py`：环境变量注入、实例 ID 覆盖和 real+dry-run 拦截。
-

@@ -6,7 +6,7 @@ require_cloud_isolation = true
 max_case_seconds = 900
 
 [cloud]
-provider = "tencent-cloud-cvm"
+provider = "tencent-cloud-lighthouse"
 mode = "mock" # mock / real; real mode still uses dry_run until Tencent Cloud signing is wired.
 dry_run = true
 region = "ap-guangzhou"
@@ -15,7 +15,7 @@ secret_id = ""
 secret_key = ""
 artifact_bucket = "cos://replace-me-av-lab-artifacts"
 network_profile = "isolated-egress-deny-by-default"
-api_endpoint = "https://cvm.tencentcloudapi.com"
+api_endpoint = "https://lighthouse.tencentcloudapi.com"
 
 [network.proxy]
 # 开发阶段临时代理：用于本地主机跨网络访问云 API 或云端 Guest Agent。
@@ -60,33 +60,33 @@ detection_keywords = ["blocked", "quarantine", "virus", "trojan", "malware", "�
 
 [[vms]]
 id = "win10-tencent-manager"
-provider = "tencent-cloud-cvm"
+provider = "tencent-cloud-lighthouse"
 region = "ap-guangzhou"
 image = "img-av-baseline-win10"
 baseline_snapshot = "snap-clean-tencent-manager"
 product_id = "tencent-pc-manager"
 network_profile = "isolated-egress-deny-by-default"
-instance_id = "ins-replace-tencent-manager"
+instance_id = "lhins-replace-tencent-manager"
 
 [[vms]]
 id = "win10-huorong"
-provider = "tencent-cloud-cvm"
+provider = "tencent-cloud-lighthouse"
 region = "ap-guangzhou"
 image = "img-av-baseline-win10"
 baseline_snapshot = "snap-clean-huorong"
 product_id = "huorong"
 network_profile = "isolated-egress-deny-by-default"
-instance_id = "ins-replace-huorong"
+instance_id = "lhins-replace-huorong"
 
 [[vms]]
 id = "win10-qihoo-360"
-provider = "tencent-cloud-cvm"
+provider = "tencent-cloud-lighthouse"
 region = "ap-guangzhou"
 image = "img-av-baseline-win10"
 baseline_snapshot = "snap-clean-qihoo-360"
 product_id = "qihoo-360"
 network_profile = "isolated-egress-deny-by-default"
-instance_id = "ins-replace-qihoo-360"
+instance_id = "lhins-replace-qihoo-360"
 
 [[samples]]
 id = "case-001"

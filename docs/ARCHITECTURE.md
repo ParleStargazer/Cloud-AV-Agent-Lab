@@ -58,9 +58,9 @@ which delegates outbound requests to `NetworkClient`.
 
 The default adapters are plan-only and never execute a sample.
 
-## Tencent Cloud Adapter
+## Tencent Cloud Lighthouse Adapter
 
-`TencentCloudVmAdapter` is the first cloud adapter skeleton. It reserves methods for CVM lifecycle operations and keeps real Tencent Cloud API integration behind one `_call_api()` method.
+`TencentCloudLighthouseAdapter` is the first cloud adapter skeleton. It reserves methods for Lighthouse lifecycle operations and keeps real Tencent Cloud API integration behind one `_call_api()` method.
 
 The adapter has two modes:
 

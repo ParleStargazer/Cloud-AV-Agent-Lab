@@ -42,8 +42,8 @@ class TencentCloudOperation:
     mode: str
 
 
-class TencentCloudVmAdapter:
-    """Tencent Cloud CVM adapter skeleton.
+class TencentCloudLighthouseAdapter:
+    """Tencent Cloud Lighthouse adapter skeleton.
 
     The current implementation is intentionally plan-only. The real Tencent
     Cloud API integration should be added in `_call_api`, including request
@@ -63,7 +63,7 @@ class TencentCloudVmAdapter:
         self.mode = cloud.mode.casefold()
         if self.mode not in {"mock", "real"}:
             raise TencentCloudConfigError(
-                "TencentCloudVmAdapter mode must be mock or real"
+                "TencentCloudLighthouseAdapter mode must be mock or real"
             )
         self.dry_run = cloud.dry_run if dry_run is None else dry_run
         self.auth = resolve_tencent_cloud_auth(cloud, self.env)
@@ -71,7 +71,7 @@ class TencentCloudVmAdapter:
 
     def restore_snapshot(self, vm: VmProfile) -> VMOperationResponse:
         return self._operation(
-            "RollbackSnapshot",
+            "ApplyInstanceSnapshot",
             vm,
             {
                 "InstanceId": self._instance_id(vm),
@@ -181,7 +181,7 @@ class TencentCloudVmAdapter:
             action=action,
             params=dict(params),
             dry_run=dry_run,
-            provider="tencent-cloud-cvm",
+            provider="tencent-cloud-lighthouse",
         )
 
     def _instance_id(self, vm: VmProfile) -> str:

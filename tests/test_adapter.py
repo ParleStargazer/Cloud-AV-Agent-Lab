@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from cloud_av_agent_lab.adapters.tencent_cloud import (
-    TencentCloudVmAdapter,
+    TencentCloudLighthouseAdapter,
     resolve_tencent_cloud_auth,
 )
 from cloud_av_agent_lab.config import load_config
@@ -61,7 +61,7 @@ class TencentCloudAdapterPreparationTests(TestCase):
     def test_real_mode_dry_run_does_not_call_api(self) -> None:
         config = load_config(ROOT / "configs" / "lab.example.toml")
         cloud = replace(config.cloud, mode="real", dry_run=True)
-        adapter = TencentCloudVmAdapter(cloud, env={})
+        adapter = TencentCloudLighthouseAdapter(cloud, env={})
         adapter._call_api = Mock(side_effect=AssertionError("should not call API"))
 
         response = adapter.start_vm(config.vms["win10-tencent-manager"])
@@ -74,13 +74,13 @@ class TencentCloudAdapterPreparationTests(TestCase):
 
     def test_instance_id_environment_overrides_config(self) -> None:
         config = load_config(ROOT / "configs" / "lab.example.toml")
-        adapter = TencentCloudVmAdapter(
+        adapter = TencentCloudLighthouseAdapter(
             config.cloud,
             env={
-                "TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER": "ins-from-env",
+                "TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER": "lhins-from-env",
             },
         )
 
         response = adapter.start_vm(config.vms["win10-tencent-manager"])
 
-        self.assertEqual(response.params["InstanceIds"], ["ins-from-env"])
+        self.assertEqual(response.params["InstanceIds"], ["lhins-from-env"])

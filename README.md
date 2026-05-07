@@ -77,19 +77,19 @@ cloud-av-agent-lab report-template --config configs/lab.example.toml --out repor
 - `core/contracts.py`：定义样本引用、杀软配置、虚拟机配置、测试用例和结果模型。
 - `core/safety.py`：拦截本地样本路径、非云端隔离等不安全配置。
 - `core/pipeline.py`：构建测试矩阵，并定义恢复快照、云端投递、执行、采集、报告的流程骨架。
-- `adapters/`：云厂商和客户机自动化接口，已包含腾讯云 CVM 适配器骨架、Guest Agent 客户端占位和只读计划适配器。
+- `adapters/`：云厂商和客户机自动化接口，已包含腾讯云 Lighthouse 适配器骨架、Guest Agent 客户端占位和只读计划适配器。
 - `network/`：统一网络客户端和临时代理支持，业务适配器只依赖 `NetworkClient`。
 - `detectors/`：基于日志关键字和行为观测的通用判定逻辑。
 - `reporting/markdown.py`：输出检出率、差异样本和逐用例结果。
 
-## 腾讯云云主机接入
+## 腾讯云 Lighthouse 接入
 
-`src/cloud_av_agent_lab/adapters/tencent_cloud.py` 提供 `TencentCloudVmAdapter` 骨架，预留了云主机开机、关机、重启、快照回滚、实例状态查询和截图产物引用接口。当前实现支持 `mock` / `real` mode，但真实腾讯云签名调用尚未接入。
+`src/cloud_av_agent_lab/adapters/tencent_cloud.py` 提供 `TencentCloudLighthouseAdapter` 骨架，预留了 Lighthouse 实例开机、关机、重启、快照回滚、实例状态查询和截图产物引用接口。当前实现支持 `mock` / `real` mode，但真实腾讯云签名调用尚未接入。
 
 `mode = "mock"` 时只返回统一的 `VMOperationResponse`。`mode = "real"` 且 `dry_run = true` 时会拦截所有云 API 调用，并输出类似：
 
 ```text
-[DRY-RUN] Would call: StartInstances with Params: {'InstanceIds': ['ins-xxxx']}
+[DRY-RUN] Would call: StartInstances with Params: {'InstanceIds': ['lhins-xxxx']}
 ```
 
 `VMOperationResponse` 至少包含 `status`、`task_id`、`message`、`action`、`params`、`dry_run` 和 `provider`，后续真实 API 返回也应保持同一结构。
@@ -120,24 +120,24 @@ $env:TENCENTCLOUD_REGION="ap-guangzhou"
 ```toml
 [[vms]]
 id = "win10-tencent-manager"
-instance_id = "ins-xxxxxxxx"
+instance_id = "lhins-xxxxxxxx"
 ```
 
 也可以用环境变量覆盖，适合临时调试：
 
 ```powershell
-$env:TENCENTCLOUD_INSTANCE_ID="ins-xxxxxxxx"
-$env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="ins-yyyyyyyy"
+$env:TENCENTCLOUD_INSTANCE_ID="lhins-xxxxxxxx"
+$env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="lhins-yyyyyyyy"
 ```
 
 其中带 VM ID 后缀的变量优先级最高，后缀会把 VM ID 转成大写并把非字母数字替换为 `_`。
 
-后续真实接入点集中在 `TencentCloudVmAdapter._call_api()`：
+后续真实接入点集中在 `TencentCloudLighthouseAdapter._call_api()`：
 
 - 使用已解析的 `TencentCloudAuth` 凭据；
 - 补充腾讯云 API 请求签名，例如 TC3-HMAC-SHA256；
 - 通过 `NetworkClient` 发起云 API 请求；
-- 按产品基线补充快照回滚所需的 CVM/CBS API 映射。
+- 按产品基线补充 Lighthouse 实例与系统盘快照的 API 映射，快照回滚使用 `ApplyInstanceSnapshot`。
 
 ## 开发期代理
 
@@ -160,7 +160,7 @@ Agent 不应直接操作本地样本，也不应生成规避检测建议。
 
 ## 后续接入点
 
-- 云厂商适配器：实现 `CloudVmAdapter`，对接 CVM/ECS/EC2 快照恢复、开关机、截图、隔离网络。
+- 云厂商适配器：实现 `CloudVmAdapter`，对接 Lighthouse 快照恢复、开关机、截图、隔离网络。
 - 客户机适配器：实现 `GuestAutomationAdapter`，在云端 VM 内完成从云对象拉取样本、启动测试、采集日志。
 - 产品配置：为腾讯电脑管家、火绒、360 等维护独立日志路径、UI 标题和告警关键字。
 - 报告增强：加入人工测试基线对比、误报/漏报复核字段和趋势统计。

@@ -29,7 +29,7 @@ class CloudProfile:
     credential_profile_env: str
     artifact_bucket: str
     network_profile: str
-    api_endpoint: str = "https://cvm.tencentcloudapi.com"
+    api_endpoint: str = "https://lighthouse.tencentcloudapi.com"
     secret_id: str = ""
     secret_key: str = ""
     mode: str = "mock"
