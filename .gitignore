@@ -37,5 +37,6 @@ malware/
 *.ps1
 
 # Personal daily reports and notes
+daily-report/
 daily-reports/
 reference-doc/
