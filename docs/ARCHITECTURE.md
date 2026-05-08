@@ -60,7 +60,7 @@ The default adapters are plan-only and never execute a sample.
 
 ## Tencent Cloud Lighthouse Adapter
 
-`TencentCloudLighthouseAdapter` is the first cloud adapter skeleton. It reserves methods for Lighthouse lifecycle operations and keeps real Tencent Cloud API integration behind one `_call_api()` method.
+`TencentCloudLighthouseAdapter` is the first cloud adapter. It reserves methods for Lighthouse lifecycle operations and keeps real Tencent Cloud API integration behind one `_call_api()` method.
 
 The adapter has two modes:
 
@@ -74,7 +74,7 @@ Credential loading follows environment variables first, then TOML config:
 - `TENCENTCLOUD_REGION`
 - `TENCENTCLOUD_INSTANCE_ID` or `TENCENTCLOUD_INSTANCE_ID_<VM_ID_SUFFIX>`
 
-The intended production work is to add Tencent Cloud request signing, API action mapping, and calls through `NetworkClient`.
+The adapter now signs API 3.0 requests with TC3-HMAC-SHA256 and sends them through `NetworkClient`. Remaining production work is to expand action coverage, add polling, and harden provider-specific error handling.
 
 ## Temporary Proxy Layer
 

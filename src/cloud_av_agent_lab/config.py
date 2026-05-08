@@ -91,7 +91,10 @@ def load_config(path: str | Path) -> LabConfig:
         credential_profile_env=str(cloud["credential_profile_env"]),
         artifact_bucket=str(cloud["artifact_bucket"]),
         network_profile=str(cloud["network_profile"]),
-        api_endpoint=str(cloud.get("api_endpoint", "https://cvm.tencentcloudapi.com")),
+        api_endpoint=str(
+            cloud.get("api_endpoint", "https://lighthouse.tencentcloudapi.com")
+        ),
+        api_version=str(cloud.get("api_version", "2020-03-24")),
         secret_id=str(cloud.get("secret_id", "")),
         secret_key=str(cloud.get("secret_key", "")),
         mode=str(cloud.get("mode", "mock")),

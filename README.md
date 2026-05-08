@@ -56,6 +56,7 @@ python -m uv pip install -e .
 ```powershell
 cloud-av-agent-lab validate --config configs/lab.example.toml
 cloud-av-agent-lab plan --config configs/lab.example.toml
+cloud-av-agent-lab cloud-status --config configs/lab.example.toml --vm-id win10-tencent-manager
 cloud-av-agent-lab report-template --config configs/lab.example.toml --out reports/template.md
 ```
 
@@ -84,7 +85,7 @@ cloud-av-agent-lab report-template --config configs/lab.example.toml --out repor
 
 ## 腾讯云 Lighthouse 接入
 
-`src/cloud_av_agent_lab/adapters/tencent_cloud.py` 提供 `TencentCloudLighthouseAdapter` 骨架，预留了 Lighthouse 实例开机、关机、重启、快照回滚、实例状态查询和截图产物引用接口。当前实现支持 `mock` / `real` mode，但真实腾讯云签名调用尚未接入。
+`src/cloud_av_agent_lab/adapters/tencent_cloud.py` 提供 `TencentCloudLighthouseAdapter`，预留了 Lighthouse 实例开机、关机、重启、快照回滚、实例状态查询和截图产物引用接口。当前实现支持 `mock` / `real` mode，并已接入腾讯云 API 3.0 的 TC3-HMAC-SHA256 签名和统一请求路径。
 
 `mode = "mock"` 时只返回统一的 `VMOperationResponse`。`mode = "real"` 且 `dry_run = true` 时会拦截所有云 API 调用，并输出类似：
 
@@ -92,7 +93,7 @@ cloud-av-agent-lab report-template --config configs/lab.example.toml --out repor
 [DRY-RUN] Would call: StartInstances with Params: {'InstanceIds': ['lhins-xxxx']}
 ```
 
-`VMOperationResponse` 至少包含 `status`、`task_id`、`message`、`action`、`params`、`dry_run` 和 `provider`，后续真实 API 返回也应保持同一结构。
+`VMOperationResponse` 至少包含 `status`、`task_id`、`message`、`action`、`params`、`data`、`dry_run` 和 `provider`，后续真实 API 返回也应保持同一结构。
 
 ### 腾讯云鉴权配置
 
@@ -132,12 +133,21 @@ $env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="lhins-yyyyyyyy"
 
 其中带 VM ID 后缀的变量优先级最高，后缀会把 VM ID 转成大写并把非字母数字替换为 `_`。
 
-后续真实接入点集中在 `TencentCloudLighthouseAdapter._call_api()`：
+真实 API 调用集中在 `TencentCloudLighthouseAdapter._call_api()`：
 
 - 使用已解析的 `TencentCloudAuth` 凭据；
-- 补充腾讯云 API 请求签名，例如 TC3-HMAC-SHA256；
+- 使用 TC3-HMAC-SHA256 生成请求签名；
 - 通过 `NetworkClient` 发起云 API 请求；
+- 将 `Response.Error` 转换为 `TencentCloudApiError`；
 - 按产品基线补充 Lighthouse 实例与系统盘快照的 API 映射，快照回滚使用 `ApplyInstanceSnapshot`。
+
+只读连通性验证可以使用：
+
+```powershell
+cloud-av-agent-lab cloud-status --config configs/lab.local.toml --vm-id win10-tencent-manager
+```
+
+当配置仍为 `dry_run = true` 时，该命令只打印 `DescribeInstances` 的 dry-run 计划；将本地配置改为 `mode = "real"` 且 `dry_run = false` 并设置好环境变量后，才会发起真实只读 API 请求。
 
 ## 开发期代理
 
@@ -173,4 +183,5 @@ python -m ruff check --no-cache src tests
 python -m unittest discover -s tests
 python -m compileall src tests
 python -m cloud_av_agent_lab validate --config configs/lab.example.toml
+python -m cloud_av_agent_lab cloud-status --config configs/lab.example.toml --vm-id win10-tencent-manager
 ```

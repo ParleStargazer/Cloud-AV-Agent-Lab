@@ -1,24 +1,38 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
 import re
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Mapping
+from urllib.parse import urlparse
 
 from cloud_av_agent_lab.adapters.cloud import (
     CloudProviderError,
     VMOperationResponse,
 )
 from cloud_av_agent_lab.core.contracts import CloudProfile, TestCase, VmProfile
-from cloud_av_agent_lab.network.client import NetworkClient
-
-
-class TencentCloudApiNotConfigured(CloudProviderError):
-    """Raised if real Tencent Cloud execution is requested before API wiring."""
+from cloud_av_agent_lab.network.client import NetworkClient, encode_json_payload
 
 
 class TencentCloudConfigError(CloudProviderError):
     """Raised when Tencent Cloud adapter configuration is invalid."""
+
+
+class TencentCloudApiError(CloudProviderError):
+    """Raised when Tencent Cloud returns an API error response."""
+
+    def __init__(self, code: str, message: str, request_id: str = "") -> None:
+        self.code = code
+        self.request_id = request_id
+        detail = f"{code}: {message}"
+        if request_id:
+            detail = f"{detail} (RequestId: {request_id})"
+        super().__init__(detail)
 
 
 @dataclass(frozen=True)
@@ -45,9 +59,9 @@ class TencentCloudOperation:
 class TencentCloudLighthouseAdapter:
     """Tencent Cloud Lighthouse adapter skeleton.
 
-    The current implementation is intentionally plan-only. The real Tencent
-    Cloud API integration should be added in `_call_api`, including request
-    signing, credentials lookup, and SDK/client selection.
+    Real API requests are protected by `dry_run` by default. When dry-run is
+    disabled, `_call_api` signs TC3-HMAC-SHA256 requests and sends them through
+    the shared NetworkClient.
     """
 
     def __init__(
@@ -160,9 +174,62 @@ class TencentCloudLighthouseAdapter:
         return self._call_api(operation)
 
     def _call_api(self, operation: TencentCloudOperation) -> VMOperationResponse:
-        raise TencentCloudApiNotConfigured(
-            "Tencent Cloud API signing is not wired yet. Add credentials lookup, "
-            "TC3-HMAC-SHA256 signing, and calls through NetworkClient here."
+        if not self.auth.secret_id or not self.auth.secret_key:
+            raise TencentCloudConfigError(
+                "TENCENTCLOUD_SECRET_ID and TENCENTCLOUD_SECRET_KEY are required "
+                "for real Tencent Cloud API calls"
+            )
+
+        timestamp = int(time.time())
+        headers = build_tc3_headers(
+            secret_id=self.auth.secret_id,
+            secret_key=self.auth.secret_key,
+            endpoint=operation.endpoint,
+            action=operation.action,
+            version=self.cloud.api_version,
+            region=operation.region,
+            payload=operation.params,
+            timestamp=timestamp,
+        )
+        try:
+            response = self.network.request_json(
+                method="POST",
+                url=operation.endpoint,
+                payload=operation.params,
+                headers=headers,
+            )
+        except Exception as exc:
+            raise CloudProviderError(
+                f"Tencent Cloud {operation.action} request failed: {exc}"
+            ) from exc
+
+        body = _decode_json_response(response.body)
+        response_payload = body.get("Response")
+        if not isinstance(response_payload, dict):
+            raise CloudProviderError(
+                f"Tencent Cloud {operation.action} response missing Response object"
+            )
+
+        error = response_payload.get("Error")
+        request_id = str(response_payload.get("RequestId", ""))
+        if isinstance(error, dict):
+            raise TencentCloudApiError(
+                code=str(error.get("Code", "UnknownError")),
+                message=str(error.get("Message", "")),
+                request_id=request_id,
+            )
+
+        return self._response(
+            status="success",
+            action=operation.action,
+            params=operation.params,
+            data=response_payload,
+            message=(
+                f"tencent-cloud lighthouse: {operation.action} accepted"
+                + (f" (RequestId: {request_id})" if request_id else "")
+            ),
+            dry_run=False,
+            task_id=request_id,
         )
 
     def _response(
@@ -173,6 +240,7 @@ class TencentCloudLighthouseAdapter:
         message: str,
         dry_run: bool,
         task_id: str = "",
+        data: Mapping[str, object] | None = None,
     ) -> VMOperationResponse:
         return VMOperationResponse(
             status=status,
@@ -180,6 +248,7 @@ class TencentCloudLighthouseAdapter:
             message=message,
             action=action,
             params=dict(params),
+            data=dict(data or {}),
             dry_run=dry_run,
             provider="tencent-cloud-lighthouse",
         )
@@ -238,3 +307,94 @@ def _env_or_config(
 
 def _env_suffix(value: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "_", value.upper()).strip("_")
+
+
+def build_tc3_headers(
+    secret_id: str,
+    secret_key: str,
+    endpoint: str,
+    action: str,
+    version: str,
+    region: str,
+    payload: Mapping[str, object],
+    timestamp: int,
+) -> dict[str, str]:
+    host = _endpoint_host(endpoint)
+    service = host.split(".", maxsplit=1)[0]
+    algorithm = "TC3-HMAC-SHA256"
+    content_type = "application/json; charset=utf-8"
+    signed_headers = "content-type;host"
+    canonical_headers = f"content-type:{content_type}\nhost:{host}\n"
+    hashed_payload = hashlib.sha256(encode_json_payload(payload)).hexdigest()
+    canonical_request = "\n".join(
+        [
+            "POST",
+            "/",
+            "",
+            canonical_headers,
+            signed_headers,
+            hashed_payload,
+        ]
+    )
+    request_date = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%d")
+    credential_scope = f"{request_date}/{service}/tc3_request"
+    string_to_sign = "\n".join(
+        [
+            algorithm,
+            str(timestamp),
+            credential_scope,
+            hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+        ]
+    )
+    signature = _sign_tc3(secret_key, request_date, service, string_to_sign)
+    authorization = (
+        f"{algorithm} Credential={secret_id}/{credential_scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+
+    return {
+        "Authorization": authorization,
+        "Content-Type": content_type,
+        "Host": host,
+        "X-TC-Action": action,
+        "X-TC-Version": version,
+        "X-TC-Timestamp": str(timestamp),
+        "X-TC-Region": region,
+    }
+
+
+def _sign_tc3(
+    secret_key: str,
+    request_date: str,
+    service: str,
+    string_to_sign: str,
+) -> str:
+    secret_date = _hmac_sha256(("TC3" + secret_key).encode("utf-8"), request_date)
+    secret_service = _hmac_sha256(secret_date, service)
+    secret_signing = _hmac_sha256(secret_service, "tc3_request")
+    return hmac.new(
+        secret_signing,
+        string_to_sign.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _hmac_sha256(key: bytes, value: str) -> bytes:
+    return hmac.new(key, value.encode("utf-8"), hashlib.sha256).digest()
+
+
+def _endpoint_host(endpoint: str) -> str:
+    parsed = urlparse(endpoint)
+    if not parsed.netloc:
+        raise TencentCloudConfigError(f"invalid Tencent Cloud endpoint: {endpoint}")
+    return parsed.netloc
+
+
+def _decode_json_response(body: bytes) -> dict[str, object]:
+    try:
+        decoded = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CloudProviderError("Tencent Cloud response is not valid JSON") from exc
+    if not isinstance(decoded, dict):
+        raise CloudProviderError("Tencent Cloud response JSON must be an object")
+    return decoded

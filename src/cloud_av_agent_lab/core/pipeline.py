@@ -47,12 +47,13 @@ class TestPipeline:
 
     def dry_run(self) -> list[str]:
         assert_safe_config(self.config)
+        cloud = create_cloud_adapter(self.config, dry_run=True)
         events: list[str] = []
         for case in self.build_plan():
             events.extend(
                 [
-                    str(self.cloud.restore_snapshot(case.vm)),
-                    str(self.cloud.start_vm(case.vm)),
+                    str(cloud.restore_snapshot(case.vm)),
+                    str(cloud.start_vm(case.vm)),
                     self.guest.prepare_case(case),
                     self.guest.stage_sample_from_cloud(case.sample),
                     self.guest.execute_sample(
@@ -61,8 +62,8 @@ class TestPipeline:
                     ),
                     f"plan: collect logs for {case.product.id}",
                     f"plan: collect behavior observations for {case.id}",
-                    self.cloud.capture_screenshot(case),
-                    str(self.cloud.restore_snapshot(case.vm)),
+                    cloud.capture_screenshot(case),
+                    str(cloud.restore_snapshot(case.vm)),
                 ]
             )
         return events

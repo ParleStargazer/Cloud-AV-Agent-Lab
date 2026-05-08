@@ -18,6 +18,7 @@ class VMOperationResponse:
     message: str
     action: str = ""
     params: dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
     dry_run: bool = False
     provider: str = ""
 

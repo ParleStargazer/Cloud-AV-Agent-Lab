@@ -53,7 +53,7 @@ class NetworkClient:
         }
         body = None
         if payload is not None:
-            body = json.dumps(payload).encode("utf-8")
+            body = encode_json_payload(payload)
 
         request = urllib.request.Request(
             url=url,
@@ -67,3 +67,11 @@ class NetworkClient:
                 headers=dict(response.headers.items()),
                 body=response.read(),
             )
+
+
+def encode_json_payload(payload: Mapping[str, Any]) -> bytes:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")

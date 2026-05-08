@@ -80,7 +80,7 @@ $env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="lhins-yyyyyyyy"
 - `TencentCloudOperation`
 - `VMOperationResponse`
 - `CloudProviderError`
-- `TencentCloudApiNotConfigured`
+- `TencentCloudApiError`
 - `TencentCloudConfigError`
 
 已预留的 VM 操作：
@@ -92,15 +92,23 @@ $env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="lhins-yyyyyyyy"
 - `restore_snapshot`
 - `capture_screenshot`
 
-`mode = "mock"` 时不会访问网络，只返回统一的 `VMOperationResponse`。`mode = "real"` 时准备进入真实 API 路径，但只要 `dry_run = true`，所有写操作都会被拦截。
+`mode = "mock"` 时不会访问网络，只返回统一的 `VMOperationResponse`。`mode = "real"` 时进入真实 API 路径，但只要 `dry_run = true`，所有云 API 调用都会被拦截。
 
-真实 API 后续接入点集中在 `TencentCloudLighthouseAdapter._call_api()`，应在这里补充：
+真实 API 调用集中在 `TencentCloudLighthouseAdapter._call_api()`，当前已经完成：
 
 - 腾讯云 TC3-HMAC-SHA256 请求签名；
 - Lighthouse API action 到请求参数的映射，快照回滚使用 `ApplyInstanceSnapshot`；
 - 通过 `NetworkClient` 发起请求；
 - 腾讯云错误码到 `CloudProviderError` 的统一转换；
 - 真实返回值到 `VMOperationResponse` 的统一转换。
+
+只读连通性验证命令：
+
+```powershell
+python -m cloud_av_agent_lab cloud-status --config configs/lab.local.toml --vm-id win10-tencent-manager
+```
+
+保持 `dry_run = true` 时只会输出 `DescribeInstances` 调用计划。确认凭据、地域、实例 ID 和网络代理无误后，再在本地配置中切换为 `mode = "real"`、`dry_run = false` 进行真实只读请求。
 
 ## Dry-run 机制
 
@@ -154,6 +162,7 @@ python -m unittest discover -s tests
 python -m compileall src tests
 python -m cloud_av_agent_lab validate --config configs/lab.example.toml
 python -m cloud_av_agent_lab plan --config configs/lab.example.toml
+python -m cloud_av_agent_lab cloud-status --config configs/lab.example.toml --vm-id win10-tencent-manager
 ```
 
 当前重点测试文件：

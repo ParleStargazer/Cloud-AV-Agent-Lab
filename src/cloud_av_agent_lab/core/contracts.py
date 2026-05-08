@@ -30,6 +30,7 @@ class CloudProfile:
     artifact_bucket: str
     network_profile: str
     api_endpoint: str = "https://lighthouse.tencentcloudapi.com"
+    api_version: str = "2020-03-24"
     secret_id: str = ""
     secret_key: str = ""
     mode: str = "mock"

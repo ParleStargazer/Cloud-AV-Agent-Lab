@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Sequence
 
+from cloud_av_agent_lab.adapters.cloud import CloudProviderError
+from cloud_av_agent_lab.adapters.factory import create_cloud_adapter
 from cloud_av_agent_lab.config import ConfigError, load_config
 from cloud_av_agent_lab.core.pipeline import TestPipeline
 from cloud_av_agent_lab.core.safety import SafetyError, assert_safe_config
@@ -22,6 +25,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan = subparsers.add_parser("plan", help="print the dry-run execution plan")
     plan.add_argument("--config", required=True, help="path to TOML config")
+
+    status = subparsers.add_parser(
+        "cloud-status",
+        help="query one cloud instance status through the configured adapter",
+    )
+    status.add_argument("--config", required=True, help="path to TOML config")
+    status.add_argument("--vm-id", required=True, help="VM profile id from config")
 
     report = subparsers.add_parser(
         "report-template",
@@ -59,6 +69,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "plan":
         for event in pipeline.dry_run():
             print(event)
+        return 0
+
+    if args.command == "cloud-status":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        try:
+            response = create_cloud_adapter(config).get_instance_status(vm)
+        except CloudProviderError as exc:
+            parser.exit(2, f"error: {exc}\n")
+        print(response.message)
+        if response.task_id:
+            print(f"task_id: {response.task_id}")
+        print(f"status: {response.status}")
+        if response.data:
+            print(json.dumps(response.data, ensure_ascii=False, indent=2))
         return 0
 
     if args.command == "report-template":

@@ -16,6 +16,7 @@ secret_key = ""
 artifact_bucket = "cos://replace-me-av-lab-artifacts"
 network_profile = "isolated-egress-deny-by-default"
 api_endpoint = "https://lighthouse.tencentcloudapi.com"
+api_version = "2020-03-24"
 
 [network.proxy]
 # 开发阶段临时代理：用于本地主机跨网络访问云 API 或云端 Guest Agent。
