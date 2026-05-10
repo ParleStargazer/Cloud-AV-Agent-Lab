@@ -1,0 +1,65 @@
+{
+  "Response": {
+    "TotalCount": 1,
+    "InstanceSet": [
+      {
+        "InstanceId": "lhins-example",
+        "BundleId": "bundle_starter_nmc_win_med4_01",
+        "BlueprintId": "lhbp-example",
+        "Zone": "ap-singapore-2",
+        "CPU": 2,
+        "Memory": 4,
+        "InstanceName": "redacted-windows-server",
+        "OsName": "Windows Server 2022 DataCenter 64bit CN",
+        "Platform": "WINDOWS",
+        "PlatformType": "WINDOWS",
+        "InstanceChargeType": "PREPAID",
+        "SystemDisk": {
+          "DiskType": "CLOUD_SSD",
+          "DiskSize": 60,
+          "DiskId": "lhdisk-example"
+        },
+        "PrivateAddresses": [
+          "10.3.4.9"
+        ],
+        "PublicAddresses": [
+          "203.0.113.10"
+        ],
+        "PublicIpv6Addresses": [],
+        "InternetAccessible": {
+          "InternetChargeType": "TRAFFIC_POSTPAID_BY_HOUR",
+          "InternetMaxBandwidthOut": 30,
+          "PublicIpv4MaxBandwidthOut": 30,
+          "PublicIpv6MaxBandwidthOut": 0,
+          "PublicIpAssigned": true
+        },
+        "SupportIpv6Detail": {
+          "IsSupport": false,
+          "Detail": "BLUEPRINT_NOT_SUPPORT",
+          "Message": "The current instance blueprint does not support IPv6."
+        },
+        "RenewFlag": "NOTIFY_AND_MANUAL_RENEW",
+        "LoginSettings": {
+          "KeyIds": []
+        },
+        "InstanceState": "RUNNING",
+        "InstanceRestrictState": "NORMAL",
+        "Uuid": "9168d25f-691d-44e1-963e-63a80a416e49",
+        "Tags": [],
+        "LatestOperation": "RenewInstances",
+        "LatestOperationState": "SUCCESS",
+        "LatestOperationRequestId": "48b10104-7e98-491e-a3ee-24e5889ec70e",
+        "LatestOperationStartedTime": "2026-05-07T11:41:31Z",
+        "CreatedTime": "2026-04-28T15:00:52Z",
+        "ExpiredTime": "2026-07-28T15:00:52Z",
+        "IsolatedTime": null,
+        "BlueprintImageUrl": "https://cloudcache.tencent-cloud.com/redacted/windows-server.svg",
+        "InitInvocationId": "",
+        "DisplayArea": "NORMAL",
+        "DisplayLabel": "NORMAL",
+        "ActivityLabels": []
+      }
+    ],
+    "RequestId": "ddb9f215-b27f-4460-9766-0124a5da054b"
+  }
+}

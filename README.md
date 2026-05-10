@@ -95,6 +95,8 @@ cloud-av-agent-lab report-template --config configs/lab.example.toml --out repor
 
 `VMOperationResponse` 至少包含 `status`、`task_id`、`message`、`action`、`params`、`data`、`dry_run` 和 `provider`，后续真实 API 返回也应保持同一结构。
 
+`DescribeInstances` 的真实返回会额外解析出结构化 `InstanceStatus`，保留在 `response.data["InstanceStatus"]` 中。它会提取实例 ID、状态、限制状态、最近操作状态、公私网地址等关键字段，并给出保守的操作判断：`guest_access`、`start`、`stop`、`reboot`、`restore_snapshot`。后续接入写操作、轮询或 Guest Agent 前，应先复用这份只读状态校验。
+
 ### 腾讯云鉴权配置
 
 配置文件中预留了字段，但示例值保持为空：

@@ -15,6 +15,7 @@ dist/
 .env.*
 configs/*.local.toml
 configs/lab.toml
+configs/real.toml
 configs/*secret*.toml
 configs/*secrets*.toml
 *.log
@@ -36,7 +37,12 @@ malware/
 *.scr
 *.ps1
 
+.vscode/
+
 # Personal daily reports and notes
 daily-report/
 daily-reports/
 reference-doc/
+
+# Initialization scripts with secrets
+init.ps1

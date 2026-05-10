@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from unittest import TestCase
@@ -9,10 +11,12 @@ from unittest.mock import Mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from cloud_av_agent_lab.adapters.cloud import CloudProviderError
 from cloud_av_agent_lab.adapters.tencent_cloud import (
     TencentCloudApiError,
     TencentCloudLighthouseAdapter,
     build_tc3_headers,
+    parse_lighthouse_instance_status,
     resolve_tencent_cloud_auth,
 )
 from cloud_av_agent_lab.config import load_config
@@ -29,6 +33,12 @@ class FakeNetworkClient:
     def request_json(self, **kwargs: object) -> NetworkResponse:
         self.calls.append(kwargs)
         return NetworkResponse(status=200, headers={}, body=self.body)
+
+
+def _describe_instances_response() -> dict[str, object]:
+    fixture = ROOT / "tests" / "fixtures" / "tencent_lighthouse_describe_instances.json"
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+    return payload["Response"]
 
 
 class TencentCloudAdapterPreparationTests(TestCase):
@@ -117,6 +127,51 @@ class TencentCloudAdapterPreparationTests(TestCase):
         self.assertEqual(headers["X-TC-Version"], "2020-03-24")
         self.assertIn("/lighthouse/tc3_request", headers["Authorization"])
 
+    def test_describe_instances_response_parses_structured_status(self) -> None:
+        status = parse_lighthouse_instance_status(
+            _describe_instances_response(),
+            expected_instance_id="lhins-example",
+        )
+
+        self.assertEqual(status.instance_id, "lhins-example")
+        self.assertEqual(status.name, "redacted-windows-server")
+        self.assertEqual(status.state, "RUNNING")
+        self.assertTrue(status.known_state)
+        self.assertTrue(status.control_plane_ready)
+        self.assertTrue(status.guest_access_ready)
+        self.assertTrue(status.can_stop)
+        self.assertTrue(status.can_reboot)
+        self.assertFalse(status.can_start)
+        self.assertFalse(status.can_restore_snapshot)
+        self.assertEqual(status.private_ipv4, ("10.3.4.9",))
+        self.assertEqual(status.public_ipv4, ("203.0.113.10",))
+        self.assertTrue(status.public_ipv4_assigned)
+        self.assertEqual(status.request_id, "ddb9f215-b27f-4460-9766-0124a5da054b")
+        self.assertEqual(status.operation_allowed()["guest_access"], True)
+
+    def test_describe_instances_unknown_state_blocks_operations(self) -> None:
+        payload = deepcopy(_describe_instances_response())
+        instance_set = payload["InstanceSet"]
+        self.assertIsInstance(instance_set, list)
+        instance_set[0]["InstanceState"] = "MIGRATING"
+
+        status = parse_lighthouse_instance_status(
+            payload,
+            expected_instance_id="lhins-example",
+        )
+
+        self.assertFalse(status.known_state)
+        self.assertFalse(status.guest_access_ready)
+        self.assertFalse(status.operation_allowed()["stop"])
+        self.assertIn("unknown Lighthouse instance state", status.blocked_reason)
+
+    def test_describe_instances_missing_expected_instance_raises(self) -> None:
+        with self.assertRaises(CloudProviderError):
+            parse_lighthouse_instance_status(
+                _describe_instances_response(),
+                expected_instance_id="lhins-missing",
+            )
+
     def test_real_mode_calls_network_with_signed_headers(self) -> None:
         config = load_config(ROOT / "configs" / "lab.example.toml")
         cloud = replace(
@@ -127,15 +182,29 @@ class TencentCloudAdapterPreparationTests(TestCase):
             secret_key="SECRET",
         )
         network = FakeNetworkClient(
-            b'{"Response":{"RequestId":"request-id-001"}}',
+            json.dumps(
+                {"Response": _describe_instances_response()},
+                ensure_ascii=False,
+            ).encode("utf-8"),
         )
-        adapter = TencentCloudLighthouseAdapter(cloud, network=network, env={})
+        adapter = TencentCloudLighthouseAdapter(
+            cloud,
+            network=network,
+            env={
+                "TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER": "lhins-example",
+            },
+        )
 
         response = adapter.get_instance_status(config.vms["win10-tencent-manager"])
 
         self.assertEqual(response.status, "success")
-        self.assertEqual(response.task_id, "request-id-001")
-        self.assertEqual(response.data["RequestId"], "request-id-001")
+        self.assertEqual(response.task_id, "ddb9f215-b27f-4460-9766-0124a5da054b")
+        self.assertEqual(
+            response.data["RequestId"],
+            "ddb9f215-b27f-4460-9766-0124a5da054b",
+        )
+        self.assertEqual(response.data["InstanceStatus"]["state"], "RUNNING")
+        self.assertIn("guest_access_ready=True", response.message)
         self.assertEqual(network.calls[0]["method"], "POST")
         self.assertEqual(
             network.calls[0]["url"],

@@ -102,6 +102,8 @@ $env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="lhins-yyyyyyyy"
 - 腾讯云错误码到 `CloudProviderError` 的统一转换；
 - 真实返回值到 `VMOperationResponse` 的统一转换。
 
+`DescribeInstances` 已增加只读解析层。真实响应会被解析成 `LighthouseInstanceStatus`，并写入 `response.data["InstanceStatus"]`。当前结构化字段包括实例 ID、状态、限制状态、最近操作状态、地域可用区、公私网地址和创建/到期时间；同时会给出 `guest_access`、`start`、`stop`、`reboot`、`restore_snapshot` 的保守允许矩阵。新增写操作或轮询逻辑前，应优先读取这个状态对象，而不是在业务代码里重复解析腾讯云原始 JSON。
+
 只读连通性验证命令：
 
 ```powershell
