@@ -97,6 +97,8 @@ cloud-av-agent-lab report-template --config configs/lab.example.toml --out repor
 
 `DescribeInstances` 的真实返回会额外解析出结构化 `InstanceStatus`，保留在 `response.data["InstanceStatus"]` 中。它会提取实例 ID、状态、限制状态、最近操作状态、公私网地址等关键字段，并给出保守的操作判断：`guest_access`、`start`、`stop`、`reboot`、`restore_snapshot`。后续接入写操作、轮询或 Guest Agent 前，应先复用这份只读状态校验。
 
+当前已用一次真实 `DescribeInstances` 查询的脱敏响应固化为测试 fixture，覆盖 `RUNNING` / `NORMAL` / `SUCCESS` 的可访问状态，以及未知状态阻断逻辑。这里的判断偏保守：只有实例处于稳定状态时，后续流程才会继续考虑 Guest Agent 访问或写操作；未知状态不会被自动放行。
+
 ### 腾讯云鉴权配置
 
 配置文件中预留了字段，但示例值保持为空：
@@ -151,6 +153,23 @@ cloud-av-agent-lab cloud-status --config configs/lab.local.toml --vm-id win10-te
 
 当配置仍为 `dry_run = true` 时，该命令只打印 `DescribeInstances` 的 dry-run 计划；将本地配置改为 `mode = "real"` 且 `dry_run = false` 并设置好环境变量后，才会发起真实只读 API 请求。
 
+安全生命周期命令用于开发阶段手动控制云主机：
+
+```powershell
+cloud-av-agent-lab cloud-start --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx
+cloud-av-agent-lab cloud-stop --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx
+cloud-av-agent-lab cloud-reboot --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx
+```
+
+真实写操作必须同时满足 `mode = "real"`、`dry_run = false`，并且 `--confirm-instance` 与解析后的 Lighthouse 实例 ID 完全一致。否则命令只打印 `[DRY-RUN]` 计划，不会调用写操作 API。写操作成功提交后会轮询 `DescribeInstances`，默认每 5 秒检查一次，直到达到目标状态；如果 `LatestOperationState` 变为 `FAILED`，命令会立即中断并报错。
+
+真实写操作被腾讯云接受后，会先输出请求确认行，随后输出轮询进度：
+
+```text
+API Request Accepted, RequestId: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+Polling instance lhins-xxxxxxxx: state=RUNNING, latest_operation=RebootInstances, latest_operation_state=SUCCESS, waited=5.1s
+```
+
 ## 开发期代理
 
 `configs/lab.example.toml` 中的 `[network.proxy]` 是临时代理配置，用于开发阶段本地主机跨网络访问腾讯云 API 或云端 Guest Agent。默认 `enabled = false`，此时程序不会注入任何代理参数，行为与无代理版本一致。
@@ -186,4 +205,5 @@ python -m unittest discover -s tests
 python -m compileall src tests
 python -m cloud_av_agent_lab validate --config configs/lab.example.toml
 python -m cloud_av_agent_lab cloud-status --config configs/lab.example.toml --vm-id win10-tencent-manager
+python -m cloud_av_agent_lab cloud-reboot --config configs/lab.example.toml --vm-id win10-tencent-manager --confirm-instance lhins-replace-tencent-manager
 ```

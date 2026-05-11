@@ -25,20 +25,43 @@ from cloud_av_agent_lab.network.client import NetworkResponse
 
 
 class FakeNetworkClient:
-    def __init__(self, body: bytes) -> None:
-        self.body = body
+    def __init__(self, body: bytes | list[bytes]) -> None:
+        self.bodies = [body] if isinstance(body, bytes) else list(body)
         self.proxy_map: dict[str, str] = {}
         self.calls: list[dict[str, object]] = []
 
     def request_json(self, **kwargs: object) -> NetworkResponse:
         self.calls.append(kwargs)
-        return NetworkResponse(status=200, headers={}, body=self.body)
+        if len(self.bodies) > 1:
+            body = self.bodies.pop(0)
+        else:
+            body = self.bodies[0]
+        return NetworkResponse(status=200, headers={}, body=body)
 
 
 def _describe_instances_response() -> dict[str, object]:
     fixture = ROOT / "tests" / "fixtures" / "tencent_lighthouse_describe_instances.json"
     payload = json.loads(fixture.read_text(encoding="utf-8"))
     return payload["Response"]
+
+
+def _api_response(response: dict[str, object]) -> bytes:
+    return json.dumps({"Response": response}, ensure_ascii=False).encode("utf-8")
+
+
+def _describe_response_with_state(
+    state: str,
+    latest_operation: str = "StartInstances",
+    latest_operation_state: str = "SUCCESS",
+) -> dict[str, object]:
+    response = deepcopy(_describe_instances_response())
+    instance_set = response["InstanceSet"]
+    assert isinstance(instance_set, list)
+    instance = instance_set[0]
+    instance["InstanceState"] = state
+    instance["LatestOperation"] = latest_operation
+    instance["LatestOperationState"] = latest_operation_state
+    return response
 
 
 class TencentCloudAdapterPreparationTests(TestCase):
@@ -96,6 +119,24 @@ class TencentCloudAdapterPreparationTests(TestCase):
         self.assertTrue(response.dry_run)
         self.assertEqual(response.action, "StartInstances")
         self.assertIn("[DRY-RUN] Would call: StartInstances", response.message)
+
+    def test_real_write_without_adapter_confirmation_stays_dry_run(self) -> None:
+        config = load_config(ROOT / "configs" / "lab.example.toml")
+        cloud = replace(
+            config.cloud,
+            mode="real",
+            dry_run=False,
+            secret_id="AKIDEXAMPLE",
+            secret_key="SECRET",
+        )
+        adapter = TencentCloudLighthouseAdapter(cloud, env={})
+        adapter._call_api = Mock(side_effect=AssertionError("should not call API"))
+
+        response = adapter.start_vm(config.vms["win10-tencent-manager"])
+
+        adapter._call_api.assert_not_called()
+        self.assertEqual(response.status, "dry-run")
+        self.assertIn("write confirmation missing or mismatched", response.message)
 
     def test_instance_id_environment_overrides_config(self) -> None:
         config = load_config(ROOT / "configs" / "lab.example.toml")
@@ -181,12 +222,7 @@ class TencentCloudAdapterPreparationTests(TestCase):
             secret_id="AKIDEXAMPLE",
             secret_key="SECRET",
         )
-        network = FakeNetworkClient(
-            json.dumps(
-                {"Response": _describe_instances_response()},
-                ensure_ascii=False,
-            ).encode("utf-8"),
-        )
+        network = FakeNetworkClient(_api_response(_describe_instances_response()))
         adapter = TencentCloudLighthouseAdapter(
             cloud,
             network=network,
@@ -214,6 +250,97 @@ class TencentCloudAdapterPreparationTests(TestCase):
         self.assertIsInstance(headers, dict)
         self.assertEqual(headers["X-TC-Action"], "DescribeInstances")
         self.assertIn("TC3-HMAC-SHA256", headers["Authorization"])
+
+    def test_real_start_calls_write_api_then_polls_until_running(self) -> None:
+        config = load_config(ROOT / "configs" / "lab.example.toml")
+        cloud = replace(
+            config.cloud,
+            mode="real",
+            dry_run=False,
+            secret_id="AKIDEXAMPLE",
+            secret_key="SECRET",
+        )
+        network = FakeNetworkClient(
+            [
+                _api_response({"RequestId": "start-request-001"}),
+                _api_response(
+                    _describe_response_with_state(
+                        "RUNNING",
+                        latest_operation="StartInstances",
+                    )
+                ),
+            ]
+        )
+        adapter = TencentCloudLighthouseAdapter(
+            cloud,
+            network=network,
+            env={
+                "TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER": "lhins-example",
+            },
+            confirmed_instance_id="lhins-example",
+            poll_timeout_seconds=1,
+            poll_interval_seconds=0,
+        )
+
+        with self.assertLogs(
+            "cloud_av_agent_lab.adapters.tencent_cloud",
+            level="INFO",
+        ) as logs:
+            response = adapter.start_vm(config.vms["win10-tencent-manager"])
+
+        self.assertEqual(response.status, "success")
+        self.assertEqual(response.task_id, "start-request-001")
+        self.assertEqual(response.data["FinalInstanceStatus"]["state"], "RUNNING")
+        self.assertIn("reached RUNNING", response.message)
+        self.assertIn(
+            "API Request Accepted, RequestId: start-request-001",
+            "\n".join(logs.output),
+        )
+        self.assertIn(
+            "Polling instance lhins-example: state=RUNNING", "\n".join(logs.output)
+        )
+        self.assertIn("waited=", "\n".join(logs.output))
+        self.assertEqual(len(network.calls), 2)
+        first_headers = network.calls[0]["headers"]
+        second_headers = network.calls[1]["headers"]
+        self.assertEqual(first_headers["X-TC-Action"], "StartInstances")
+        self.assertEqual(second_headers["X-TC-Action"], "DescribeInstances")
+
+    def test_wait_instance_status_raises_on_failed_latest_operation(self) -> None:
+        config = load_config(ROOT / "configs" / "lab.example.toml")
+        cloud = replace(
+            config.cloud,
+            mode="real",
+            dry_run=False,
+            secret_id="AKIDEXAMPLE",
+            secret_key="SECRET",
+        )
+        network = FakeNetworkClient(
+            _api_response(
+                _describe_response_with_state(
+                    "RUNNING",
+                    latest_operation="StartInstances",
+                    latest_operation_state="FAILED",
+                )
+            )
+        )
+        adapter = TencentCloudLighthouseAdapter(
+            cloud,
+            network=network,
+            env={
+                "TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER": "lhins-example",
+            },
+            poll_timeout_seconds=1,
+            poll_interval_seconds=0,
+        )
+
+        with self.assertRaises(CloudProviderError) as error:
+            adapter.wait_instance_status(
+                config.vms["win10-tencent-manager"],
+                target_state="RUNNING",
+            )
+
+        self.assertIn("operation failed", str(error.exception))
 
     def test_real_mode_raises_api_error_response(self) -> None:
         config = load_config(ROOT / "configs" / "lab.example.toml")

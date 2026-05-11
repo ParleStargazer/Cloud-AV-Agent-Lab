@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
@@ -18,6 +19,8 @@ from cloud_av_agent_lab.adapters.cloud import (
 )
 from cloud_av_agent_lab.core.contracts import CloudProfile, TestCase, VmProfile
 from cloud_av_agent_lab.network.client import NetworkClient, encode_json_payload
+
+logger = logging.getLogger(__name__)
 
 
 class TencentCloudConfigError(CloudProviderError):
@@ -71,6 +74,8 @@ KNOWN_LIGHTHOUSE_INSTANCE_STATES = frozenset(
     }
 )
 STABLE_LIGHTHOUSE_OPERATION_STATES = frozenset({"", "SUCCESS"})
+DEFAULT_POLL_TIMEOUT_SECONDS = 600.0
+DEFAULT_POLL_INTERVAL_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -190,6 +195,9 @@ class TencentCloudLighthouseAdapter:
         network: NetworkClient | None = None,
         dry_run: bool | None = None,
         env: Mapping[str, str] | None = None,
+        confirmed_instance_id: str = "",
+        poll_timeout_seconds: float = DEFAULT_POLL_TIMEOUT_SECONDS,
+        poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
     ) -> None:
         self.cloud = cloud
         self.network = network or NetworkClient()
@@ -201,7 +209,14 @@ class TencentCloudLighthouseAdapter:
             )
         self.dry_run = cloud.dry_run if dry_run is None else dry_run
         self.auth = resolve_tencent_cloud_auth(cloud, self.env)
-        self.supports_execution = self.mode == "real" and not self.dry_run
+        self.confirmed_instance_id = confirmed_instance_id.strip()
+        self.supports_execution = (
+            self.mode == "real"
+            and not self.dry_run
+            and bool(self.confirmed_instance_id)
+        )
+        self.poll_timeout_seconds = poll_timeout_seconds
+        self.poll_interval_seconds = poll_interval_seconds
 
     def restore_snapshot(self, vm: VmProfile) -> VMOperationResponse:
         return self._operation(
@@ -214,24 +229,27 @@ class TencentCloudLighthouseAdapter:
         )
 
     def start_vm(self, vm: VmProfile) -> VMOperationResponse:
-        return self._operation(
+        return self._write_operation(
             "StartInstances",
             vm,
             {"InstanceIds": [self._instance_id(vm)]},
+            target_state="RUNNING",
         )
 
     def stop_vm(self, vm: VmProfile) -> VMOperationResponse:
-        return self._operation(
+        return self._write_operation(
             "StopInstances",
             vm,
             {"InstanceIds": [self._instance_id(vm)]},
+            target_state="STOPPED",
         )
 
     def reboot_vm(self, vm: VmProfile) -> VMOperationResponse:
-        return self._operation(
+        return self._write_operation(
             "RebootInstances",
             vm,
             {"InstanceIds": [self._instance_id(vm)]},
+            target_state="RUNNING",
         )
 
     def get_instance_status(self, vm: VmProfile) -> VMOperationResponse:
@@ -243,6 +261,72 @@ class TencentCloudLighthouseAdapter:
 
     def capture_screenshot(self, case: TestCase) -> str:
         return f"tencent-cloud://screenshots/{case.vm.id}/{case.id}.png"
+
+    def resolve_instance_id(self, vm: VmProfile) -> str:
+        return self._instance_id(vm)
+
+    def wait_instance_status(
+        self,
+        vm: VmProfile,
+        target_state: str,
+        timeout_seconds: float | None = None,
+        poll_interval_seconds: float | None = None,
+    ) -> LighthouseInstanceStatus:
+        timeout = (
+            self.poll_timeout_seconds
+            if timeout_seconds is None
+            else float(timeout_seconds)
+        )
+        poll_interval = (
+            self.poll_interval_seconds
+            if poll_interval_seconds is None
+            else float(poll_interval_seconds)
+        )
+        expected_instance_id = self._instance_id(vm)
+        normalized_target = target_state.upper()
+        started_at = time.monotonic()
+        deadline = started_at + timeout
+
+        while True:
+            response = self.get_instance_status(vm)
+            current_status = parse_lighthouse_instance_status(
+                response.data,
+                expected_instance_id=expected_instance_id,
+            )
+            elapsed_seconds = time.monotonic() - started_at
+            logger.info(
+                "Polling instance %s: state=%s, latest_operation=%s, "
+                "latest_operation_state=%s, waited=%.1fs",
+                current_status.instance_id,
+                current_status.state,
+                current_status.latest_operation or "<none>",
+                current_status.latest_operation_state or "<none>",
+                elapsed_seconds,
+            )
+
+            if current_status.latest_operation_state == "FAILED":
+                raise CloudProviderError(
+                    "Tencent Cloud Lighthouse operation failed while waiting for "
+                    f"{expected_instance_id}: "
+                    f"{current_status.latest_operation or '<unknown>'}"
+                )
+
+            if (
+                current_status.state == normalized_target
+                and current_status.control_plane_ready
+            ):
+                return current_status
+
+            now = time.monotonic()
+            if now >= deadline:
+                raise CloudProviderError(
+                    "Timed out waiting for Tencent Cloud Lighthouse instance "
+                    f"{expected_instance_id} to reach {normalized_target}; "
+                    f"last state={current_status.state}, "
+                    f"latest_operation_state={current_status.latest_operation_state}"
+                )
+
+            time.sleep(min(max(poll_interval, 0.0), max(deadline - now, 0.0)))
 
     def describe_operation(
         self,
@@ -292,6 +376,50 @@ class TencentCloudLighthouseAdapter:
             )
 
         return self._call_api(operation)
+
+    def _write_operation(
+        self,
+        action: str,
+        vm: VmProfile,
+        params: Mapping[str, object],
+        target_state: str,
+    ) -> VMOperationResponse:
+        instance_id = self._instance_id(vm)
+        if (
+            self.mode == "real"
+            and not self.dry_run
+            and self.confirmed_instance_id != instance_id
+        ):
+            return self._response(
+                status="dry-run",
+                action=action,
+                params=params,
+                message=(
+                    f"[DRY-RUN] Would call: {action} with Params: {dict(params)} "
+                    "(write confirmation missing or mismatched)"
+                ),
+                dry_run=True,
+            )
+
+        response = self._operation(action, vm, params)
+        if response.status != "success" or self.dry_run or self.mode != "real":
+            return response
+
+        logger.info(
+            "API Request Accepted, RequestId: %s",
+            response.task_id or "<empty>",
+        )
+        final_status = self.wait_instance_status(vm, target_state)
+        data = dict(response.data)
+        data["FinalInstanceStatus"] = final_status.to_dict()
+        return replace(
+            response,
+            message=(
+                f"{response.message}; {final_status.instance_id} "
+                f"reached {final_status.state}"
+            ),
+            data=data,
+        )
 
     def _call_api(self, operation: TencentCloudOperation) -> VMOperationResponse:
         if not self.auth.secret_id or not self.auth.secret_key:

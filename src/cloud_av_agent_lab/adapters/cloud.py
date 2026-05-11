@@ -44,5 +44,8 @@ class CloudVmAdapter(Protocol):
     def get_instance_status(self, vm: VmProfile) -> VMOperationResponse:
         """Query VM instance status."""
 
+    def resolve_instance_id(self, vm: VmProfile) -> str:
+        """Resolve the provider instance id after config/env overrides."""
+
     def capture_screenshot(self, case: TestCase) -> str:
         """Capture a cloud VM screenshot and return an artifact URI."""

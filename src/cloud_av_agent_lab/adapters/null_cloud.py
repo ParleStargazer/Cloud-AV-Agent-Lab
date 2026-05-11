@@ -33,6 +33,9 @@ class PlannedCloudVmAdapter:
             message=f"plan: query status for {vm.id}",
         )
 
+    def resolve_instance_id(self, vm: VmProfile) -> str:
+        return vm.instance_id or vm.cloud_instance_id or vm.id
+
     def capture_screenshot(self, case: TestCase) -> str:
         return f"plan://screenshots/{case.id}.png"
 

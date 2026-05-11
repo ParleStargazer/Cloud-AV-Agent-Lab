@@ -104,6 +104,13 @@ $env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="lhins-yyyyyyyy"
 
 `DescribeInstances` 已增加只读解析层。真实响应会被解析成 `LighthouseInstanceStatus`，并写入 `response.data["InstanceStatus"]`。当前结构化字段包括实例 ID、状态、限制状态、最近操作状态、地域可用区、公私网地址和创建/到期时间；同时会给出 `guest_access`、`start`、`stop`、`reboot`、`restore_snapshot` 的保守允许矩阵。新增写操作或轮询逻辑前，应优先读取这个状态对象，而不是在业务代码里重复解析腾讯云原始 JSON。
 
+2026-05-10 已基于真实查询结果确认 Lighthouse `DescribeInstances` 响应形状，并将脱敏响应保存为 `tests/fixtures/tencent_lighthouse_describe_instances.json`。当前测试覆盖：
+
+- 正常 `RUNNING` 实例可解析为 `guest_access = true`；
+- 未知实例状态不会被自动放行；
+- 查询不到期望实例 ID 时抛出 `CloudProviderError`；
+- real mode 下的 `DescribeInstances` 会保留原始响应，并额外注入结构化 `InstanceStatus`。
+
 只读连通性验证命令：
 
 ```powershell
@@ -111,6 +118,34 @@ python -m cloud_av_agent_lab cloud-status --config configs/lab.local.toml --vm-i
 ```
 
 保持 `dry_run = true` 时只会输出 `DescribeInstances` 调用计划。确认凭据、地域、实例 ID 和网络代理无误后，再在本地配置中切换为 `mode = "real"`、`dry_run = false` 进行真实只读请求。
+
+安全生命周期命令：
+
+```powershell
+python -m cloud_av_agent_lab cloud-start --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx
+python -m cloud_av_agent_lab cloud-stop --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx
+python -m cloud_av_agent_lab cloud-reboot --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx
+```
+
+这些命令默认仍以安全门禁为先。真实执行必须同时满足：
+
+- 配置为 `mode = "real"`；
+- 配置为 `dry_run = false`；
+- 命令行 `--confirm-instance` 与最终解析出的 Lighthouse 实例 ID 完全一致。
+
+任一条件不满足时，CLI 会强制构造 dry-run 适配器，只打印对应的 `StartInstances`、`StopInstances` 或 `RebootInstances` 计划。真实写操作成功提交后，适配器会调用 `wait_instance_status` 轮询 `DescribeInstances`，默认每 5 秒一次、最多 600 秒；如果轮询中发现 `LatestOperationState = "FAILED"`，会立即抛出 `CloudProviderError` 并停止任务。
+
+生命周期命令会把关键进度直接打印到终端。写操作 API 被腾讯云接受后，先输出：
+
+```text
+API Request Accepted, RequestId: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+之后每次状态查询都会输出当前实例状态和已等待时间：
+
+```text
+Polling instance lhins-xxxxxxxx: state=RUNNING, latest_operation=RebootInstances, latest_operation_state=SUCCESS, waited=5.1s
+```
 
 ## Dry-run 机制
 
@@ -165,6 +200,7 @@ python -m compileall src tests
 python -m cloud_av_agent_lab validate --config configs/lab.example.toml
 python -m cloud_av_agent_lab plan --config configs/lab.example.toml
 python -m cloud_av_agent_lab cloud-status --config configs/lab.example.toml --vm-id win10-tencent-manager
+python -m cloud_av_agent_lab cloud-reboot --config configs/lab.example.toml --vm-id win10-tencent-manager --confirm-instance lhins-replace-tencent-manager
 ```
 
 当前重点测试文件：
@@ -173,3 +209,4 @@ python -m cloud_av_agent_lab cloud-status --config configs/lab.example.toml --vm
 - `tests/test_network.py`：代理开启/关闭时的网络客户端行为。
 - `tests/test_tencent_cloud_adapter.py`：腾讯云适配器初始化和响应结构。
 - `tests/test_adapter.py`：环境变量注入、实例 ID 覆盖和 real+dry-run 拦截。
+- `tests/test_cli.py`：生命周期命令写操作确认门禁。
