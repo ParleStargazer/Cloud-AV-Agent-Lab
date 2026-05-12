@@ -125,6 +125,7 @@ python -m cloud_av_agent_lab cloud-status --config configs/lab.local.toml --vm-i
 python -m cloud_av_agent_lab cloud-start --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx
 python -m cloud_av_agent_lab cloud-stop --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx
 python -m cloud_av_agent_lab cloud-reboot --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx
+python -m cloud_av_agent_lab cloud-restore-snapshot --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx --confirm-snapshot snap-xxxxxxxx
 ```
 
 这些命令默认仍以安全门禁为先。真实执行必须同时满足：
@@ -134,6 +135,14 @@ python -m cloud_av_agent_lab cloud-reboot --config configs/real.toml --vm-id sg-
 - 命令行 `--confirm-instance` 与最终解析出的 Lighthouse 实例 ID 完全一致。
 
 任一条件不满足时，CLI 会强制构造 dry-run 适配器，只打印对应的 `StartInstances`、`StopInstances` 或 `RebootInstances` 计划。真实写操作成功提交后，适配器会调用 `wait_instance_status` 轮询 `DescribeInstances`，默认每 5 秒一次、最多 600 秒；如果轮询中发现 `LatestOperationState = "FAILED"`，会立即抛出 `CloudProviderError` 并停止任务。
+
+`cloud-restore-snapshot` 使用 `ApplyInstanceSnapshot`，并额外要求 `--confirm-snapshot` 与 VM 的 `baseline_snapshot` 完全一致。真实执行前会先查询 `DescribeInstances`：只有状态为 `STOPPED` 且 `LatestOperationState` 稳定时才允许回滚；如果状态为 `RUNNING`，会提示先执行 `cloud-stop`。回滚完成后会继续轮询，如果实例仍为 `STOPPED`，适配器会自动调用 `StartInstances`，直到最终稳定状态为 `RUNNING`。
+
+2026-05-12 已完成以下真实链路验证，验证记录不包含真实实例 ID、快照 ID 或密钥：
+
+- `cloud-stop` 可通过真实 API 关闭 Lighthouse 实例；
+- `cloud-restore-snapshot` 可通过真实 API 回滚配置中的基线快照；
+- 当 `--confirm-snapshot` 与配置中的 `baseline_snapshot` 不一致时，CLI 会拒绝执行真实回滚。
 
 生命周期命令会把关键进度直接打印到终端。写操作 API 被腾讯云接受后，先输出：
 
@@ -201,6 +210,7 @@ python -m cloud_av_agent_lab validate --config configs/lab.example.toml
 python -m cloud_av_agent_lab plan --config configs/lab.example.toml
 python -m cloud_av_agent_lab cloud-status --config configs/lab.example.toml --vm-id win10-tencent-manager
 python -m cloud_av_agent_lab cloud-reboot --config configs/lab.example.toml --vm-id win10-tencent-manager --confirm-instance lhins-replace-tencent-manager
+python -m cloud_av_agent_lab cloud-restore-snapshot --config configs/lab.example.toml --vm-id win10-tencent-manager --confirm-instance lhins-replace-tencent-manager --confirm-snapshot snap-clean-tencent-manager
 ```
 
 当前重点测试文件：
@@ -208,5 +218,5 @@ python -m cloud_av_agent_lab cloud-reboot --config configs/lab.example.toml --vm
 - `tests/test_config.py`：配置解析与安全配置。
 - `tests/test_network.py`：代理开启/关闭时的网络客户端行为。
 - `tests/test_tencent_cloud_adapter.py`：腾讯云适配器初始化和响应结构。
-- `tests/test_adapter.py`：环境变量注入、实例 ID 覆盖和 real+dry-run 拦截。
-- `tests/test_cli.py`：生命周期命令写操作确认门禁。
+- `tests/test_adapter.py`：环境变量注入、实例 ID 覆盖、real+dry-run 拦截、状态轮询、快照回滚前置校验与回滚后启动闭环。
+- `tests/test_cli.py`：生命周期命令写操作确认门禁、快照确认门禁。

@@ -82,6 +82,8 @@ The readiness checks intentionally fail closed: unknown Lighthouse states, restr
 
 Lifecycle writes are intentionally gated twice. The CLI only permits `cloud-start`, `cloud-stop`, and `cloud-reboot` to execute when the config is `mode = "real"`, `dry_run = false`, and the operator supplies `--confirm-instance` matching the resolved Lighthouse instance id. Otherwise the command is forced through the dry-run path. After a real write is accepted, the adapter polls `DescribeInstances` until the target state is reached or `LatestOperationState` reports `FAILED`.
 
+Snapshot restore uses the same write gate plus `--confirm-snapshot`, which must match the configured VM `baseline_snapshot`. Before `ApplyInstanceSnapshot`, the adapter performs a `DescribeInstances` preflight and fails closed unless the instance is `STOPPED` with a stable control-plane state. After restore, it waits for the restore operation to settle and starts the instance if Lighthouse leaves it stopped, ending only when the instance is stable `RUNNING`.
+
 Lifecycle commands configure INFO logging for operator visibility. The adapter emits a one-line API acceptance message with the Tencent Cloud `RequestId`, then emits one polling line per `DescribeInstances` query with instance state, latest operation state, and elapsed wait time.
 
 ## Temporary Proxy Layer

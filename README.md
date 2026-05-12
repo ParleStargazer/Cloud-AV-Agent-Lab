@@ -159,9 +159,12 @@ cloud-av-agent-lab cloud-status --config configs/lab.local.toml --vm-id win10-te
 cloud-av-agent-lab cloud-start --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx
 cloud-av-agent-lab cloud-stop --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx
 cloud-av-agent-lab cloud-reboot --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx
+cloud-av-agent-lab cloud-restore-snapshot --config configs/real.toml --vm-id sg-win10 --confirm-instance lhins-xxxxxxxx --confirm-snapshot snap-xxxxxxxx
 ```
 
 真实写操作必须同时满足 `mode = "real"`、`dry_run = false`，并且 `--confirm-instance` 与解析后的 Lighthouse 实例 ID 完全一致。否则命令只打印 `[DRY-RUN]` 计划，不会调用写操作 API。写操作成功提交后会轮询 `DescribeInstances`，默认每 5 秒检查一次，直到达到目标状态；如果 `LatestOperationState` 变为 `FAILED`，命令会立即中断并报错。
+
+`cloud-restore-snapshot` 额外要求 `--confirm-snapshot` 与 VM 配置中的 `baseline_snapshot` 完全一致。真实回滚前会先调用 `DescribeInstances` 做前置校验：只有实例状态为 `STOPPED` 且无进行中任务时才允许调用 `ApplyInstanceSnapshot`。如果实例仍为 `RUNNING`，命令会提示先停止实例。快照回滚完成后如果 Lighthouse 没有自动启动实例，适配器会继续调用 `StartInstances` 并轮询到最终稳定状态 `RUNNING`。
 
 真实写操作被腾讯云接受后，会先输出请求确认行，随后输出轮询进度：
 
@@ -206,4 +209,5 @@ python -m compileall src tests
 python -m cloud_av_agent_lab validate --config configs/lab.example.toml
 python -m cloud_av_agent_lab cloud-status --config configs/lab.example.toml --vm-id win10-tencent-manager
 python -m cloud_av_agent_lab cloud-reboot --config configs/lab.example.toml --vm-id win10-tencent-manager --confirm-instance lhins-replace-tencent-manager
+python -m cloud_av_agent_lab cloud-restore-snapshot --config configs/lab.example.toml --vm-id win10-tencent-manager --confirm-instance lhins-replace-tencent-manager --confirm-snapshot snap-clean-tencent-manager
 ```

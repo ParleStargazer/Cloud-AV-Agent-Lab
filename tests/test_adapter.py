@@ -53,6 +53,7 @@ def _describe_response_with_state(
     state: str,
     latest_operation: str = "StartInstances",
     latest_operation_state: str = "SUCCESS",
+    latest_operation_request_id: str = "request-id-001",
 ) -> dict[str, object]:
     response = deepcopy(_describe_instances_response())
     instance_set = response["InstanceSet"]
@@ -61,6 +62,7 @@ def _describe_response_with_state(
     instance["InstanceState"] = state
     instance["LatestOperation"] = latest_operation
     instance["LatestOperationState"] = latest_operation_state
+    instance["LatestOperationRequestId"] = latest_operation_request_id
     return response
 
 
@@ -137,6 +139,44 @@ class TencentCloudAdapterPreparationTests(TestCase):
         adapter._call_api.assert_not_called()
         self.assertEqual(response.status, "dry-run")
         self.assertIn("write confirmation missing or mismatched", response.message)
+
+    def test_restore_snapshot_dry_run_does_not_call_api(self) -> None:
+        config = load_config(ROOT / "configs" / "lab.example.toml")
+        cloud = replace(config.cloud, mode="real", dry_run=True)
+        adapter = TencentCloudLighthouseAdapter(cloud, env={})
+        adapter._call_api = Mock(side_effect=AssertionError("should not call API"))
+
+        response = adapter.restore_snapshot(config.vms["win10-tencent-manager"])
+
+        adapter._call_api.assert_not_called()
+        self.assertEqual(response.status, "dry-run")
+        self.assertEqual(response.action, "ApplyInstanceSnapshot")
+        self.assertIn("[DRY-RUN] Would call: ApplyInstanceSnapshot", response.message)
+
+    def test_restore_snapshot_without_snapshot_confirmation_stays_dry_run(self) -> None:
+        config = load_config(ROOT / "configs" / "lab.example.toml")
+        cloud = replace(
+            config.cloud,
+            mode="real",
+            dry_run=False,
+            secret_id="AKIDEXAMPLE",
+            secret_key="SECRET",
+        )
+        adapter = TencentCloudLighthouseAdapter(
+            cloud,
+            env={
+                "TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER": "lhins-example",
+            },
+            confirmed_instance_id="lhins-example",
+            confirmed_snapshot_id="wrong-snapshot",
+        )
+        adapter._call_api = Mock(side_effect=AssertionError("should not call API"))
+
+        response = adapter.restore_snapshot(config.vms["win10-tencent-manager"])
+
+        adapter._call_api.assert_not_called()
+        self.assertEqual(response.status, "dry-run")
+        self.assertIn("restore confirmation missing or mismatched", response.message)
 
     def test_instance_id_environment_overrides_config(self) -> None:
         config = load_config(ROOT / "configs" / "lab.example.toml")
@@ -267,6 +307,7 @@ class TencentCloudAdapterPreparationTests(TestCase):
                     _describe_response_with_state(
                         "RUNNING",
                         latest_operation="StartInstances",
+                        latest_operation_request_id="start-request-001",
                     )
                 ),
             ]
@@ -341,6 +382,127 @@ class TencentCloudAdapterPreparationTests(TestCase):
             )
 
         self.assertIn("operation failed", str(error.exception))
+
+    def test_restore_snapshot_rejects_running_instance_before_write(self) -> None:
+        config = load_config(ROOT / "configs" / "lab.example.toml")
+        vm = config.vms["win10-tencent-manager"]
+        cloud = replace(
+            config.cloud,
+            mode="real",
+            dry_run=False,
+            secret_id="AKIDEXAMPLE",
+            secret_key="SECRET",
+        )
+        network = FakeNetworkClient(
+            _api_response(
+                _describe_response_with_state(
+                    "RUNNING",
+                    latest_operation="StartInstances",
+                    latest_operation_request_id="start-request-001",
+                )
+            )
+        )
+        adapter = TencentCloudLighthouseAdapter(
+            cloud,
+            network=network,
+            env={
+                "TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER": "lhins-example",
+            },
+            confirmed_instance_id="lhins-example",
+            confirmed_snapshot_id=vm.baseline_snapshot,
+            poll_timeout_seconds=1,
+            poll_interval_seconds=0,
+        )
+
+        with self.assertRaises(CloudProviderError) as error:
+            adapter.restore_snapshot(vm)
+
+        self.assertIn("please stop the instance first", str(error.exception))
+        self.assertEqual(len(network.calls), 1)
+        headers = network.calls[0]["headers"]
+        self.assertEqual(headers["X-TC-Action"], "DescribeInstances")
+
+    def test_restore_snapshot_calls_api_then_starts_until_running(self) -> None:
+        config = load_config(ROOT / "configs" / "lab.example.toml")
+        vm = config.vms["win10-tencent-manager"]
+        cloud = replace(
+            config.cloud,
+            mode="real",
+            dry_run=False,
+            secret_id="AKIDEXAMPLE",
+            secret_key="SECRET",
+        )
+        network = FakeNetworkClient(
+            [
+                _api_response(
+                    _describe_response_with_state(
+                        "STOPPED",
+                        latest_operation="StopInstances",
+                        latest_operation_request_id="stop-request-001",
+                    )
+                ),
+                _api_response({"RequestId": "restore-request-001"}),
+                _api_response(
+                    _describe_response_with_state(
+                        "STOPPED",
+                        latest_operation="ApplyInstanceSnapshot",
+                        latest_operation_request_id="restore-request-001",
+                    )
+                ),
+                _api_response({"RequestId": "start-request-002"}),
+                _api_response(
+                    _describe_response_with_state(
+                        "RUNNING",
+                        latest_operation="StartInstances",
+                        latest_operation_request_id="start-request-002",
+                    )
+                ),
+            ]
+        )
+        adapter = TencentCloudLighthouseAdapter(
+            cloud,
+            network=network,
+            env={
+                "TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER": "lhins-example",
+            },
+            confirmed_instance_id="lhins-example",
+            confirmed_snapshot_id=vm.baseline_snapshot,
+            poll_timeout_seconds=1,
+            poll_interval_seconds=0,
+        )
+
+        with self.assertLogs(
+            "cloud_av_agent_lab.adapters.tencent_cloud",
+            level="INFO",
+        ) as logs:
+            response = adapter.restore_snapshot(vm)
+
+        self.assertEqual(response.status, "success")
+        self.assertEqual(response.task_id, "restore-request-001")
+        self.assertEqual(response.data["PrecheckInstanceStatus"]["state"], "STOPPED")
+        self.assertEqual(
+            response.data["PostRestoreInstanceStatus"]["latest_operation"],
+            "ApplyInstanceSnapshot",
+        )
+        self.assertEqual(response.data["FinalInstanceStatus"]["state"], "RUNNING")
+        self.assertEqual(len(network.calls), 5)
+        actions = [call["headers"]["X-TC-Action"] for call in network.calls]
+        self.assertEqual(
+            actions,
+            [
+                "DescribeInstances",
+                "ApplyInstanceSnapshot",
+                "DescribeInstances",
+                "StartInstances",
+                "DescribeInstances",
+            ],
+        )
+        joined_logs = "\n".join(logs.output)
+        self.assertIn(
+            "API Request Accepted, RequestId: restore-request-001", joined_logs
+        )
+        self.assertIn("API Request Accepted, RequestId: start-request-002", joined_logs)
+        self.assertIn("snapshot restored and reached RUNNING", response.message)
 
     def test_real_mode_raises_api_error_response(self) -> None:
         config = load_config(ROOT / "configs" / "lab.example.toml")

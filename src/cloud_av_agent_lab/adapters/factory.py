@@ -12,6 +12,7 @@ def create_cloud_adapter(
     network: NetworkClient | None = None,
     dry_run: bool | None = None,
     confirmed_instance_id: str = "",
+    confirmed_snapshot_id: str = "",
     poll_timeout_seconds: float = 600.0,
     poll_interval_seconds: float = 5.0,
 ) -> CloudVmAdapter:
@@ -23,6 +24,7 @@ def create_cloud_adapter(
             network=network_client,
             dry_run=dry_run,
             confirmed_instance_id=confirmed_instance_id,
+            confirmed_snapshot_id=confirmed_snapshot_id,
             poll_timeout_seconds=poll_timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
         )

@@ -20,6 +20,7 @@ LIFECYCLE_COMMANDS = {
     "cloud-stop": ("stop_vm", "StopInstances"),
     "cloud-reboot": ("reboot_vm", "RebootInstances"),
 }
+RESTORE_SNAPSHOT_COMMAND = "cloud-restore-snapshot"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,6 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
         "cloud-reboot",
         "reboot one cloud instance after safety confirmation",
     )
+    _add_lifecycle_parser(
+        subparsers,
+        RESTORE_SNAPSHOT_COMMAND,
+        "restore one cloud instance baseline snapshot after safety confirmation",
+        require_snapshot_confirmation=True,
+    )
 
     report = subparsers.add_parser(
         "report-template",
@@ -72,6 +79,7 @@ def _add_lifecycle_parser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     command: str,
     help_text: str,
+    require_snapshot_confirmation: bool = False,
 ) -> None:
     lifecycle = subparsers.add_parser(command, help=help_text)
     lifecycle.add_argument("--config", required=True, help="path to TOML config")
@@ -81,6 +89,12 @@ def _add_lifecycle_parser(
         default="",
         help="exact resolved Lighthouse instance id required for real writes",
     )
+    if require_snapshot_confirmation:
+        lifecycle.add_argument(
+            "--confirm-snapshot",
+            default="",
+            help="exact configured baseline snapshot id required for restore",
+        )
     lifecycle.add_argument(
         "--timeout-seconds",
         type=float,
@@ -98,7 +112,7 @@ def _add_lifecycle_parser(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command in LIFECYCLE_COMMANDS:
+    if args.command in LIFECYCLE_COMMANDS or args.command == RESTORE_SNAPSHOT_COMMAND:
         _configure_lifecycle_logging()
 
     try:
@@ -171,6 +185,44 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_cloud_response(response)
         return 0
 
+    if args.command == RESTORE_SNAPSHOT_COMMAND:
+        _validate_lifecycle_polling_args(parser, args)
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+
+        probe_adapter = create_cloud_adapter(config, dry_run=True)
+        resolved_instance_id = probe_adapter.resolve_instance_id(vm)
+        allowed, reasons = _restore_execution_guard(
+            config,
+            resolved_instance_id=resolved_instance_id,
+            confirm_instance=args.confirm_instance,
+            baseline_snapshot=vm.baseline_snapshot,
+            confirm_snapshot=args.confirm_snapshot,
+        )
+        adapter = create_cloud_adapter(
+            config,
+            dry_run=not allowed,
+            confirmed_instance_id=args.confirm_instance,
+            confirmed_snapshot_id=args.confirm_snapshot,
+            poll_timeout_seconds=args.timeout_seconds,
+            poll_interval_seconds=args.poll_interval_seconds,
+        )
+        if not allowed:
+            print(
+                "safety: real restore not executed; "
+                + "; ".join(reasons)
+                + ". Planned action: ApplyInstanceSnapshot."
+            )
+            print(f"resolved_instance_id: {resolved_instance_id}")
+            print(f"baseline_snapshot: {vm.baseline_snapshot}")
+        try:
+            response = adapter.restore_snapshot(vm)
+        except CloudProviderError as exc:
+            parser.exit(2, f"error: {exc}\n")
+        _print_cloud_response(response)
+        return 0
+
     if args.command == "report-template":
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -212,6 +264,26 @@ def _write_execution_guard(
     elif confirmation != resolved_instance_id:
         reasons.append("--confirm-instance does not match resolved instance id")
     return not reasons, reasons
+
+
+def _restore_execution_guard(
+    config: LabConfig,
+    resolved_instance_id: str,
+    confirm_instance: str,
+    baseline_snapshot: str,
+    confirm_snapshot: str,
+) -> tuple[bool, list[str]]:
+    allowed, reasons = _write_execution_guard(
+        config,
+        resolved_instance_id=resolved_instance_id,
+        confirm_instance=confirm_instance,
+    )
+    snapshot_confirmation = confirm_snapshot.strip()
+    if not snapshot_confirmation:
+        reasons.append("--confirm-snapshot was not provided")
+    elif snapshot_confirmation != baseline_snapshot:
+        reasons.append("--confirm-snapshot does not match configured baseline_snapshot")
+    return allowed and not reasons, reasons
 
 
 def _print_cloud_response(response: VMOperationResponse) -> None:
