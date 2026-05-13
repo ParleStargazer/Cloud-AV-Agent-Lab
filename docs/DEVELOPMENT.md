@@ -31,6 +31,19 @@ Copy-Item configs/lab.example.toml configs/lab.local.toml
 
 `.gitignore` 已忽略 `configs/*.local.toml`、`configs/lab.toml` 和包含 `secret` / `secrets` 的配置文件。不要把真实密钥写进可提交的配置文件。
 
+### 单实例多快照配置模式
+
+现有架构支持“一台 Lighthouse 实例，多个测试快照”的方案。`[[vms]]` 在代码里更准确地说是测试环境 profile，而不是必须一一对应不同云主机。一个 profile 由 `id`、`instance_id`、`baseline_snapshot`、`product_id` 和网络配置组成：
+
+- `instance_id` 可以在多个 profile 中重复，表示它们复用同一台 Lighthouse 实例；
+- `baseline_snapshot` 必须区分不同杀软基线，例如腾讯电脑管家基线、火绒基线、360 基线；
+- `product_id` 指向当前快照中已安装、需要采集日志和判定结果的杀软产品；
+- `vm.id` 只是本地编排 ID，用于 CLI `--vm-id` 和报告分组，不等同于真实实例 ID。
+
+这种模式的前提是串行调度。因为同一台实例同一时间只能处于一个快照状态，后续自动化执行时必须按 profile 逐个恢复快照、启动、测试、采集、再恢复清理，不能对相同 `instance_id` 的多个 profile 并发执行。当前 `TestPipeline` 是顺序构建和顺序执行的；如果以后加入并发调度器，需要按 `instance_id` 加锁。
+
+手动操作时，`--vm-id` 选择的是 profile，`--confirm-instance` 确认的是共用 Lighthouse 实例，`--confirm-snapshot` 必须匹配该 profile 的 `baseline_snapshot`。因此同一实例下切换不同杀软环境时，只需要切换 `--vm-id` 和对应的 `--confirm-snapshot`。
+
 ## 腾讯云凭据
 
 腾讯云配置遵循“环境变量 > 配置文件”的优先级。配置文件中可以预留字段，但示例值保持为空：
@@ -188,6 +201,31 @@ port = 7890
 
 云端 Guest Agent 的 HTTP 客户端占位在 `src/cloud_av_agent_lab/adapters/guest_agent_client.py`。后续实现 Guest Agent 时也应走 `NetworkClient`，这样腾讯云 API、Guest Agent 和临时代理都使用同一网络出口配置。
 
+当前 MVP 已实现客户端、CLI 和 Guest Agent Server：
+
+```powershell
+python -m cloud_av_agent_lab guest-health --config configs/lab.local.toml --vm-id sg-win10
+python -m cloud_av_agent_lab guest-prepare-case --config configs/lab.local.toml --sample-id case-001 --vm-id sg-win10
+python -m cloud_av_agent_lab guest-upload-sample --config configs/lab.local.toml --vm-id sg-win10 --sample-id case-001 --case-id case-001__tencent-pc-manager --file C:\Temp\eicar.txt
+python -m cloud_av_agent_lab guest-case-status --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
+```
+
+`[guest_agent]` 默认 `enabled = false`。启用后，`GuestAgentClient` 会从 `token_env` 指定的环境变量读取 token，并发送 `Authorization: Bearer ...`。如果启用但 token 缺失，会抛出清晰配置错误。`prepare-case` 只发送 case、VM、产品和样本云端 URI/metadata，不发送本地样本路径，也不触发样本下载或执行。
+
+上传链路只面向 EICAR 或无害测试文件。`guest-upload-sample` 额外要求本地环境变量 `CLOUD_AV_GUEST_AGENT_UPLOAD_TOKEN`，并通过 `X-Upload-Token` 发送给云端 Guest Agent。该命令只读取用户显式传入的 `--file`，不运行、不打开、不解压、不扫描、不解析文件内容；服务端只保存文件和 `sample.json` metadata，不执行样本。
+
+`POST /cases/{case_id}/sample` 只负责 HTTP 传输、写盘和 metadata 保存。只要写入成功，它会立即返回 `upload_state = "uploaded"`，不会在后端 sleep，也不会同步轮询文件状态。这样可以避免请求超时，也避免 Guest Agent 的观测行为影响 Defender 删除文件。
+
+`GET /cases/{case_id}/status` 才负责做一次实时 `Path.exists` / `Path.stat` 元信息检查，并动态更新 `case_state.json` 和 `sample.json`。`guest-upload-sample` 在收到上传成功后，会在本地 CLI 进程中先等待 10 秒，然后每 2 秒自动调用一次 `guest-case-status` 的底层逻辑，最多观察到 30 秒；如果期间状态变成 `removed_after_save`，会立即停止轮询并报告拦截成功。后续如果杀软处理较慢，可以手动重复运行 `guest-case-status`。状态语义如下：
+
+- `stable`：状态查询时文件仍存在且 size 与上传 metadata 一致；
+- `removed_after_save`：文件曾保存成功，但状态查询时已经消失，EICAR 被杀软删除时通常会出现这种状态；
+- `locked_or_busy`：文件存在，但短时间内无法读取元信息，可能正在被安全软件处理。
+
+`removed_after_save` 和 `locked_or_busy` 都不是 HTTP 上传失败。CLI 会给出 warning，并建议需要时使用 `guest-case-status` 查询 `case_state.json`、`sample.json` 和最近事件。只有鉴权失败、case 不存在、路径非法或磁盘写入失败等基础设施问题才会让命令失败退出。
+
+2026-05-13 实测结论：Microsoft Defender 在云端环境下对 EICAR 的处理时间存在波动，单次状态查询容易得到“处决前”的假 `stable`。因此不要把耗时观测放回 `POST /sample`，也不要把单次 `guest-case-status` 当作最终判定。当前推荐策略是 `guest-upload-sample` 自动执行动态轮询：先等待 10 秒，再每 2 秒查询一次，最多 30 秒；期间一旦出现 `removed_after_save` 即判定拦截成功，只有完整窗口结束后仍为 `stable` 才判定样本存活。
+
 Guest Agent 的职责应限制在云端隔离 VM 内：
 
 - 从云对象存储拉取样本；
@@ -196,6 +234,8 @@ Guest Agent 的职责应限制在云端隔离 VM 内：
 - 上传结构化结果到云端 artifact bucket。
 
 不要把样本下载到本地主机。
+
+协议和单实例串行锁设计见 `docs/GUEST_AGENT.md`。Windows 免 Python 打包和 Lighthouse 手动部署流程见 `docs/GUEST_AGENT_DEPLOYMENT.md`。
 
 ## 测试与校验
 

@@ -4,15 +4,22 @@ import argparse
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Sequence
 
+from cloud_av_agent_lab.adapters.guest_agent_client import (
+    GuestAgentClient,
+    GuestAgentError,
+    GuestAgentResponse,
+)
 from cloud_av_agent_lab.adapters.cloud import CloudProviderError, VMOperationResponse
 from cloud_av_agent_lab.adapters.factory import create_cloud_adapter
 from cloud_av_agent_lab.config import ConfigError, load_config
-from cloud_av_agent_lab.core.contracts import LabConfig
+from cloud_av_agent_lab.core.contracts import LabConfig, TestCase
 from cloud_av_agent_lab.core.pipeline import TestPipeline
 from cloud_av_agent_lab.core.safety import SafetyError, assert_safe_config
+from cloud_av_agent_lab.network.client import NetworkClient
 from cloud_av_agent_lab.reporting.markdown import render_markdown_report
 
 LIFECYCLE_COMMANDS = {
@@ -21,6 +28,9 @@ LIFECYCLE_COMMANDS = {
     "cloud-reboot": ("reboot_vm", "RebootInstances"),
 }
 RESTORE_SNAPSHOT_COMMAND = "cloud-restore-snapshot"
+GUEST_UPLOAD_STATUS_INITIAL_WAIT_SECONDS = 10.0
+GUEST_UPLOAD_STATUS_POLL_INTERVAL_SECONDS = 2.0
+GUEST_UPLOAD_STATUS_TIMEOUT_SECONDS = 30.0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,6 +52,60 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.add_argument("--config", required=True, help="path to TOML config")
     status.add_argument("--vm-id", required=True, help="VM profile id from config")
+
+    guest_health = subparsers.add_parser(
+        "guest-health",
+        help="query cloud-side Guest Agent health",
+    )
+    guest_health.add_argument("--config", required=True, help="path to TOML config")
+    guest_health.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+
+    guest_prepare = subparsers.add_parser(
+        "guest-prepare-case",
+        help="ask cloud-side Guest Agent to prepare a harmless case workspace",
+    )
+    guest_prepare.add_argument("--config", required=True, help="path to TOML config")
+    guest_prepare.add_argument(
+        "--sample-id", required=True, help="sample id from config"
+    )
+    guest_prepare.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+
+    guest_status = subparsers.add_parser(
+        "guest-case-status",
+        help="query cloud-side Guest Agent case status and recent events",
+    )
+    guest_status.add_argument("--config", required=True, help="path to TOML config")
+    guest_status.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+    guest_status.add_argument("--case-id", required=True, help="prepared case id")
+
+    guest_upload = subparsers.add_parser(
+        "guest-upload-sample",
+        help="upload an EICAR or harmless test file to a prepared Guest Agent case",
+    )
+    guest_upload.add_argument("--config", required=True, help="path to TOML config")
+    guest_upload.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+    guest_upload.add_argument(
+        "--sample-id", required=True, help="sample id from config"
+    )
+    guest_upload.add_argument("--case-id", required=True, help="prepared case id")
+    guest_upload.add_argument(
+        "--file",
+        required=True,
+        help="explicit local EICAR or harmless test file path to upload",
+    )
+    guest_upload.add_argument(
+        "--sha256",
+        default="",
+        help="optional expected sha256 metadata for the uploaded test file",
+    )
 
     _add_lifecycle_parser(
         subparsers,
@@ -148,6 +212,81 @@ def main(argv: Sequence[str] | None = None) -> int:
         except CloudProviderError as exc:
             parser.exit(2, f"error: {exc}\n")
         _print_cloud_response(response)
+        return 0
+
+    if args.command == "guest-health":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        _ensure_guest_agent_enabled(parser, config)
+        try:
+            response = _create_guest_agent_client(config).health()
+        except GuestAgentError as exc:
+            parser.exit(2, f"error: {exc}\n")
+        _print_guest_response(response)
+        return 0
+
+    if args.command == "guest-prepare-case":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        sample = config.samples.get(args.sample_id)
+        if sample is None:
+            parser.exit(2, f"error: unknown sample id {args.sample_id!r}\n")
+        product = config.products[vm.product_id]
+        case = TestCase(
+            id=f"{sample.id}__{product.id}",
+            sample=sample,
+            vm=vm,
+            product=product,
+        )
+        _ensure_guest_agent_enabled(parser, config)
+        try:
+            response = _create_guest_agent_client(config).prepare_case(case)
+        except GuestAgentError as exc:
+            parser.exit(2, f"error: {exc}\n")
+        _print_guest_response(response)
+        return 0
+
+    if args.command == "guest-case-status":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        _ensure_guest_agent_enabled(parser, config)
+        try:
+            response = _create_guest_agent_client(config).case_status(args.case_id)
+        except GuestAgentError as exc:
+            parser.exit(2, _format_guest_case_error(exc))
+        _print_guest_response(response)
+        return 0
+
+    if args.command == "guest-upload-sample":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        sample = config.samples.get(args.sample_id)
+        if sample is None:
+            parser.exit(2, f"error: unknown sample id {args.sample_id!r}\n")
+        _ensure_guest_agent_enabled(parser, config)
+        client = _create_guest_agent_client(config)
+        try:
+            response = client.upload_sample(
+                case_id=args.case_id,
+                sample_id=sample.id,
+                file_path=args.file,
+                sha256=args.sha256,
+            )
+        except GuestAgentError as exc:
+            parser.exit(2, _format_guest_case_error(exc))
+        _print_guest_response(response)
+        try:
+            status_response = _poll_guest_upload_status(client, args.case_id)
+        except GuestAgentError as exc:
+            parser.exit(2, _format_guest_case_error(exc))
+        _print_guest_response(status_response)
+        message = _upload_state_message(_extract_upload_state(status_response.data))
+        if message:
+            print(message)
         return 0
 
     if args.command in LIFECYCLE_COMMANDS:
@@ -293,6 +432,124 @@ def _print_cloud_response(response: VMOperationResponse) -> None:
     print(f"status: {response.status}")
     if response.data:
         print(json.dumps(response.data, ensure_ascii=False, indent=2))
+
+
+def _create_guest_agent_client(config: LabConfig) -> GuestAgentClient:
+    return GuestAgentClient(
+        config.guest_agent,
+        network=NetworkClient.from_config(config.network),
+    )
+
+
+def _ensure_guest_agent_enabled(
+    parser: argparse.ArgumentParser,
+    config: LabConfig,
+) -> None:
+    if not config.guest_agent.enabled:
+        parser.exit(
+            2,
+            "error: guest_agent is disabled; set [guest_agent].enabled=true "
+            "and provide the token environment variable before using Guest Agent "
+            "commands\n",
+        )
+
+
+def _print_guest_response(response: GuestAgentResponse) -> None:
+    print(
+        json.dumps(
+            {
+                "status": response.status,
+                "message": response.message,
+                "data": response.data,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def _print_guest_upload_response(response: GuestAgentResponse) -> None:
+    _print_guest_response(response)
+    message = _upload_state_message(response.data.get("upload_state"))
+    if message:
+        print(message)
+
+
+def _poll_guest_upload_status(
+    client: GuestAgentClient,
+    case_id: str,
+    initial_wait_seconds: float = GUEST_UPLOAD_STATUS_INITIAL_WAIT_SECONDS,
+    poll_interval_seconds: float = GUEST_UPLOAD_STATUS_POLL_INTERVAL_SECONDS,
+    timeout_seconds: float = GUEST_UPLOAD_STATUS_TIMEOUT_SECONDS,
+) -> GuestAgentResponse:
+    print(
+        "info: 上传已写入 Guest Agent，等待 "
+        f"{initial_wait_seconds:g} 秒后开始轮询安全软件处理结果。"
+    )
+    elapsed = 0.0
+    if initial_wait_seconds > 0:
+        time.sleep(initial_wait_seconds)
+        elapsed = min(initial_wait_seconds, timeout_seconds)
+
+    last_response: GuestAgentResponse | None = None
+    while True:
+        last_response = client.case_status(case_id)
+        upload_state = str(_extract_upload_state(last_response.data) or "unknown")
+        print(
+            "[Polling] 检查样本状态 "
+            f"({elapsed:g}s/{timeout_seconds:g}s)... 结果: {upload_state}"
+        )
+        if upload_state == "removed_after_save":
+            break
+        if elapsed >= timeout_seconds:
+            break
+        wait_seconds = min(poll_interval_seconds, timeout_seconds - elapsed)
+        if wait_seconds <= 0:
+            break
+        time.sleep(wait_seconds)
+        elapsed += wait_seconds
+
+    return last_response
+
+
+def _extract_upload_state(data: dict[str, object]) -> object:
+    state = data.get("state")
+    if isinstance(state, dict):
+        return state.get("upload_state")
+    return data.get("upload_state")
+
+
+def _upload_state_message(upload_state: object) -> str:
+    state = str(upload_state or "")
+    if state == "stable":
+        return "info: 轮询结束，样本仍为 stable，判定为样本存活。"
+    if state == "removed_after_save":
+        return "info: 轮询期间检测到 removed_after_save，判定为拦截成功。"
+    if state == "locked_or_busy":
+        return (
+            "warning: 上传成功，但文件可能正在被安全软件占用；"
+            "建议稍后运行 guest-case-status 查询。"
+        )
+    return ""
+
+
+def _format_guest_case_error(error: GuestAgentError) -> str:
+    message = f"error: {error}\n"
+    if _should_hint_prepare_case(error):
+        message += (
+            "hint: 请确认 case_id 是否正确，或是否已运行 "
+            "guest-prepare-case 初始化工作区。\n"
+        )
+    return message
+
+
+def _should_hint_prepare_case(error: GuestAgentError) -> bool:
+    text = str(error).casefold()
+    return (
+        error.status_code == 404
+        or "case workspace does not exist" in text
+        or "guest-prepare-case" in text
+    )
 
 
 def _configure_lifecycle_logging() -> None:

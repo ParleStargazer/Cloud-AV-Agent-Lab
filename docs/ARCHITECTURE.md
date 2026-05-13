@@ -58,6 +58,13 @@ which delegates outbound requests to `NetworkClient`.
 
 The default adapters are plan-only and never execute a sample.
 
+The Guest Agent MVP is documented in `docs/GUEST_AGENT.md`. It currently covers
+only `/health`, `/system-info`, `/prepare-case`, an EICAR/harmless-file upload
+endpoint, and a metadata-only case status endpoint; sample execution remains out
+of scope.
+
+`VmProfile` represents a recoverable test environment profile, not necessarily a unique cloud machine. Multiple profiles may share the same Lighthouse `instance_id` when each profile points to a different `baseline_snapshot` and `product_id`. This single-instance, multi-snapshot layout is supported as long as orchestration remains serial or future schedulers lock by `instance_id`.
+
 ## Tencent Cloud Lighthouse Adapter
 
 `TencentCloudLighthouseAdapter` is the first cloud adapter. It reserves methods for Lighthouse lifecycle operations and keeps real Tencent Cloud API integration behind one `_call_api()` method.

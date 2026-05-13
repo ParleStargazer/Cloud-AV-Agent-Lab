@@ -1,0 +1,191 @@
+# Guest Agent MVP
+
+Guest Agent runs inside the cloud-isolated Windows Lighthouse instance. The local
+host only calls it over HTTP through the existing control plane.
+
+Current safety boundary: this development phase does not touch real malware
+samples. The local control plane may only read a user-explicit EICAR or harmless
+test file path for upload. It must not read, receive, upload, download, save,
+open, extract, scan, parse, or execute real malware samples.
+
+## Boundary
+
+The Guest Agent is a guest-side helper, not a general remote shell. It is
+intended to expose narrowly scoped workflow endpoints that the local orchestrator
+can call after the cloud VM has been restored to a clean snapshot and started.
+
+The MVP supports harmless connectivity, workspace preparation, and a safe upload
+chain for EICAR or harmless test files:
+
+- `GET /health`: check that the agent process is reachable.
+- `GET /system-info`: return basic host and environment metadata.
+- `POST /prepare-case`: create or reset a per-case workspace directory in the
+  guest.
+- `POST /cases/{case_id}/sample`: save an uploaded EICAR or harmless test file
+  and metadata under the prepared case workspace, then return immediately.
+- `GET /cases/{case_id}/status`: read case status, sample metadata, and recent
+  events without reading sample contents; this endpoint performs a current
+  `Path.exists` / `Path.stat` metadata check.
+
+The server implementation lives in `src/cloud_av_agent_lab/guest_agent_server/`.
+Windows packaging and Lighthouse deployment notes live in
+`docs/GUEST_AGENT_DEPLOYMENT.md`.
+
+Future phases may add guest-side sample staging from cloud object storage,
+bounded test execution, AV log collection, screenshot/artifact upload, and
+structured result reporting. Those future operations must remain inside the
+cloud-isolated guest and must never download samples to the local host.
+
+## Required Security Rules
+
+- Local code must not download samples.
+- Local code must not execute samples.
+- Local code must not touch real malware samples in this phase.
+- Local upload code may only read a user-explicit EICAR or harmless file path.
+- Guest Agent upload code must only save bytes and metadata; it must not open,
+  analyze, scan, unpack, or execute the uploaded file.
+- Guest Agent must not expose an arbitrary command execution endpoint.
+- Guest Agent must not allow unauthenticated access.
+- Tokens must not be written into TOML config files or logs.
+- Development proxy support must continue to flow through `NetworkClient`; Guest
+  Agent business code must not read proxy settings directly.
+
+The client sends `Authorization: Bearer <token>`, where the agent token is read
+from the environment variable named by `[guest_agent].token_env`. Uploads also
+require `X-Upload-Token: <upload_token>`, read from
+`CLOUD_AV_GUEST_AGENT_UPLOAD_TOKEN`. Tokens are never returned in responses.
+
+## Configuration
+
+Example:
+
+```toml
+[guest_agent]
+enabled = false
+base_url = "http://127.0.0.1:8080"
+token_env = "CLOUD_AV_GUEST_AGENT_TOKEN"
+timeout_seconds = 10
+```
+
+The default is disabled. When `enabled = true`, the token environment variable
+must be present before any Guest Agent command runs.
+
+## MVP CLI Flow
+
+Current harmless commands:
+
+```powershell
+python -m cloud_av_agent_lab guest-health --config configs/lab.local.toml --vm-id sg-win10
+python -m cloud_av_agent_lab guest-prepare-case --config configs/lab.local.toml --sample-id case-001 --vm-id sg-win10
+```
+
+`guest-prepare-case` sends case metadata, VM metadata, product metadata, and the
+sample cloud object URI. It does not send a local file path and does not trigger
+sample download or execution.
+
+For EICAR or harmless upload flow:
+
+```powershell
+$env:CLOUD_AV_GUEST_AGENT_UPLOAD_TOKEN="replace-with-upload-token"
+python -m cloud_av_agent_lab guest-upload-sample --config configs/lab.local.toml --vm-id sg-win10 --sample-id case-001 --case-id case-001__tencent-pc-manager --file C:\Temp\eicar.txt --sha256 <optional-sha256>
+```
+
+`guest-upload-sample` reads only the explicit `--file` path and sends it as an
+opaque byte stream. The server stores it under
+`<workdir>\cases\<safe_case_id>\sample\` with `sample.json` metadata containing
+`sample_id`, `sha256`, `size`, and `original_filename`. The upload endpoint does
+not execute or inspect the file contents. It does not run a synchronous
+post-upload heartbeat; after the file is written and metadata is saved, it
+returns `200 OK` with `upload_state = "uploaded"`.
+
+Upload success means the HTTP transport succeeded and the Guest Agent accepted
+the request. It does not mean the uploaded file will still exist after the
+security product inspects it. EICAR is commonly removed immediately by AV
+software; that is an expected product signal, not a transport failure.
+
+The server records the post-upload state in `case_state.json` and appends events
+to `events.jsonl`:
+
+- `transport_ok`: the local HTTP request reached the Guest Agent and received a
+  success response.
+- `saved_once`: the Guest Agent wrote the uploaded bytes to disk at least once.
+- `metadata_saved`: `sample.json` and case state metadata were written.
+- `post_write_exists`: the latest status query still saw the file after writing.
+- `removed_after_save`: the file was saved once and later disappeared, likely
+  because security software handled it.
+- `locked_or_busy`: the file exists, but a status-query metadata check such as
+  `stat` failed temporarily, likely because security software is processing it.
+- `stable`: a status query saw the file with expected metadata.
+
+Time-consuming observation is deliberately kept out of `POST /sample`. After a
+successful upload, the CLI waits 10 seconds, then polls
+`GET /cases/{case_id}/status` every 2 seconds until either
+`removed_after_save` appears or the 30 second observation window ends. If a
+sample is `stable` throughout the window, the CLI reports it as still alive.
+Manual `guest-case-status` calls can be repeated later if Defender or another AV
+product processes EICAR more slowly. Guest Agent logs the successful write and
+each status refresh at INFO level. Logs do not include tokens or sample
+contents.
+
+Recent status can be queried without reading sample content:
+
+```powershell
+python -m cloud_av_agent_lab guest-case-status --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
+```
+
+`removed_after_save` and `locked_or_busy` are not treated as upload failures.
+They are recorded as observations for the current case. `locked_or_busy` should
+be followed by a later `guest-case-status` query.
+
+## Status Observation Notes
+
+2026-05-13 EICAR testing with Microsoft Defender showed that single status
+queries can produce false `stable` results: Defender may alert first and remove
+the file several seconds later. Server-side sleeps or synchronous heartbeat
+loops also caused HTTP timeouts and risked changing the timing being observed.
+
+For that reason, `POST /cases/{case_id}/sample` stays thin and returns as soon
+as the file and metadata are saved. Observation is a client-side concern:
+`guest-upload-sample` waits 10 seconds, polls `/status` every 2 seconds for up
+to 30 seconds, and stops early if `removed_after_save` appears. A `stable`
+result is only treated as final after that observation window ends.
+
+## End-To-End Shape
+
+The next safe end-to-end loop should stay plan-oriented until the Guest Agent
+server exists:
+
+1. Restore the baseline snapshot.
+2. Start the instance.
+3. Wait until the instance is stable `RUNNING`.
+4. Call Guest Agent `/health`.
+5. Call Guest Agent `/prepare-case`.
+6. Upload an EICAR or harmless test file to `/cases/{case_id}/sample`.
+7. Call Guest Agent `/cases/{case_id}/status`.
+8. Generate or update the report with preparation/upload status.
+9. Restore the baseline snapshot.
+
+Real `execute_sample` behavior is intentionally out of scope for the MVP.
+
+## Single-Instance Serial Lock
+
+The current Lighthouse layout reuses one instance across multiple AV baseline
+snapshots. Because restoring one snapshot changes the whole instance state, all
+work for the same `instance_id` must run serially.
+
+A future lightweight lock can live at `state/lighthouse-instance.lock`. Suggested
+JSON fields:
+
+```json
+{
+  "instance_id": "lhins-xxxxxxxx",
+  "vm_id": "sg-win10",
+  "product_id": "tencent-pc-manager",
+  "baseline_snapshot": "snap-xxxxxxxx",
+  "case_id": "case-001__tencent-pc-manager",
+  "started_at": "2026-05-13T10:00:00Z"
+}
+```
+
+The lock exists to prevent one case from preparing or running while another case
+triggers `cloud-restore-snapshot` on the same Lighthouse instance.

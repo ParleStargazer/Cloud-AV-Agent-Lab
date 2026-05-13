@@ -1,37 +1,268 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
-from urllib.parse import urljoin
+import json
+import os
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError
+from urllib.parse import quote, urljoin
 
+from cloud_av_agent_lab.core.contracts import GuestAgentConfig, TestCase
 from cloud_av_agent_lab.network.client import NetworkClient, NetworkResponse
+
+UPLOAD_TOKEN_ENV = "CLOUD_AV_GUEST_AGENT_UPLOAD_TOKEN"
+
+
+class GuestAgentError(RuntimeError):
+    """Raised when Guest Agent configuration or HTTP communication fails."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+@dataclass(frozen=True)
+class GuestAgentResponse:
+    status: str
+    message: str
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 class GuestAgentClient:
-    """HTTP client for a future cloud-side Guest Agent.
+    """HTTP client for the cloud-side Guest Agent MVP.
 
-    This keeps Guest Agent connectivity on the same NetworkClient path as cloud
-    APIs, including the optional development proxy.
+    All outbound access goes through NetworkClient so the temporary development
+    proxy remains isolated to the network package.
     """
 
     def __init__(
         self,
-        base_url: str,
+        config: GuestAgentConfig,
         network: NetworkClient | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
-        self.base_url = base_url.rstrip("/") + "/"
+        self.config = config
+        self.base_url = config.base_url.rstrip("/") + "/"
         self.network = network or NetworkClient()
+        self.env = env if env is not None else os.environ
+        self.token = self._load_token()
 
-    def request_json(
+    def health(self) -> GuestAgentResponse:
+        return self._request("health", method="GET")
+
+    def system_info(self) -> GuestAgentResponse:
+        return self._request("system-info", method="GET")
+
+    def prepare_case(self, case: TestCase) -> GuestAgentResponse:
+        return self._request(
+            "prepare-case",
+            method="POST",
+            payload=_prepare_case_payload(case),
+        )
+
+    def case_status(self, case_id: str) -> GuestAgentResponse:
+        return self._request(
+            f"cases/{quote(case_id, safe='')}/status",
+            method="GET",
+        )
+
+    def upload_sample(
+        self,
+        case_id: str,
+        sample_id: str,
+        file_path: str | Path,
+        sha256: str = "",
+        upload_token_env: str = UPLOAD_TOKEN_ENV,
+    ) -> GuestAgentResponse:
+        if not self.config.enabled:
+            raise GuestAgentError("Guest Agent is disabled in config")
+        upload_token = self.env.get(upload_token_env, "").strip()
+        if not upload_token:
+            raise GuestAgentError(
+                "Guest Agent upload token environment variable "
+                f"{upload_token_env!r} is not set"
+            )
+
+        path = Path(file_path)
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            raise GuestAgentError("Guest Agent upload file could not be read") from exc
+
+        url = urljoin(
+            self.base_url,
+            f"cases/{quote(case_id, safe='')}/sample",
+        )
+        try:
+            response = self.network.request_bytes(
+                method="POST",
+                url=url,
+                body=content,
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "X-Upload-Token": upload_token,
+                    "X-Sample-Id": sample_id,
+                    "X-Sample-Sha256": sha256,
+                    "X-Original-Filename": path.name,
+                },
+                timeout_seconds=self.config.timeout_seconds,
+            )
+        except HTTPError as exc:
+            raise _guest_agent_error_from_http_error("upload-sample", exc) from exc
+        except Exception as exc:
+            raise GuestAgentError(
+                f"Guest Agent upload failed: {type(exc).__name__}"
+            ) from exc
+
+        return _decode_guest_agent_response("upload-sample", response)
+
+    def _load_token(self) -> str:
+        if not self.config.enabled:
+            return ""
+        token = self.env.get(self.config.token_env, "").strip()
+        if not token:
+            raise GuestAgentError(
+                "Guest Agent is enabled but token environment variable "
+                f"{self.config.token_env!r} is not set"
+            )
+        return token
+
+    def _request(
         self,
         path: str,
-        method: str = "GET",
+        method: str,
         payload: Mapping[str, Any] | None = None,
-        timeout_seconds: float = 30.0,
-    ) -> NetworkResponse:
+    ) -> GuestAgentResponse:
+        if not self.config.enabled:
+            raise GuestAgentError("Guest Agent is disabled in config")
+
         url = urljoin(self.base_url, path.lstrip("/"))
-        return self.network.request_json(
-            method=method,
-            url=url,
-            payload=payload,
-            timeout_seconds=timeout_seconds,
+        try:
+            response = self.network.request_json(
+                method=method,
+                url=url,
+                payload=payload,
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout_seconds=self.config.timeout_seconds,
+            )
+        except HTTPError as exc:
+            raise _guest_agent_error_from_http_error(path, exc) from exc
+        except Exception as exc:
+            raise GuestAgentError(f"Guest Agent request failed: {exc}") from exc
+
+        return _decode_guest_agent_response(path, response)
+
+
+def _prepare_case_payload(case: TestCase) -> dict[str, Any]:
+    return {
+        "case": {
+            "id": case.id,
+        },
+        "sample": {
+            "id": case.sample.id,
+            "sha256": case.sample.sha256,
+            "category": case.sample.category,
+            "cloud_object_uri": case.sample.cloud_object_uri,
+            "expected_behaviors": list(case.sample.expected_behaviors),
+            "notes": case.sample.notes,
+        },
+        "vm": {
+            "id": case.vm.id,
+            "provider": case.vm.provider,
+            "region": case.vm.region,
+            "instance_id": case.vm.instance_id or case.vm.cloud_instance_id,
+            "baseline_snapshot": case.vm.baseline_snapshot,
+            "network_profile": case.vm.network_profile,
+            "product_id": case.vm.product_id,
+        },
+        "product": {
+            "id": case.product.id,
+            "display_name": case.product.display_name,
+            "vendor": case.product.vendor,
+        },
+    }
+
+
+def _decode_guest_agent_response(
+    path: str,
+    response: NetworkResponse,
+) -> GuestAgentResponse:
+    try:
+        decoded = json.loads(response.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        if not 200 <= response.status < 300:
+            raise GuestAgentError(
+                _format_http_error(path, response.status, response.reason),
+                status_code=response.status,
+            ) from exc
+        raise GuestAgentError(f"Guest Agent {path} response is not valid JSON") from exc
+
+    if not isinstance(decoded, dict):
+        if not 200 <= response.status < 300:
+            raise GuestAgentError(
+                _format_http_error(path, response.status, response.reason),
+                status_code=response.status,
+            )
+        raise GuestAgentError(f"Guest Agent {path} response JSON must be an object")
+
+    if not 200 <= response.status < 300:
+        raise GuestAgentError(
+            _format_http_error(
+                path,
+                response.status,
+                response.reason,
+                _extract_error_message(decoded),
+            ),
+            status_code=response.status,
         )
+
+    data_value = decoded.get("data", {})
+    data = data_value if isinstance(data_value, dict) else {"value": data_value}
+    return GuestAgentResponse(
+        status=str(decoded.get("status", "ok")),
+        message=str(decoded.get("message", "")),
+        data=dict(data),
+    )
+
+
+def _guest_agent_error_from_http_error(path: str, exc: HTTPError) -> GuestAgentError:
+    response = NetworkResponse(
+        status=exc.code,
+        headers=dict(exc.headers.items()) if exc.headers is not None else {},
+        body=exc.read(),
+        reason=str(exc.reason or ""),
+    )
+    try:
+        _decode_guest_agent_response(path, response)
+    except GuestAgentError as error:
+        return error
+    return GuestAgentError(
+        _format_http_error(path, exc.code, str(exc.reason or "")),
+        status_code=exc.code,
+    )
+
+
+def _format_http_error(
+    path: str,
+    status_code: int,
+    reason: str = "",
+    message: str = "",
+) -> str:
+    status_text = f"HTTP {status_code}"
+    if reason:
+        status_text += f" {reason}"
+    details = f": {message}" if message else ""
+    return f"Guest Agent {path} returned {status_text}{details}"
+
+
+def _extract_error_message(decoded: Mapping[str, Any]) -> str:
+    for key in ("message", "detail", "error"):
+        value = decoded.get(key)
+        if isinstance(value, str) and value:
+            return value
+    detail = decoded.get("detail")
+    if isinstance(detail, list):
+        return json.dumps(detail, ensure_ascii=False)
+    return ""

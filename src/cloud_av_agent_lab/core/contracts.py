@@ -51,6 +51,14 @@ class NetworkConfig:
 
 
 @dataclass(frozen=True)
+class GuestAgentConfig:
+    enabled: bool = False
+    base_url: str = "http://127.0.0.1:8080"
+    token_env: str = "CLOUD_AV_GUEST_AGENT_TOKEN"
+    timeout_seconds: float = 10.0
+
+
+@dataclass(frozen=True)
 class ProductProfile:
     id: str
     display_name: str
@@ -120,6 +128,7 @@ class LabConfig:
     policy: LabPolicy
     cloud: CloudProfile
     network: NetworkConfig
+    guest_agent: GuestAgentConfig
     products: dict[str, ProductProfile]
     vms: dict[str, VmProfile]
     samples: dict[str, SampleReference]

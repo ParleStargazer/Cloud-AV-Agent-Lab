@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -14,6 +15,7 @@ class NetworkResponse:
     status: int
     headers: Mapping[str, str]
     body: bytes
+    reason: str = ""
 
 
 class NetworkClient:
@@ -61,11 +63,49 @@ class NetworkClient:
             headers=request_headers,
             method=method.upper(),
         )
-        with self.build_opener().open(request, timeout=timeout_seconds) as response:
+        try:
+            response = self.build_opener().open(request, timeout=timeout_seconds)
+        except urllib.error.HTTPError as exc:
+            return _response_from_http_error(exc)
+
+        with response:
             return NetworkResponse(
                 status=response.status,
                 headers=dict(response.headers.items()),
                 body=response.read(),
+                reason=getattr(response, "reason", ""),
+            )
+
+    def request_bytes(
+        self,
+        method: str,
+        url: str,
+        body: bytes,
+        headers: Mapping[str, str] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> NetworkResponse:
+        request_headers = {
+            "Content-Type": "application/octet-stream",
+            "Accept": "application/json",
+            **dict(headers or {}),
+        }
+        request = urllib.request.Request(
+            url=url,
+            data=body,
+            headers=request_headers,
+            method=method.upper(),
+        )
+        try:
+            response = self.build_opener().open(request, timeout=timeout_seconds)
+        except urllib.error.HTTPError as exc:
+            return _response_from_http_error(exc)
+
+        with response:
+            return NetworkResponse(
+                status=response.status,
+                headers=dict(response.headers.items()),
+                body=response.read(),
+                reason=getattr(response, "reason", ""),
             )
 
 
@@ -75,3 +115,12 @@ def encode_json_payload(payload: Mapping[str, Any]) -> bytes:
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _response_from_http_error(exc: urllib.error.HTTPError) -> NetworkResponse:
+    return NetworkResponse(
+        status=exc.code,
+        headers=dict(exc.headers.items()) if exc.headers is not None else {},
+        body=exc.read(),
+        reason=str(exc.reason or ""),
+    )

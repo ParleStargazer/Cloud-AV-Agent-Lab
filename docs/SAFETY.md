@@ -6,12 +6,15 @@ This repository is designed for local automation development without local malwa
 
 - Store source code, TOML configs, generated reports, and sanitized logs.
 - Store cloud object references to already approved samples.
+- Read a user-explicit EICAR or harmless test file path for the upload MVP.
 - Analyze structured observations collected from isolated VMs.
 - Compare AV products by detection signal, confidence, and evidence.
 
 ## Not Allowed Locally
 
 - Store executable samples or archives containing samples.
+- Read, receive, upload, download, save, open, extract, scan, parse, or execute
+  real malware samples in the current development phase.
 - Download samples from cloud storage to the developer machine.
 - Execute samples on the developer machine.
 - Add instructions whose purpose is to bypass, disable, or evade AV products.
@@ -20,6 +23,7 @@ This repository is designed for local automation development without local malwa
 ## Required Cloud Controls
 
 - Use a clean snapshot per AV product baseline.
+- A single cloud instance may host multiple product baselines through separate snapshots, but those profiles must run serially and must not share a dirty VM state.
 - Restore the snapshot before and after each case.
 - Use an isolated network profile by default.
 - Store artifacts in a cloud bucket with limited retention.

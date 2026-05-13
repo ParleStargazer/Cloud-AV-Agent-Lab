@@ -16,6 +16,7 @@ dist/
 configs/*.local.toml
 configs/lab.toml
 configs/real.toml
+configs/real.toml.bak
 configs/*secret*.toml
 configs/*secrets*.toml
 *.log
@@ -46,3 +47,6 @@ reference-doc/
 
 # Initialization scripts with secrets
 init.ps1
+
+#Server Token
+token.txt

@@ -10,6 +10,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
 
 from .core.contracts import (
     CloudProfile,
+    GuestAgentConfig,
     LabConfig,
     LabPolicy,
     NetworkConfig,
@@ -70,6 +71,16 @@ def _load_network_config(data: dict[str, Any]) -> NetworkConfig:
     )
 
 
+def _load_guest_agent_config(data: dict[str, Any]) -> GuestAgentConfig:
+    guest_agent = _optional_table(data, "guest_agent")
+    return GuestAgentConfig(
+        enabled=bool(guest_agent.get("enabled", False)),
+        base_url=str(guest_agent.get("base_url", "http://127.0.0.1:8080")),
+        token_env=str(guest_agent.get("token_env", "CLOUD_AV_GUEST_AGENT_TOKEN")),
+        timeout_seconds=float(guest_agent.get("timeout_seconds", 10)),
+    )
+
+
 def load_config(path: str | Path) -> LabConfig:
     config_path = Path(path)
     data = tomllib.loads(config_path.read_text(encoding="utf-8"))
@@ -101,6 +112,7 @@ def load_config(path: str | Path) -> LabConfig:
         dry_run=bool(cloud.get("dry_run", True)),
     )
     network_config = _load_network_config(data)
+    guest_agent_config = _load_guest_agent_config(data)
 
     products = {
         str(item["id"]): ProductProfile(
@@ -151,6 +163,7 @@ def load_config(path: str | Path) -> LabConfig:
         policy=policy,
         cloud=cloud_profile,
         network=network_config,
+        guest_agent=guest_agent_config,
         products=products,
         vms=vms,
         samples=samples,

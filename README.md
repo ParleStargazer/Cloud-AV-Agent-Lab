@@ -99,6 +99,8 @@ cloud-av-agent-lab report-template --config configs/lab.example.toml --out repor
 
 当前已用一次真实 `DescribeInstances` 查询的脱敏响应固化为测试 fixture，覆盖 `RUNNING` / `NORMAL` / `SUCCESS` 的可访问状态，以及未知状态阻断逻辑。这里的判断偏保守：只有实例处于稳定状态时，后续流程才会继续考虑 Guest Agent 访问或写操作；未知状态不会被自动放行。
 
+示例配置采用“一台 Lighthouse 实例，多个测试快照”的模式：多个 `[[vms]]` 测试 profile 可以共用同一个 `instance_id`，但分别绑定不同 `baseline_snapshot` 和 `product_id`。这适合实例数量不足时复用单台云主机。注意该模式必须串行调度，不能对同一 `instance_id` 的多个 profile 并发执行。
+
 ### 腾讯云鉴权配置
 
 配置文件中预留了字段，但示例值保持为空：
@@ -191,6 +193,35 @@ Polling instance lhins-xxxxxxxx: state=RUNNING, latest_operation=RebootInstances
 - 报告结论是否有证据支撑。
 
 Agent 不应直接操作本地样本，也不应生成规避检测建议。
+
+## Guest Agent MVP
+
+Guest Agent 运行在云端隔离 Windows 主机内，本地只通过统一 `NetworkClient` 发起 HTTP 控制面调用。MVP 支持 `/health`、`/system-info`、`/prepare-case`、`/cases/{case_id}/sample` 和 `/cases/{case_id}/status`，用于连通性、系统信息、无害工作目录准备、EICAR/无害测试文件上传，以及上传后状态观测。不接触真实病毒样本，不执行样本，不暴露任意命令执行接口。
+
+配置默认关闭：
+
+```toml
+[guest_agent]
+enabled = false
+base_url = "http://127.0.0.1:8080"
+token_env = "CLOUD_AV_GUEST_AGENT_TOKEN"
+timeout_seconds = 10
+```
+
+启用后 token 从 `token_env` 指定的环境变量读取，不写入配置文件。CLI：
+
+```powershell
+python -m cloud_av_agent_lab guest-health --config configs/lab.local.toml --vm-id sg-win10
+python -m cloud_av_agent_lab guest-prepare-case --config configs/lab.local.toml --sample-id case-001 --vm-id sg-win10
+python -m cloud_av_agent_lab guest-upload-sample --config configs/lab.local.toml --vm-id sg-win10 --sample-id case-001 --case-id case-001__tencent-pc-manager --file C:\Temp\eicar.txt
+python -m cloud_av_agent_lab guest-case-status --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
+```
+
+上传成功不等于文件最终保留。EICAR 可能被杀毒软件立即删除，这是预期的安全产品处理行为。Guest Agent 会记录 `stable`、`removed_after_save` 或 `locked_or_busy` 等状态，并写入 case 状态和事件日志；`removed_after_save` 和 `locked_or_busy` 不被视为传输失败。
+
+上传接口只负责写盘并立即返回，耗时等待放在本地 CLI：`guest-upload-sample` 会在上传成功后先等待 10 秒，然后每 2 秒轮询一次状态，最多观察到 30 秒；一旦出现 `removed_after_save` 会立即报告拦截成功。需要继续观察时，可以手动重复运行 `guest-case-status`。
+
+详细协议和单实例串行锁设计见 [GUEST_AGENT.md](docs/GUEST_AGENT.md)，Windows 免 Python 部署见 [GUEST_AGENT_DEPLOYMENT.md](docs/GUEST_AGENT_DEPLOYMENT.md)。
 
 ## 后续接入点
 
