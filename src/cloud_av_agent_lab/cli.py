@@ -84,6 +84,45 @@ def build_parser() -> argparse.ArgumentParser:
     )
     guest_status.add_argument("--case-id", required=True, help="prepared case id")
 
+    guest_report = subparsers.add_parser(
+        "guest-case-report",
+        help="query cloud-side Guest Agent delivery-stage case report",
+    )
+    guest_report.add_argument("--config", required=True, help="path to TOML config")
+    guest_report.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+    guest_report.add_argument("--case-id", required=True, help="prepared case id")
+
+    guest_execute = subparsers.add_parser(
+        "guest-execute-sample",
+        help=(
+            "request the controlled Guest Agent sample action; defaults to dry-run "
+            "metadata validation"
+        ),
+    )
+    guest_execute.add_argument("--config", required=True, help="path to TOML config")
+    guest_execute.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+    guest_execute.add_argument("--case-id", required=True, help="prepared case id")
+    guest_execute.add_argument(
+        "--sample-id", required=True, help="sample id from config"
+    )
+    guest_execute.add_argument(
+        "--expected-sha256",
+        default="",
+        help="optional expected sha256; defaults to the configured sample hash",
+    )
+    guest_execute.add_argument(
+        "--real-action",
+        action="store_true",
+        help=(
+            "request execute_uploaded_sample instead of dry-run; requires "
+            "[guest_agent.execution].enabled=true and a matching execution token"
+        ),
+    )
+
     guest_upload = subparsers.add_parser(
         "guest-upload-sample",
         help="upload an EICAR or harmless test file to a prepared Guest Agent case",
@@ -222,7 +261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             response = _create_guest_agent_client(config).health()
         except GuestAgentError as exc:
-            parser.exit(2, f"error: {exc}\n")
+            parser.exit(2, _format_guest_error(exc))
         _print_guest_response(response)
         return 0
 
@@ -244,7 +283,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             response = _create_guest_agent_client(config).prepare_case(case)
         except GuestAgentError as exc:
-            parser.exit(2, f"error: {exc}\n")
+            parser.exit(2, _format_guest_error(exc))
         _print_guest_response(response)
         return 0
 
@@ -256,8 +295,55 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             response = _create_guest_agent_client(config).case_status(args.case_id)
         except GuestAgentError as exc:
-            parser.exit(2, _format_guest_case_error(exc))
+            parser.exit(2, _format_guest_error(exc))
         _print_guest_response(response)
+        return 0
+
+    if args.command == "guest-case-report":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        _ensure_guest_agent_enabled(parser, config)
+        try:
+            response = _create_guest_agent_client(config).case_report(args.case_id)
+        except GuestAgentError as exc:
+            parser.exit(2, _format_guest_error(exc))
+        _print_guest_response(response)
+        return 0
+
+    if args.command == "guest-execute-sample":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        sample = config.samples.get(args.sample_id)
+        if sample is None:
+            parser.exit(2, f"error: unknown sample id {args.sample_id!r}\n")
+        _ensure_guest_agent_enabled(parser, config)
+        if args.real_action and not config.guest_agent.execution.enabled:
+            parser.exit(
+                2,
+                "error: [Local Check] 本地执行配置未启用或 Token 缺失；"
+                "请设置 [guest_agent.execution].enabled=true，并提供执行 "
+                "token 环境变量后再使用 --real-action。\n",
+            )
+        expected_sha256 = args.expected_sha256 or sample.sha256
+        try:
+            response = _create_guest_agent_client(config).execute_uploaded_sample(
+                case_id=args.case_id,
+                sample_id=sample.id,
+                expected_sha256=expected_sha256,
+                dry_run=not args.real_action,
+            )
+        except GuestAgentError as exc:
+            parser.exit(2, _format_guest_error(exc))
+        if args.real_action and _is_remote_execution_disabled(response):
+            parser.exit(2, _format_remote_execution_disabled(response))
+        _print_guest_response(response)
+        if not args.real_action:
+            print(
+                "info: guest-execute-sample 默认只做 dry-run metadata 校验；"
+                "没有启动样本进程。"
+            )
         return 0
 
     if args.command == "guest-upload-sample":
@@ -277,12 +363,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sha256=args.sha256,
             )
         except GuestAgentError as exc:
-            parser.exit(2, _format_guest_case_error(exc))
+            parser.exit(2, _format_guest_error(exc))
         _print_guest_response(response)
         try:
             status_response = _poll_guest_upload_status(client, args.case_id)
         except GuestAgentError as exc:
-            parser.exit(2, _format_guest_case_error(exc))
+            parser.exit(2, _format_guest_error(exc))
         _print_guest_response(status_response)
         message = _upload_state_message(_extract_upload_state(status_response.data))
         if message:
@@ -448,9 +534,9 @@ def _ensure_guest_agent_enabled(
     if not config.guest_agent.enabled:
         parser.exit(
             2,
-            "error: guest_agent is disabled; set [guest_agent].enabled=true "
-            "and provide the token environment variable before using Guest Agent "
-            "commands\n",
+            "error: [Local Check] 本地 Guest Agent 配置未启用；请设置 "
+            "[guest_agent].enabled=true，并提供 token 环境变量后再使用 "
+            "Guest Agent 命令。\n",
         )
 
 
@@ -533,14 +619,38 @@ def _upload_state_message(upload_state: object) -> str:
     return ""
 
 
-def _format_guest_case_error(error: GuestAgentError) -> str:
-    message = f"error: {error}\n"
+def _format_guest_error(error: GuestAgentError) -> str:
+    source = getattr(error, "source", "remote")
+    if source == "local":
+        message = f"error: [Local Check] 本地执行配置未启用或 Token 缺失：{error}\n"
+    elif source == "network":
+        message = f"error: [Network] {error}\n"
+    else:
+        message = f"error: [Remote Agent] 云端拒绝或无法处理请求：{error}\n"
     if _should_hint_prepare_case(error):
         message += (
             "hint: 请确认 case_id 是否正确，或是否已运行 "
             "guest-prepare-case 初始化工作区。\n"
         )
     return message
+
+
+def _format_remote_execution_disabled(response: GuestAgentResponse) -> str:
+    data = response.data
+    timeout = data.get("execution_timeout_seconds")
+    timeout_text = f"，timeout={timeout}" if timeout is not None else ""
+    return (
+        "error: [Remote Agent] 云端拒绝了执行请求（执行未启用或 Token 不匹配）："
+        f"{response.message}{timeout_text}。\n"
+        "hint: 请确认云端 Guest Agent 启动时已添加 --enable-execution-actions，"
+        "并设置 CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN；随后重启云端 Guest Agent。\n"
+    )
+
+
+def _is_remote_execution_disabled(response: GuestAgentResponse) -> bool:
+    return str(response.data.get("execution_state", "")).casefold() == (
+        "execution_disabled"
+    )
 
 
 def _should_hint_prepare_case(error: GuestAgentError) -> bool:

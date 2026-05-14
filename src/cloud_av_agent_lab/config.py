@@ -11,6 +11,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
 from .core.contracts import (
     CloudProfile,
     GuestAgentConfig,
+    GuestAgentExecutionConfig,
     LabConfig,
     LabPolicy,
     NetworkConfig,
@@ -73,11 +74,29 @@ def _load_network_config(data: dict[str, Any]) -> NetworkConfig:
 
 def _load_guest_agent_config(data: dict[str, Any]) -> GuestAgentConfig:
     guest_agent = _optional_table(data, "guest_agent")
+    execution = guest_agent.get("execution", {})
+    if not isinstance(execution, dict):
+        raise ConfigError("[guest_agent.execution] must be a table")
+
+    execution_enabled = bool(execution.get("enabled", False))
+    execution_token_env = str(
+        execution.get("token_env", "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN")
+    ).strip()
+    if execution_enabled and not execution_token_env:
+        raise ConfigError(
+            "[guest_agent.execution].token_env is required when execution is enabled"
+        )
+
     return GuestAgentConfig(
         enabled=bool(guest_agent.get("enabled", False)),
         base_url=str(guest_agent.get("base_url", "http://127.0.0.1:8080")),
         token_env=str(guest_agent.get("token_env", "CLOUD_AV_GUEST_AGENT_TOKEN")),
         timeout_seconds=float(guest_agent.get("timeout_seconds", 10)),
+        execution=GuestAgentExecutionConfig(
+            enabled=execution_enabled,
+            token_env=execution_token_env or "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN",
+            timeout_seconds=float(execution.get("timeout_seconds", 30)),
+        ),
     )
 
 

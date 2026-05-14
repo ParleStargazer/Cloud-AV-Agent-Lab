@@ -199,7 +199,7 @@ port = 7890
 
 ## Guest Agent 接入方向
 
-云端 Guest Agent 的 HTTP 客户端占位在 `src/cloud_av_agent_lab/adapters/guest_agent_client.py`。后续实现 Guest Agent 时也应走 `NetworkClient`，这样腾讯云 API、Guest Agent 和临时代理都使用同一网络出口配置。
+云端 Guest Agent 的 HTTP 客户端在 `src/cloud_av_agent_lab/adapters/guest_agent_client.py`，服务端 MVP 在 `src/cloud_av_agent_lab/guest_agent_server/`。所有本地到云端 Guest Agent 的请求仍统一走 `NetworkClient`，这样腾讯云 API、Guest Agent 和临时代理都使用同一网络出口配置。
 
 当前 MVP 已实现客户端、CLI 和 Guest Agent Server：
 
@@ -208,6 +208,8 @@ python -m cloud_av_agent_lab guest-health --config configs/lab.local.toml --vm-i
 python -m cloud_av_agent_lab guest-prepare-case --config configs/lab.local.toml --sample-id case-001 --vm-id sg-win10
 python -m cloud_av_agent_lab guest-upload-sample --config configs/lab.local.toml --vm-id sg-win10 --sample-id case-001 --case-id case-001__tencent-pc-manager --file C:\Temp\eicar.txt
 python -m cloud_av_agent_lab guest-case-status --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
+python -m cloud_av_agent_lab guest-case-report --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
+python -m cloud_av_agent_lab guest-execute-sample --config configs/lab.local.toml --vm-id sg-win10 --sample-id case-001 --case-id case-001__tencent-pc-manager
 ```
 
 `[guest_agent]` 默认 `enabled = false`。启用后，`GuestAgentClient` 会从 `token_env` 指定的环境变量读取 token，并发送 `Authorization: Bearer ...`。如果启用但 token 缺失，会抛出清晰配置错误。`prepare-case` 只发送 case、VM、产品和样本云端 URI/metadata，不发送本地样本路径，也不触发样本下载或执行。
@@ -224,7 +226,24 @@ python -m cloud_av_agent_lab guest-case-status --config configs/lab.local.toml -
 
 `removed_after_save` 和 `locked_or_busy` 都不是 HTTP 上传失败。CLI 会给出 warning，并建议需要时使用 `guest-case-status` 查询 `case_state.json`、`sample.json` 和最近事件。只有鉴权失败、case 不存在、路径非法或磁盘写入失败等基础设施问题才会让命令失败退出。
 
+`guest-case-report` 会生成并读取云端 case 工作目录下的 `case_report.json`，只汇总投送阶段 metadata 和最近事件：case/sample/vm/product 标识、上传状态、saved/removed/locked/stable 标记、文件名、哈希、大小和时间戳。它不读取样本内容，不读取 Defender 或其他杀软日志；杀软日志采集和检测判定属于后续评测阶段。
+
 2026-05-13 实测结论：Microsoft Defender 在云端环境下对 EICAR 的处理时间存在波动，单次状态查询容易得到“处决前”的假 `stable`。因此不要把耗时观测放回 `POST /sample`，也不要把单次 `guest-case-status` 当作最终判定。当前推荐策略是 `guest-upload-sample` 自动执行动态轮询：先等待 10 秒，再每 2 秒查询一次，最多 30 秒；期间一旦出现 `removed_after_save` 即判定拦截成功，只有完整窗口结束后仍为 `stable` 才判定样本存活。
+
+受控触发阶段目前只实现默认关闭的 action 骨架：
+
+```toml
+[guest_agent.execution]
+enabled = false
+token_env = "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
+timeout_seconds = 30
+```
+
+`POST /cases/{case_id}/actions` 只接受白名单 action，不接受任意路径、命令、shell/cmd/PowerShell 或参数。`guest-execute-sample` 默认发送 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata、路径归属和可选 sha256，不启动进程；显式传入 `--real-action` 时请求 `execute_uploaded_sample`。真实启动只有在云端 Guest Agent 启用 execution 且请求携带正确 `CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN` 时才会发生，服务端会再次 `os.path.exists` 确认文件仍存在，并使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)` 直接启动当前 case 已登记文件。标准输入/输出/错误会重定向到 `DEVNULL`，Windows 下使用 `CREATE_NO_WINDOW` 并关闭继承句柄。PID 和启动时间会写入 `case_state.json`，并记录 `execution_started` 事件。完整设计见 `docs/EXECUTION_MODEL.md`。
+
+Guest Agent CLI 报错按来源归因：`[Local Check]` 表示本地配置或环境变量问题，`[Network]` 表示无法连接云端 Guest Agent，`[Remote Agent]` 表示云端鉴权或业务拒绝，例如 execution 未启用。
+
+下一步可以使用 EICAR 或无害命令 exe 验证触发链路，例如只在云端 case 的 sample 目录内写入 `execution_proof.txt` 的测试程序。仍然不引入有害样本，本地也不能执行、打开、解压、扫描或解析任何样本文件。
 
 Guest Agent 的职责应限制在云端隔离 VM 内：
 

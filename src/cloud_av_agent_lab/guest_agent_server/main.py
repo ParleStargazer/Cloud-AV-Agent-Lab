@@ -7,8 +7,10 @@ from typing import Sequence
 
 from cloud_av_agent_lab.guest_agent_server.app import create_app
 from cloud_av_agent_lab.guest_agent_server.auth import (
+    EXECUTION_TOKEN_ENV,
     TOKEN_ENV,
     GuestAgentServerConfigError,
+    load_required_execution_token,
     load_required_upload_token,
     load_required_token,
 )
@@ -26,6 +28,25 @@ def build_parser() -> argparse.ArgumentParser:
         default=r"C:\CloudAvAgentLab",
         help="guest work directory",
     )
+    parser.add_argument(
+        "--enable-execution-actions",
+        action="store_true",
+        help=(
+            "enable controlled execution actions; requires an execution token and "
+            "only permits the current case's registered uploaded file"
+        ),
+    )
+    parser.add_argument(
+        "--execution-token-env",
+        default=EXECUTION_TOKEN_ENV,
+        help="environment variable that stores the execution action token",
+    )
+    parser.add_argument(
+        "--execution-timeout-seconds",
+        type=float,
+        default=30.0,
+        help="reported timeout window for controlled execution actions",
+    )
     return parser
 
 
@@ -36,6 +57,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         token = load_required_token(token_env=TOKEN_ENV)
         upload_token = load_required_upload_token()
+        execution_token = (
+            load_required_execution_token(token_env=args.execution_token_env)
+            if args.enable_execution_actions
+            else None
+        )
     except GuestAgentServerConfigError as exc:
         parser.exit(2, f"error: {exc}\n")
 
@@ -53,7 +79,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         raise exc
 
-    app = create_app(workdir=Path(args.workdir), token=token, upload_token=upload_token)
+    app = create_app(
+        workdir=Path(args.workdir),
+        token=token,
+        upload_token=upload_token,
+        execution_enabled=args.enable_execution_actions,
+        execution_token=execution_token,
+        execution_timeout_seconds=args.execution_timeout_seconds,
+    )
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
 

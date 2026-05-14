@@ -13,14 +13,21 @@ from cloud_av_agent_lab.core.contracts import GuestAgentConfig, TestCase
 from cloud_av_agent_lab.network.client import NetworkClient, NetworkResponse
 
 UPLOAD_TOKEN_ENV = "CLOUD_AV_GUEST_AGENT_UPLOAD_TOKEN"
+EXECUTION_TOKEN_ENV = "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
 
 
 class GuestAgentError(RuntimeError):
     """Raised when Guest Agent configuration or HTTP communication fails."""
 
-    def __init__(self, message: str, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        source: str = "remote",
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.source = source
 
 
 @dataclass(frozen=True)
@@ -68,6 +75,56 @@ class GuestAgentClient:
             method="GET",
         )
 
+    def case_report(self, case_id: str) -> GuestAgentResponse:
+        return self._request(
+            f"cases/{quote(case_id, safe='')}/report",
+            method="GET",
+        )
+
+    def case_action(
+        self,
+        case_id: str,
+        action: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> GuestAgentResponse:
+        body = {**dict(payload or {}), "action": action}
+        headers: dict[str, str] = {"Authorization": f"Bearer {self.token}"}
+        if self.config.execution.enabled:
+            execution_token = self.env.get(self.config.execution.token_env, "").strip()
+            if not execution_token:
+                raise GuestAgentError(
+                    "Guest Agent execution token environment variable "
+                    f"{self.config.execution.token_env!r} is not set",
+                    source="local",
+                )
+            headers["X-Execution-Token"] = execution_token
+        return self._request(
+            f"cases/{quote(case_id, safe='')}/actions",
+            method="POST",
+            payload=body,
+            headers=headers,
+            timeout_seconds=self.config.execution.timeout_seconds,
+        )
+
+    def execute_uploaded_sample(
+        self,
+        case_id: str,
+        sample_id: str,
+        expected_sha256: str = "",
+        dry_run: bool = True,
+    ) -> GuestAgentResponse:
+        action = (
+            "dry_run_execute_uploaded_sample" if dry_run else "execute_uploaded_sample"
+        )
+        return self.case_action(
+            case_id=case_id,
+            action=action,
+            payload={
+                "sample_id": sample_id,
+                "expected_sha256": expected_sha256,
+            },
+        )
+
     def upload_sample(
         self,
         case_id: str,
@@ -77,19 +134,23 @@ class GuestAgentClient:
         upload_token_env: str = UPLOAD_TOKEN_ENV,
     ) -> GuestAgentResponse:
         if not self.config.enabled:
-            raise GuestAgentError("Guest Agent is disabled in config")
+            raise GuestAgentError("Guest Agent is disabled in config", source="local")
         upload_token = self.env.get(upload_token_env, "").strip()
         if not upload_token:
             raise GuestAgentError(
                 "Guest Agent upload token environment variable "
-                f"{upload_token_env!r} is not set"
+                f"{upload_token_env!r} is not set",
+                source="local",
             )
 
         path = Path(file_path)
         try:
             content = path.read_bytes()
         except OSError as exc:
-            raise GuestAgentError("Guest Agent upload file could not be read") from exc
+            raise GuestAgentError(
+                "Guest Agent upload file could not be read",
+                source="local",
+            ) from exc
 
         url = urljoin(
             self.base_url,
@@ -113,7 +174,8 @@ class GuestAgentClient:
             raise _guest_agent_error_from_http_error("upload-sample", exc) from exc
         except Exception as exc:
             raise GuestAgentError(
-                f"Guest Agent upload failed: {type(exc).__name__}"
+                _format_network_error("upload-sample", exc),
+                source="network",
             ) from exc
 
         return _decode_guest_agent_response("upload-sample", response)
@@ -125,7 +187,8 @@ class GuestAgentClient:
         if not token:
             raise GuestAgentError(
                 "Guest Agent is enabled but token environment variable "
-                f"{self.config.token_env!r} is not set"
+                f"{self.config.token_env!r} is not set",
+                source="local",
             )
         return token
 
@@ -134,9 +197,11 @@ class GuestAgentClient:
         path: str,
         method: str,
         payload: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+        timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
         if not self.config.enabled:
-            raise GuestAgentError("Guest Agent is disabled in config")
+            raise GuestAgentError("Guest Agent is disabled in config", source="local")
 
         url = urljoin(self.base_url, path.lstrip("/"))
         try:
@@ -144,13 +209,20 @@ class GuestAgentClient:
                 method=method,
                 url=url,
                 payload=payload,
-                headers={"Authorization": f"Bearer {self.token}"},
-                timeout_seconds=self.config.timeout_seconds,
+                headers=dict(headers or {"Authorization": f"Bearer {self.token}"}),
+                timeout_seconds=(
+                    self.config.timeout_seconds
+                    if timeout_seconds is None
+                    else timeout_seconds
+                ),
             )
         except HTTPError as exc:
             raise _guest_agent_error_from_http_error(path, exc) from exc
         except Exception as exc:
-            raise GuestAgentError(f"Guest Agent request failed: {exc}") from exc
+            raise GuestAgentError(
+                _format_network_error(path, exc),
+                source="network",
+            ) from exc
 
         return _decode_guest_agent_response(path, response)
 
@@ -196,16 +268,24 @@ def _decode_guest_agent_response(
             raise GuestAgentError(
                 _format_http_error(path, response.status, response.reason),
                 status_code=response.status,
+                source="remote",
             ) from exc
-        raise GuestAgentError(f"Guest Agent {path} response is not valid JSON") from exc
+        raise GuestAgentError(
+            f"Guest Agent {path} response is not valid JSON",
+            source="remote",
+        ) from exc
 
     if not isinstance(decoded, dict):
         if not 200 <= response.status < 300:
             raise GuestAgentError(
                 _format_http_error(path, response.status, response.reason),
                 status_code=response.status,
+                source="remote",
             )
-        raise GuestAgentError(f"Guest Agent {path} response JSON must be an object")
+        raise GuestAgentError(
+            f"Guest Agent {path} response JSON must be an object",
+            source="remote",
+        )
 
     if not 200 <= response.status < 300:
         raise GuestAgentError(
@@ -216,6 +296,7 @@ def _decode_guest_agent_response(
                 _extract_error_message(decoded),
             ),
             status_code=response.status,
+            source="remote",
         )
 
     data_value = decoded.get("data", {})
@@ -241,6 +322,14 @@ def _guest_agent_error_from_http_error(path: str, exc: HTTPError) -> GuestAgentE
     return GuestAgentError(
         _format_http_error(path, exc.code, str(exc.reason or "")),
         status_code=exc.code,
+        source="remote",
+    )
+
+
+def _format_network_error(path: str, exc: BaseException) -> str:
+    return (
+        "无法连接到 Guest Agent，请确认云端服务已启动、IP/端口/防火墙/"
+        f"代理配置正确。request={path}, cause={type(exc).__name__}"
     )
 
 

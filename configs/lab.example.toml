@@ -1,8 +1,9 @@
 # Cloud AV Agent Lab 示例配置
 #
 # 设计目标：
-# - 本地只保存编排配置，不保存、不下载、不执行样本。
-# - 病毒样本仅以云端对象 URI 形式出现。
+# - 本地只保存编排配置，不保存、不下载、不执行真实病毒样本。
+# - 真实病毒样本仅以云端对象 URI 形式出现；开发期只允许显式指定
+#   EICAR 或无害测试文件进行 HTTP 上传验证。
 # - 当前示例采用“一台 Lighthouse 实例，多个测试快照”的模式：
 #   多个 [[vms]] 测试 profile 共用同一个 instance_id，但各自绑定不同
 #   baseline_snapshot 和 product_id。
@@ -66,8 +67,9 @@ host = "127.0.0.1"
 port = 7890
 
 [guest_agent]
-# 云端隔离 Windows 主机内的 Guest Agent。MVP 只做连通性和环境准备，
-# 不投递、不下载、不执行样本。
+# 云端隔离 Windows 主机内的 Guest Agent。默认只做连通性、环境准备、
+# EICAR/无害文件上传、状态观测和投送阶段报告；受控触发需在
+# [guest_agent.execution] 中显式开启。
 enabled = false
 base_url = "http://127.0.0.1:8080"
 
@@ -75,6 +77,14 @@ base_url = "http://127.0.0.1:8080"
 # $env:CLOUD_AV_GUEST_AGENT_TOKEN="replace-with-dev-token"
 token_env = "CLOUD_AV_GUEST_AGENT_TOKEN"
 timeout_seconds = 10
+
+[guest_agent.execution]
+# 受控触发能力默认关闭。本地配置和云端 Guest Agent 都显式开启，并提供
+# execution token 后，才允许触发当前 case 已登记上传文件。
+# 不接受任意命令、任意路径或 shell 参数；本地控制面仍不执行样本。
+enabled = false
+token_env = "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
+timeout_seconds = 30
 
 # ---------------------------------------------------------------------------
 # 杀软产品配置

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
+import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +14,27 @@ from typing import Any
 
 SAFE_CASE_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 SAFE_FILENAME = re.compile(r"^[A-Za-z0-9_. -]+$")
+ALLOWED_CASE_ACTIONS = {
+    "generate_report",
+    "observe_case",
+    "dry_run_execute_uploaded_sample",
+    "execute_uploaded_sample",
+}
+FORBIDDEN_ACTION_FIELDS = {
+    "args",
+    "arguments",
+    "cmd",
+    "command",
+    "exec",
+    "executable",
+    "file",
+    "file_path",
+    "path",
+    "powershell",
+    "run_command",
+    "sample_path",
+    "shell",
+}
 LOGGER = logging.getLogger(__name__)
 
 
@@ -93,6 +116,7 @@ def prepare_case_workspace(
         message="case workspace prepared",
         data={"workspace": str(workspace)},
     )
+    write_case_report(workspace)
     return case_id, workspace
 
 
@@ -187,6 +211,7 @@ def save_uploaded_sample(
         },
     )
     write_case_state(workspace, state)
+    write_case_report(workspace)
     return sample_path, metadata
 
 
@@ -218,6 +243,106 @@ def read_case_status(
         "sample_metadata": sample_metadata,
         "events": events,
     }
+
+
+def read_case_report(
+    workdir: str | Path,
+    case_id: str,
+    max_events: int = 20,
+) -> dict[str, Any]:
+    safe_id = safe_case_id(case_id)
+    workspace = _case_workspace(workdir, safe_id)
+    if not workspace.is_dir():
+        raise WorkspaceNotFoundError(
+            "case workspace does not exist; run guest-prepare-case first"
+        )
+    return write_case_report(workspace, max_events=max_events)
+
+
+def write_case_report(workspace: Path, max_events: int = 20) -> dict[str, Any]:
+    report = _build_case_report(workspace, max_events=max_events)
+    (workspace / "case_report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return report
+
+
+def run_case_action(
+    workdir: str | Path,
+    case_id: str,
+    payload: Mapping[str, Any],
+    execution_enabled: bool = False,
+) -> dict[str, Any]:
+    safe_id = safe_case_id(case_id)
+    workspace = _case_workspace(workdir, safe_id)
+    if not workspace.is_dir():
+        raise WorkspaceNotFoundError(
+            "case workspace does not exist; run guest-prepare-case first"
+        )
+    if not isinstance(payload, Mapping):
+        raise WorkspaceError("case action payload must be a JSON object")
+
+    forbidden_fields = sorted(_find_forbidden_action_fields(payload))
+    if forbidden_fields:
+        raise WorkspaceError(
+            "case action payload contains forbidden execution fields: "
+            + ", ".join(forbidden_fields)
+        )
+
+    action = str(payload.get("action", "")).strip()
+    if action not in ALLOWED_CASE_ACTIONS:
+        raise WorkspaceError(
+            "case action is not allowed; allowed actions are: "
+            + ", ".join(sorted(ALLOWED_CASE_ACTIONS))
+        )
+
+    sample_id = _case_sample_id(workspace)
+    if action == "generate_report":
+        append_event(
+            workspace,
+            event_type="case_report_generated",
+            case_id=safe_id,
+            sample_id=sample_id,
+            message="case delivery report generated",
+            data={"action": action},
+        )
+        report = write_case_report(workspace)
+        return {
+            "action": action,
+            "action_state": "report_generated",
+            "message": "case report generated",
+            "report": report,
+        }
+
+    if action == "observe_case":
+        status = read_case_status(workdir, safe_id)
+        return {
+            "action": action,
+            "action_state": "case_observed",
+            "message": "case status observed",
+            "status": status,
+        }
+
+    if action == "execute_uploaded_sample":
+        if not execution_enabled:
+            append_event(
+                workspace,
+                event_type="execution_disabled",
+                case_id=safe_id,
+                sample_id=sample_id,
+                message="real sample execution is disabled",
+                data={"action": action, "execution_enabled": execution_enabled},
+            )
+            write_case_report(workspace)
+            return {
+                "action": action,
+                "execution_state": "execution_disabled",
+                "message": "execution is disabled; no sample was executed",
+            }
+        return _execute_uploaded_sample(workspace, safe_id, payload)
+
+    return _dry_run_execute_uploaded_sample(workspace, safe_id, payload)
 
 
 def refresh_sample_status(
@@ -318,6 +443,7 @@ def refresh_sample_status(
         message=message,
         data=status_fields,
     )
+    write_case_report(workspace)
     LOGGER.info(
         "sample status refreshed: case_id=%s sample_id=%s upload_state=%s "
         "exists=%s stat_ok=%s size=%s error=%s",
@@ -369,6 +495,272 @@ def safe_original_filename(raw_filename: object) -> str:
     if not SAFE_FILENAME.fullmatch(filename):
         raise WorkspaceError("original filename contains unsafe characters")
     return filename
+
+
+def _build_case_report(workspace: Path, max_events: int) -> dict[str, Any]:
+    case_data = _read_json_file(workspace / "case.json")
+    state = _read_json_file(workspace / "case_state.json")
+    sample_metadata = _read_json_file(workspace / "sample" / "sample.json")
+    all_events = _read_recent_events(workspace / "events.jsonl", max_events=1000)
+    recent_events = all_events[-max(0, max_events) :]
+
+    case_id = str(state.get("case_id") or _mapping_value(case_data, "case", "id"))
+    sample_id = str(
+        state.get("sample_id")
+        or sample_metadata.get("sample_id")
+        or _mapping_value(case_data, "sample", "id")
+    )
+    sample_state = state.get("sample")
+    sample_state = sample_state if isinstance(sample_state, Mapping) else {}
+
+    report = {
+        "case_id": case_id,
+        "sample_id": sample_id,
+        "vm_id": str(_mapping_value(case_data, "vm", "id")),
+        "product_id": str(_mapping_value(case_data, "product", "id")),
+        "upload_state": str(state.get("upload_state", "not_uploaded")),
+        "saved_once": _bool_field(sample_state, sample_metadata, "saved_once"),
+        "post_write_exists": _bool_field(
+            sample_state,
+            sample_metadata,
+            "post_write_exists",
+        ),
+        "removed_after_save": _bool_field(
+            sample_state,
+            sample_metadata,
+            "removed_after_save",
+        ),
+        "locked_or_busy": _bool_field(sample_state, sample_metadata, "locked_or_busy"),
+        "stable": _bool_field(sample_state, sample_metadata, "stable"),
+        "original_filename": str(
+            sample_state.get("original_filename")
+            or sample_metadata.get("original_filename", "")
+        ),
+        "sha256": str(
+            sample_state.get("sha256")
+            or sample_metadata.get("sha256")
+            or _mapping_value(case_data, "sample", "sha256")
+        ),
+        "size": _coerce_int(sample_state.get("size") or sample_metadata.get("size")),
+        "prepared_at_utc": _first_event_time(all_events, "case_prepared"),
+        "uploaded_at_utc": str(
+            sample_metadata.get("stored_at_utc")
+            or _first_event_time(all_events, "sample_saved")
+        ),
+        "updated_at_utc": str(state.get("updated_at_utc", "")),
+        "recent_events": recent_events,
+    }
+    return report
+
+
+def _dry_run_execute_uploaded_sample(
+    workspace: Path,
+    case_id: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    context = _uploaded_sample_execution_context(workspace, payload)
+    probe = _probe_sample_current_status(context["sample_path"])
+    append_event(
+        workspace,
+        event_type="execution_dry_run_checked",
+        case_id=case_id,
+        sample_id=context["sample_id"],
+        message="dry-run execution metadata checked; no process was started",
+        data={
+            "expected_sha256_match": context["expected_sha256_match"],
+            "sample_present": probe.exists,
+            "sample_stat_ok": probe.stat_ok,
+            "sample_path_under_case": True,
+        },
+    )
+    write_case_report(workspace)
+    return {
+        "action": "dry_run_execute_uploaded_sample",
+        "execution_state": "execution_dry_run_checked",
+        "message": "dry-run checked uploaded sample metadata; no sample was executed",
+        "sample_id": context["sample_id"],
+        "expected_sha256_match": context["expected_sha256_match"],
+        "sample_present": probe.exists,
+        "sample_stat_ok": probe.stat_ok,
+        "sample_path_under_case": True,
+    }
+
+
+def _execute_uploaded_sample(
+    workspace: Path,
+    case_id: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    context = _uploaded_sample_execution_context(workspace, payload)
+    sample_path = context["sample_path"]
+    sample_dir = context["sample_dir"]
+    if not os.path.exists(sample_path):
+        append_event(
+            workspace,
+            event_type="sample_missing_before_execution",
+            case_id=case_id,
+            sample_id=context["sample_id"],
+            message="uploaded sample was missing before execution",
+            data={"sample_path_under_case": True},
+        )
+        write_case_report(workspace)
+        raise WorkspaceError("uploaded sample is missing before execution")
+
+    try:
+        process = subprocess.Popen(  # noqa: S603
+            [str(sample_path)],
+            cwd=str(sample_dir),
+            shell=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=_no_window_creationflags(),
+            close_fds=True,
+        )
+    except OSError as exc:
+        append_event(
+            workspace,
+            event_type="execution_blocked_or_failed",
+            case_id=case_id,
+            sample_id=context["sample_id"],
+            message="uploaded sample failed to start",
+            data={"error": type(exc).__name__, "sample_path_under_case": True},
+        )
+        write_case_report(workspace)
+        raise WorkspaceError(
+            f"uploaded sample failed to start: {type(exc).__name__}"
+        ) from exc
+
+    started_at = _utc_now()
+    state = dict(context["state"])
+    state["phase"] = "execution_started"
+    state["execution"] = {
+        "state": "execution_started",
+        "pid": process.pid,
+        "sample_id": context["sample_id"],
+        "stored_filename": sample_path.name,
+        "cwd": str(sample_dir),
+        "started_at_utc": started_at,
+    }
+    state["updated_at_utc"] = started_at
+    write_case_state(workspace, state)
+    append_event(
+        workspace,
+        event_type="execution_started",
+        case_id=case_id,
+        sample_id=context["sample_id"],
+        message="uploaded sample process started",
+        data={
+            "pid": process.pid,
+            "started_at_utc": started_at,
+            "sample_path_under_case": True,
+        },
+    )
+    write_case_report(workspace)
+    return {
+        "action": "execute_uploaded_sample",
+        "execution_state": "execution_started",
+        "message": "uploaded sample process started",
+        "pid": process.pid,
+        "sample_id": context["sample_id"],
+        "started_at_utc": started_at,
+        "sample_path_under_case": True,
+    }
+
+
+def _uploaded_sample_execution_context(
+    workspace: Path,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    state = _read_json_file(workspace / "case_state.json")
+    sample_metadata = _read_json_file(workspace / "sample" / "sample.json")
+    if sample_metadata.get("saved_once") is not True:
+        raise WorkspaceError(
+            "execute_uploaded_sample requires a previously uploaded sample"
+        )
+
+    sample_id = str(sample_metadata.get("sample_id") or state.get("sample_id") or "")
+    requested_sample_id = str(payload.get("sample_id", "")).strip()
+    if requested_sample_id and requested_sample_id != sample_id:
+        raise WorkspaceError("sample_id does not match the prepared case metadata")
+
+    expected_sha256 = str(payload.get("expected_sha256", "")).strip()
+    recorded_sha256 = str(sample_metadata.get("sha256", "")).strip()
+    if expected_sha256 and recorded_sha256 and expected_sha256 != recorded_sha256:
+        raise WorkspaceError("expected_sha256 does not match uploaded sample metadata")
+
+    stored_filename = safe_original_filename(
+        sample_metadata.get("stored_filename")
+        or sample_metadata.get("original_filename")
+    )
+    sample_dir = (workspace / "sample").resolve()
+    sample_path = (sample_dir / stored_filename).resolve()
+    if not _is_relative_to(sample_path, sample_dir):
+        raise WorkspaceError("sample path escapes the sample directory")
+    return {
+        "state": state,
+        "sample_metadata": sample_metadata,
+        "sample_id": sample_id,
+        "sample_dir": sample_dir,
+        "sample_path": sample_path,
+        "expected_sha256_match": not expected_sha256
+        or not recorded_sha256
+        or expected_sha256 == recorded_sha256,
+    }
+
+
+def _no_window_creationflags() -> int:
+    if os.name != "nt":
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+
+
+def _case_sample_id(workspace: Path) -> str:
+    state = _read_json_file(workspace / "case_state.json")
+    sample_metadata = _read_json_file(workspace / "sample" / "sample.json")
+    return str(sample_metadata.get("sample_id") or state.get("sample_id") or "")
+
+
+def _find_forbidden_action_fields(value: object) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            normalized = str(key).casefold().replace("-", "_")
+            if normalized in FORBIDDEN_ACTION_FIELDS:
+                found.add(str(key))
+            found.update(_find_forbidden_action_fields(child))
+    elif isinstance(value, list):
+        for item in value:
+            found.update(_find_forbidden_action_fields(item))
+    return found
+
+
+def _mapping_value(
+    payload: Mapping[str, Any],
+    table_name: str,
+    key: str,
+) -> object:
+    value = payload.get(table_name)
+    if isinstance(value, Mapping):
+        return value.get(key, "")
+    return ""
+
+
+def _bool_field(
+    primary: Mapping[str, Any],
+    fallback: Mapping[str, Any],
+    key: str,
+) -> bool:
+    if key in primary:
+        return bool(primary[key])
+    return bool(fallback.get(key, False))
+
+
+def _first_event_time(events: list[dict[str, Any]], event_type: str) -> str:
+    for event in events:
+        if event.get("event_type") == event_type:
+            return str(event.get("timestamp_utc", ""))
+    return ""
 
 
 def _probe_sample_current_status(path: Path) -> FileProbe:

@@ -139,7 +139,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             )
 
         self.assertEqual(exit_error.exception.code, 2)
-        self.assertIn("guest_agent is disabled", stderr.getvalue())
+        self.assertIn("[Local Check]", stderr.getvalue())
 
     def test_guest_upload_exits_clearly_when_guest_agent_disabled(self) -> None:
         stderr = StringIO()
@@ -162,7 +162,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             )
 
         self.assertEqual(exit_error.exception.code, 2)
-        self.assertIn("guest_agent is disabled", stderr.getvalue())
+        self.assertIn("[Local Check]", stderr.getvalue())
 
     def test_guest_case_status_exits_clearly_when_guest_agent_disabled(self) -> None:
         stderr = StringIO()
@@ -181,7 +181,49 @@ class CloudLifecycleCliGuardTests(TestCase):
             )
 
         self.assertEqual(exit_error.exception.code, 2)
-        self.assertIn("guest_agent is disabled", stderr.getvalue())
+        self.assertIn("[Local Check]", stderr.getvalue())
+
+    def test_guest_case_report_exits_clearly_when_guest_agent_disabled(self) -> None:
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+            main(
+                [
+                    "guest-case-report",
+                    "--config",
+                    str(ROOT / "configs" / "lab.example.toml"),
+                    "--vm-id",
+                    "win10-tencent-manager",
+                    "--case-id",
+                    "case-001__tencent-pc-manager",
+                ]
+            )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("[Local Check]", stderr.getvalue())
+
+    def test_guest_execute_sample_exits_clearly_when_guest_agent_disabled(
+        self,
+    ) -> None:
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+            main(
+                [
+                    "guest-execute-sample",
+                    "--config",
+                    str(ROOT / "configs" / "lab.example.toml"),
+                    "--vm-id",
+                    "win10-tencent-manager",
+                    "--sample-id",
+                    "case-001",
+                    "--case-id",
+                    "case-001__tencent-pc-manager",
+                ]
+            )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("[Local Check]", stderr.getvalue())
 
     def test_guest_upload_command_only_calls_upload_method(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -269,6 +311,244 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertIn("HTTP 404 Not Found", output)
         self.assertIn("guest-prepare-case", output)
         self.assertIn("请确认 case_id 是否正确", output)
+
+    def test_guest_case_status_network_error_is_attributed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FailingGuestAgentClient(
+                GuestAgentError(
+                    "无法连接到 Guest Agent，请确认云端服务已启动、IP/端口/防火墙/代理配置正确。",
+                    source="network",
+                )
+            )
+            stderr = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
+                main(
+                    [
+                        "guest-case-status",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-tencent-manager",
+                        "--case-id",
+                        "case-001__tencent-pc-manager",
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        output = stderr.getvalue()
+        self.assertIn("[Network]", output)
+        self.assertIn("无法连接到 Guest Agent", output)
+
+    def test_guest_case_report_404_suggests_prepare_case(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FailingGuestAgentClient(
+                GuestAgentError(
+                    "Guest Agent cases/missing-case/report returned HTTP 404 "
+                    "Not Found: case workspace does not exist; run "
+                    "guest-prepare-case first",
+                    status_code=404,
+                )
+            )
+            stderr = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
+                main(
+                    [
+                        "guest-case-report",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-tencent-manager",
+                        "--case-id",
+                        "missing-case",
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        output = stderr.getvalue()
+        self.assertIn("HTTP 404 Not Found", output)
+        self.assertIn("guest-prepare-case", output)
+        self.assertIn("请确认 case_id 是否正确", output)
+
+    def test_guest_execute_sample_404_suggests_prepare_case(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FailingGuestAgentClient(
+                GuestAgentError(
+                    "Guest Agent cases/missing-case/actions returned HTTP 404 "
+                    "Not Found: case workspace does not exist; run "
+                    "guest-prepare-case first",
+                    status_code=404,
+                )
+            )
+            stderr = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
+                main(
+                    [
+                        "guest-execute-sample",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-tencent-manager",
+                        "--sample-id",
+                        "case-001",
+                        "--case-id",
+                        "missing-case",
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        output = stderr.getvalue()
+        self.assertIn("HTTP 404 Not Found", output)
+        self.assertIn("guest-prepare-case", output)
+        self.assertIn("请确认 case_id 是否正确", output)
+
+    def test_guest_execute_sample_defaults_to_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+            stdout = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "guest-execute-sample",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-tencent-manager",
+                        "--sample-id",
+                        "case-001",
+                        "--case-id",
+                        "case-001__tencent-pc-manager",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(fake_client.execute_calls), 1)
+        call_info = fake_client.execute_calls[0]
+        self.assertTrue(call_info["dry_run"])
+        self.assertEqual(call_info["expected_sha256"], "0" * 63 + "1")
+        self.assertFalse(fake_client.execute_called)
+        output = stdout.getvalue()
+        self.assertIn('"execution_state": "execution_dry_run_checked"', output)
+        self.assertIn("没有启动样本进程", output)
+
+    def test_guest_execute_sample_real_action_requires_execution_enabled(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+            stderr = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
+                main(
+                    [
+                        "guest-execute-sample",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-tencent-manager",
+                        "--sample-id",
+                        "case-001",
+                        "--case-id",
+                        "case-001__tencent-pc-manager",
+                        "--real-action",
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertEqual(fake_client.execute_calls, [])
+        self.assertIn("[Local Check]", stderr.getvalue())
+
+    def test_guest_execute_sample_real_action_reports_remote_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(
+                _guest_agent_execution_enabled_config(),
+                encoding="utf-8",
+            )
+            fake_client = _FakeGuestAgentClient()
+            stderr = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
+                main(
+                    [
+                        "guest-execute-sample",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-tencent-manager",
+                        "--sample-id",
+                        "case-001",
+                        "--case-id",
+                        "case-001__tencent-pc-manager",
+                        "--expected-sha256",
+                        "custom-sha",
+                        "--real-action",
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertEqual(len(fake_client.execute_calls), 1)
+        call_info = fake_client.execute_calls[0]
+        self.assertFalse(call_info["dry_run"])
+        self.assertEqual(call_info["expected_sha256"], "custom-sha")
+        self.assertTrue(fake_client.execute_called)
+        output = stderr.getvalue()
+        self.assertIn("[Remote Agent]", output)
+        self.assertIn("云端拒绝了执行请求", output)
 
     def test_guest_upload_404_suggests_prepare_case(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -407,6 +687,7 @@ class _FakeGuestAgentClient:
         self.status_upload_states = list(status_upload_states or [])
         self.upload_calls = 0
         self.case_status_calls = 0
+        self.execute_calls: list[dict[str, object]] = []
         self.execute_called = False
 
     def upload_sample(
@@ -444,6 +725,54 @@ class _FakeGuestAgentClient:
             },
         )
 
+    def case_report(self, case_id: str) -> GuestAgentResponse:
+        return GuestAgentResponse(
+            status="ok",
+            message="case report loaded",
+            data={
+                "case_id": case_id,
+                "upload_state": self.status_upload_state,
+            },
+        )
+
+    def execute_uploaded_sample(
+        self,
+        case_id: str,
+        sample_id: str,
+        expected_sha256: str = "",
+        dry_run: bool = True,
+    ) -> GuestAgentResponse:
+        self.execute_calls.append(
+            {
+                "case_id": case_id,
+                "sample_id": sample_id,
+                "expected_sha256": expected_sha256,
+                "dry_run": dry_run,
+            }
+        )
+        self.execute_called = not dry_run
+        if dry_run:
+            return GuestAgentResponse(
+                status="ok",
+                message=(
+                    "dry-run checked uploaded sample metadata; no sample was executed"
+                ),
+                data={
+                    "case_id": case_id,
+                    "sample_id": sample_id,
+                    "execution_state": "execution_dry_run_checked",
+                },
+            )
+        return GuestAgentResponse(
+            status="ok",
+            message="execution is disabled; no sample was executed",
+            data={
+                "case_id": case_id,
+                "sample_id": sample_id,
+                "execution_state": "execution_disabled",
+            },
+        )
+
 
 class _FailingGuestAgentClient:
     def __init__(self, error: GuestAgentError) -> None:
@@ -462,9 +791,36 @@ class _FailingGuestAgentClient:
     def case_status(self, case_id: str) -> GuestAgentResponse:
         raise self.error
 
+    def case_report(self, case_id: str) -> GuestAgentResponse:
+        raise self.error
+
+    def execute_uploaded_sample(
+        self,
+        case_id: str,
+        sample_id: str,
+        expected_sha256: str = "",
+        dry_run: bool = True,
+    ) -> GuestAgentResponse:
+        raise self.error
+
 
 def _guest_agent_enabled_config() -> str:
     config_text = (ROOT / "configs" / "lab.example.toml").read_text(encoding="utf-8")
     marker = "[guest_agent]"
     before, after = config_text.split(marker, maxsplit=1)
     return before + marker + after.replace("enabled = false", "enabled = true", 1)
+
+
+def _guest_agent_execution_enabled_config() -> str:
+    return _guest_agent_enabled_config().replace(
+        "[guest_agent.execution]\n"
+        "# 受控触发能力默认关闭。本地配置和云端 Guest Agent 都显式开启，并提供\n"
+        "# execution token 后，才允许触发当前 case 已登记上传文件。\n"
+        "# 不接受任意命令、任意路径或 shell 参数；本地控制面仍不执行样本。\n"
+        "enabled = false",
+        "[guest_agent.execution]\n"
+        "# 受控触发能力默认关闭。本地配置和云端 Guest Agent 都显式开启，并提供\n"
+        "# execution token 后，才允许触发当前 case 已登记上传文件。\n"
+        "# 不接受任意命令、任意路径或 shell 参数；本地控制面仍不执行样本。\n"
+        "enabled = true",
+    )

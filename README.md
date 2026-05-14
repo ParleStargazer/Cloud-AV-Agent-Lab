@@ -1,15 +1,15 @@
 # Cloud AV Agent Lab
 
-Cloud AV Agent Lab 是一个本地自动化编排框架，用于把 AI Agent、云端 Windows 虚拟机、杀软告警采集和结构化报告串成闭环。项目边界很明确：本地只保存代码、配置、任务状态和报告，不保存样本，不下载样本，不在本地执行样本。
+Cloud AV Agent Lab 是一个本地自动化编排框架，用于把 AI Agent、云端 Windows 虚拟机、杀软告警采集和结构化报告串成闭环。项目边界很明确：本地只保存代码、配置、任务状态和报告，不保存真实病毒样本，不下载真实病毒样本，不在本地执行任何样本。开发阶段只允许用户显式指定 EICAR 或无害测试文件，通过 HTTP 上传到云端 Guest Agent 做链路验证。
 
 现有目录里的 `Spore` 可作为透明可控的 AI Agent 外壳，`vmware-mcp` 可作为本地 VMware 适配器参考。本项目新增的根目录框架优先面向云端虚拟机，后续也可以用同样接口接入 VMware。
 
 ## 安全边界
 
-- 样本只能以云端对象引用形式出现，例如 `cos://bucket/redacted/case-001.bin`。
+- 真实病毒样本只能以云端对象引用形式出现，例如 `cos://bucket/redacted/case-001.bin`；开发阶段可用用户显式指定路径的 EICAR 或无害测试文件验证上传链路。
 - 本地 `.gitignore` 已忽略 `samples/`、`malware/` 和常见可执行样本后缀。
 - 框架只提供编排、日志解析、结果判断和报告生成接口，不提供样本、不生成样本、不包含绕过或规避杀软的逻辑。
-- 真正的投递、运行、截图、日志采集必须由云端隔离虚拟机适配器完成。
+- 真实测试中的投递、运行、截图、日志采集必须由云端隔离虚拟机和 Guest Agent 完成，本地控制面不执行样本。
 - 每个测试用例都应恢复到基线快照，避免样本之间互相污染。
 
 ## 目录结构
@@ -78,7 +78,7 @@ cloud-av-agent-lab report-template --config configs/lab.example.toml --out repor
 - `core/contracts.py`：定义样本引用、杀软配置、虚拟机配置、测试用例和结果模型。
 - `core/safety.py`：拦截本地样本路径、非云端隔离等不安全配置。
 - `core/pipeline.py`：构建测试矩阵，并定义恢复快照、云端投递、执行、采集、报告的流程骨架。
-- `adapters/`：云厂商和客户机自动化接口，已包含腾讯云 Lighthouse 适配器骨架、Guest Agent 客户端占位和只读计划适配器。
+- `adapters/`：云厂商和客户机自动化接口，已包含腾讯云 Lighthouse 适配器、Guest Agent 客户端和只读计划适配器。
 - `network/`：统一网络客户端和临时代理支持，业务适配器只依赖 `NetworkClient`。
 - `detectors/`：基于日志关键字和行为观测的通用判定逻辑。
 - `reporting/markdown.py`：输出检出率、差异样本和逐用例结果。
@@ -196,7 +196,7 @@ Agent 不应直接操作本地样本，也不应生成规避检测建议。
 
 ## Guest Agent MVP
 
-Guest Agent 运行在云端隔离 Windows 主机内，本地只通过统一 `NetworkClient` 发起 HTTP 控制面调用。MVP 支持 `/health`、`/system-info`、`/prepare-case`、`/cases/{case_id}/sample` 和 `/cases/{case_id}/status`，用于连通性、系统信息、无害工作目录准备、EICAR/无害测试文件上传，以及上传后状态观测。不接触真实病毒样本，不执行样本，不暴露任意命令执行接口。
+Guest Agent 运行在云端隔离 Windows 主机内，本地只通过统一 `NetworkClient` 发起 HTTP 控制面调用。MVP 支持 `/health`、`/system-info`、`/prepare-case`、`/cases/{case_id}/sample`、`/cases/{case_id}/status`、`/cases/{case_id}/report` 和受控 `/cases/{case_id}/actions`，用于连通性、系统信息、无害工作目录准备、EICAR/无害测试文件上传、上传后状态观测、投送阶段报告生成，以及默认关闭的受控触发。不接触真实病毒样本，不暴露任意命令执行接口；默认工作流不执行样本，真实触发必须显式启用 execution 并限定为当前 case 已登记的上传文件。
 
 配置默认关闭：
 
@@ -206,6 +206,11 @@ enabled = false
 base_url = "http://127.0.0.1:8080"
 token_env = "CLOUD_AV_GUEST_AGENT_TOKEN"
 timeout_seconds = 10
+
+[guest_agent.execution]
+enabled = false
+token_env = "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
+timeout_seconds = 30
 ```
 
 启用后 token 从 `token_env` 指定的环境变量读取，不写入配置文件。CLI：
@@ -215,13 +220,63 @@ python -m cloud_av_agent_lab guest-health --config configs/lab.local.toml --vm-i
 python -m cloud_av_agent_lab guest-prepare-case --config configs/lab.local.toml --sample-id case-001 --vm-id sg-win10
 python -m cloud_av_agent_lab guest-upload-sample --config configs/lab.local.toml --vm-id sg-win10 --sample-id case-001 --case-id case-001__tencent-pc-manager --file C:\Temp\eicar.txt
 python -m cloud_av_agent_lab guest-case-status --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
+python -m cloud_av_agent_lab guest-case-report --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
+python -m cloud_av_agent_lab guest-execute-sample --config configs/lab.local.toml --vm-id sg-win10 --sample-id case-001 --case-id case-001__tencent-pc-manager
 ```
+
+最小端到端验证流程可以使用 EICAR 或无害命令 exe。以下命令只展示控制面顺序，真实值请替换为本地配置中的 `vm-id`、`sample-id` 和准备好的 `case-id`：
+
+```powershell
+$env:CLOUD_AV_GUEST_AGENT_TOKEN="replace-with-agent-token"
+$env:CLOUD_AV_GUEST_AGENT_UPLOAD_TOKEN="replace-with-upload-token"
+
+python -m cloud_av_agent_lab guest-prepare-case `
+  --config configs/lab.local.toml `
+  --vm-id <vm-id> `
+  --sample-id <sample-id>
+
+python -m cloud_av_agent_lab guest-upload-sample `
+  --config configs/lab.local.toml `
+  --vm-id <vm-id> `
+  --sample-id <sample-id> `
+  --case-id <case-id> `
+  --file C:\Temp\harmless-proof.exe
+
+python -m cloud_av_agent_lab guest-case-report `
+  --config configs/lab.local.toml `
+  --vm-id <vm-id> `
+  --case-id <case-id>
+
+python -m cloud_av_agent_lab guest-execute-sample `
+  --config configs/lab.local.toml `
+  --vm-id <vm-id> `
+  --sample-id <sample-id> `
+  --case-id <case-id>
+```
+
+`guest-upload-sample` 会在上传成功后自动等待 10 秒，并每 2 秒轮询一次状态，最多观察 30 秒。`guest-execute-sample` 默认是 dry-run，只验证 metadata、sha256 和路径归属，不启动进程。
+
+如需在云端手动验证无害命令 exe 的真实触发，需要先用 `--enable-execution-actions` 启动云端 Guest Agent，并在云端和本地都设置 `CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN`；本地配置也必须设置 `[guest_agent.execution].enabled = true`。满足这些条件后，才可以显式传入 `--real-action`：
+
+```powershell
+$env:CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN="replace-with-execution-token"
+python -m cloud_av_agent_lab guest-execute-sample `
+  --config configs/lab.local.toml `
+  --vm-id <vm-id> `
+  --sample-id <sample-id> `
+  --case-id <case-id> `
+  --real-action
+```
+
+该真实触发只会在云端 Guest Agent 中启动当前 case 已登记的上传文件，记录 PID 和 `execution_started` 事件；本地控制面仍不执行该文件。
 
 上传成功不等于文件最终保留。EICAR 可能被杀毒软件立即删除，这是预期的安全产品处理行为。Guest Agent 会记录 `stable`、`removed_after_save` 或 `locked_or_busy` 等状态，并写入 case 状态和事件日志；`removed_after_save` 和 `locked_or_busy` 不被视为传输失败。
 
 上传接口只负责写盘并立即返回，耗时等待放在本地 CLI：`guest-upload-sample` 会在上传成功后先等待 10 秒，然后每 2 秒轮询一次状态，最多观察到 30 秒；一旦出现 `removed_after_save` 会立即报告拦截成功。需要继续观察时，可以手动重复运行 `guest-case-status`。
 
-详细协议和单实例串行锁设计见 [GUEST_AGENT.md](docs/GUEST_AGENT.md)，Windows 免 Python 部署见 [GUEST_AGENT_DEPLOYMENT.md](docs/GUEST_AGENT_DEPLOYMENT.md)。
+每个 case 会维护 `case_state.json`、`events.jsonl` 和 `case_report.json`。`guest-case-report` 只汇总投送阶段 metadata，不读取 Defender 或其他杀软日志，不读取样本内容。
+
+受控触发能力默认关闭。`guest-execute-sample` 默认请求 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata 和路径归属，不启动样本进程；显式加 `--real-action` 时会请求 `execute_uploaded_sample`，只有云端 Guest Agent 启用 execution 且提供正确执行 token 时，才会直接启动当前 case 的已登记上传文件。该真实执行路径使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`，不接受任意路径、命令、shell/cmd/PowerShell 或参数。下一步验证可以使用 EICAR 或无害命令 exe；依旧不引入有害样本，本地也仍不执行任何样本。详细协议和单实例串行锁设计见 [GUEST_AGENT.md](docs/GUEST_AGENT.md)，受控触发模型见 [EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md)，Windows 免 Python 部署见 [GUEST_AGENT_DEPLOYMENT.md](docs/GUEST_AGENT_DEPLOYMENT.md)。
 
 ## 后续接入点
 

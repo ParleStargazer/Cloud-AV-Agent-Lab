@@ -22,18 +22,52 @@ flowchart LR
     Detectors --> Report["Markdown / JSON report"]
 ```
 
-## Execution Phases
+## Three-Stage Flow
 
-1. Validate configuration and reject local sample paths.
-2. Build the sample x AV product test matrix.
-3. Restore the target VM to its clean snapshot.
-4. Start the VM inside an isolated cloud network.
-5. Ask the guest adapter to fetch the sample directly from cloud object storage.
-6. Run the approved test command inside the guest and wait for bounded completion.
-7. Collect logs, screenshots, and behavior observations from the guest.
-8. Parse AV signals and behavior signals.
-9. Restore the clean snapshot again.
-10. Generate a structured report.
+The project separates delivery, trigger, and evaluation so the control plane can
+be tested without mixing upload status, process launch, and AV verdict logic.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Delivery
+    Delivery --> CasePrepared: guest-prepare-case
+    CasePrepared --> SampleUploaded: guest-upload-sample
+    SampleUploaded --> UploadObserved: guest-case-status polling
+    UploadObserved --> DeliveryReport: guest-case-report
+
+    DeliveryReport --> TriggerDryRun: guest-execute-sample
+    TriggerDryRun --> TriggerRealRequested: guest-execute-sample --real-action
+    TriggerRealRequested --> ExecutionDisabled: remote execution disabled
+    TriggerRealRequested --> SampleMissing: sample removed before execution
+    TriggerRealRequested --> ExecutionStarted: controlled Popen
+
+    ExecutionStarted --> EvaluationPending
+    ExecutionDisabled --> EvaluationPending
+    SampleMissing --> EvaluationPending
+    EvaluationPending --> SnapshotRestore: future AV log collection and verdicts
+    SnapshotRestore --> [*]
+```
+
+Delivery is the current safe upload and observation path. The server prepares a
+case workspace, saves only the user-supplied EICAR or harmless file plus
+metadata, and updates `case_state.json`, `events.jsonl`, and `case_report.json`.
+The upload endpoint returns immediately after writing the file; follow-up
+status calls perform live `Path.exists` / `Path.stat` checks so delayed AV
+removal can be observed without holding the upload request open.
+
+Trigger is a controlled case action, not a general command runner. The default
+CLI request is `dry_run_execute_uploaded_sample`, which validates metadata and
+path ownership without launching a process. A real trigger requires local
+`[guest_agent.execution].enabled = true`, a matching execution token, and a
+cloud agent started with `--enable-execution-actions`. The server resolves the
+file from `sample.json`, rejects arbitrary paths or shell arguments, verifies
+that the file is still under `<workdir>\cases\<case_id>\sample\`, and starts it
+with `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`.
+
+Evaluation is intentionally separate. Future work should read AV logs,
+screenshots, and product-specific telemetry after the trigger phase, produce a
+verdict, then restore the Lighthouse baseline snapshot. Defender or vendor-log
+parsing should not be coupled into upload or trigger endpoints.
 
 ## Adapter Contracts
 
@@ -60,8 +94,19 @@ The default adapters are plan-only and never execute a sample.
 
 The Guest Agent MVP is documented in `docs/GUEST_AGENT.md`. It currently covers
 only `/health`, `/system-info`, `/prepare-case`, an EICAR/harmless-file upload
-endpoint, and a metadata-only case status endpoint; sample execution remains out
-of scope.
+endpoint, metadata-only case status/report endpoints, and a default-disabled
+controlled action endpoint. The default workflow does not execute samples; the
+real trigger path is available only when execution is explicitly enabled and is
+restricted to the current case's registered uploaded EICAR or harmless file.
+
+The trigger-stage design is documented in `docs/EXECUTION_MODEL.md`. It forbids
+arbitrary command execution, client-supplied guest paths, shell/cmd/PowerShell
+arguments, and direct Defender-log coupling in the trigger stage. Trigger
+actions must be based only on current case metadata and the registered uploaded
+sample. The current real trigger path is default-off and requires a separate
+execution token; when enabled for cloud-side manual validation, it starts only
+the registered uploaded file with `shell=False` and records the PID in case
+state.
 
 `VmProfile` represents a recoverable test environment profile, not necessarily a unique cloud machine. Multiple profiles may share the same Lighthouse `instance_id` when each profile points to a different `baseline_snapshot` and `product_id`. This single-instance, multi-snapshot layout is supported as long as orchestration remains serial or future schedulers lock by `instance_id`.
 

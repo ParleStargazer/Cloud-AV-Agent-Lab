@@ -11,13 +11,16 @@ from fastapi import Body, FastAPI, Header, HTTPException, Request, status
 
 from cloud_av_agent_lab.guest_agent_server.auth import (
     verify_bearer_token,
+    verify_execution_token,
     verify_upload_token,
 )
 from cloud_av_agent_lab.guest_agent_server.workspace import (
     WorkspaceError,
     WorkspaceNotFoundError,
     prepare_case_workspace,
+    read_case_report,
     read_case_status,
+    run_case_action,
     save_uploaded_sample,
 )
 
@@ -26,6 +29,9 @@ def create_app(
     workdir: str | Path,
     token: str,
     upload_token: str,
+    execution_enabled: bool = False,
+    execution_token: str | None = None,
+    execution_timeout_seconds: float = 30.0,
     app_version: str | None = None,
 ) -> FastAPI:
     workdir_path = Path(workdir)
@@ -40,6 +46,14 @@ def create_app(
     ) -> None:
         verify_bearer_token(authorization, token)
         verify_upload_token(provided_upload_token, upload_token)
+
+    def authorize_action(
+        authorization: str | None,
+        provided_execution_token: str | None,
+    ) -> None:
+        verify_bearer_token(authorization, token)
+        if execution_enabled:
+            verify_execution_token(provided_execution_token, execution_token or "")
 
     @app.get("/health")
     def health(authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -169,6 +183,65 @@ def create_app(
             "status": "ok",
             "message": "case status loaded",
             "data": payload,
+        }
+
+    @app.get("/cases/{case_id:path}/report")
+    def case_report(
+        case_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        authorize(authorization)
+        try:
+            payload = read_case_report(workdir_path, case_id)
+        except WorkspaceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except WorkspaceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return {
+            "status": "ok",
+            "message": "case report loaded",
+            "data": payload,
+        }
+
+    @app.post("/cases/{case_id:path}/actions")
+    def case_action(
+        case_id: str,
+        payload: dict[str, Any] = Body(...),
+        authorization: str | None = Header(default=None),
+        x_execution_token: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        authorize_action(authorization, x_execution_token)
+        try:
+            action_result = run_case_action(
+                workdir=workdir_path,
+                case_id=case_id,
+                payload=payload,
+                execution_enabled=execution_enabled,
+            )
+        except WorkspaceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except WorkspaceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return {
+            "status": "ok",
+            "message": str(action_result.get("message", "case action handled")),
+            "data": {
+                **action_result,
+                "execution_enabled": execution_enabled,
+                "execution_timeout_seconds": execution_timeout_seconds,
+            },
         }
 
     return app

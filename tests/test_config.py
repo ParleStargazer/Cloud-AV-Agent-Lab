@@ -7,7 +7,7 @@ from unittest import TestCase
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cloud_av_agent_lab.config import load_config
+from cloud_av_agent_lab.config import ConfigError, load_config
 from cloud_av_agent_lab.core.pipeline import TestPipeline
 from cloud_av_agent_lab.core.safety import assert_safe_config
 
@@ -25,6 +25,12 @@ class ConfigTests(TestCase):
         self.assertFalse(config.network.proxy.enabled)
         self.assertFalse(config.guest_agent.enabled)
         self.assertEqual(config.guest_agent.token_env, "CLOUD_AV_GUEST_AGENT_TOKEN")
+        self.assertFalse(config.guest_agent.execution.enabled)
+        self.assertEqual(
+            config.guest_agent.execution.token_env,
+            "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN",
+        )
+        self.assertEqual(config.guest_agent.execution.timeout_seconds, 30)
 
     def test_enabled_proxy_config_parses(self) -> None:
         config_text = (ROOT / "configs" / "lab.example.toml").read_text(
@@ -51,11 +57,15 @@ class ConfigTests(TestCase):
             encoding="utf-8"
         )
         enabled_config = config_text.replace(
-            "[guest_agent]\n# 云端隔离 Windows 主机内的 Guest Agent。MVP 只做连通性和环境准备，\n"
-            "# 不投递、不下载、不执行样本。\n"
+            "[guest_agent]\n"
+            "# 云端隔离 Windows 主机内的 Guest Agent。默认只做连通性、环境准备、\n"
+            "# EICAR/无害文件上传、状态观测和投送阶段报告；受控触发需在\n"
+            "# [guest_agent.execution] 中显式开启。\n"
             "enabled = false",
-            "[guest_agent]\n# 云端隔离 Windows 主机内的 Guest Agent。MVP 只做连通性和环境准备，\n"
-            "# 不投递、不下载、不执行样本。\n"
+            "[guest_agent]\n"
+            "# 云端隔离 Windows 主机内的 Guest Agent。默认只做连通性、环境准备、\n"
+            "# EICAR/无害文件上传、状态观测和投送阶段报告；受控触发需在\n"
+            "# [guest_agent.execution] 中显式开启。\n"
             "enabled = true",
         )
 
@@ -72,3 +82,32 @@ class ConfigTests(TestCase):
         self.assertEqual(config.guest_agent.base_url, "http://127.0.0.1:8080")
         self.assertEqual(config.guest_agent.token_env, "CLOUD_AV_GUEST_AGENT_TOKEN")
         self.assertEqual(config.guest_agent.timeout_seconds, 10)
+
+    def test_enabled_guest_agent_execution_requires_token_env(self) -> None:
+        config_text = (ROOT / "configs" / "lab.example.toml").read_text(
+            encoding="utf-8"
+        )
+        enabled_config = config_text.replace(
+            "[guest_agent.execution]\n"
+            "# 受控触发能力默认关闭。本地配置和云端 Guest Agent 都显式开启，并提供\n"
+            "# execution token 后，才允许触发当前 case 已登记上传文件。\n"
+            "# 不接受任意命令、任意路径或 shell 参数；本地控制面仍不执行样本。\n"
+            "enabled = false\n"
+            'token_env = "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"',
+            "[guest_agent.execution]\n"
+            "# 受控触发能力默认关闭。本地配置和云端 Guest Agent 都显式开启，并提供\n"
+            "# execution token 后，才允许触发当前 case 已登记上传文件。\n"
+            "# 不接受任意命令、任意路径或 shell 参数；本地控制面仍不执行样本。\n"
+            "enabled = true\n"
+            'token_env = ""',
+        )
+
+        tmp_dir = ROOT / "state" / "tests"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        config_path = tmp_dir / "lab.execution-token-missing.toml"
+        config_path.write_text(enabled_config, encoding="utf-8")
+        try:
+            with self.assertRaisesRegex(ConfigError, "token_env"):
+                load_config(config_path)
+        finally:
+            config_path.unlink(missing_ok=True)

@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 
 TOKEN_ENV = "CLOUD_AV_GUEST_AGENT_TOKEN"
 UPLOAD_TOKEN_ENV = "CLOUD_AV_GUEST_AGENT_UPLOAD_TOKEN"
+EXECUTION_TOKEN_ENV = "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
 
 
 class GuestAgentServerConfigError(RuntimeError):
@@ -39,6 +40,19 @@ def load_required_upload_token(
     return token
 
 
+def load_required_execution_token(
+    env: Mapping[str, str] | None = None,
+    token_env: str = EXECUTION_TOKEN_ENV,
+) -> str:
+    values = env if env is not None else os.environ
+    token = values.get(token_env, "").strip()
+    if not token:
+        raise GuestAgentServerConfigError(
+            f"Guest Agent execution token environment variable {token_env!r} is not set"
+        )
+    return token
+
+
 def verify_bearer_token(authorization: str | None, expected_token: str) -> None:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
@@ -63,4 +77,17 @@ def verify_upload_token(upload_token: str | None, expected_token: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="invalid upload token",
+        )
+
+
+def verify_execution_token(execution_token: str | None, expected_token: str) -> None:
+    if not execution_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing execution token",
+        )
+    if execution_token != expected_token:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="invalid execution token",
         )

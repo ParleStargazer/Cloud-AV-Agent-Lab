@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -23,6 +24,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency absent
 
 TOKEN = "unit-test-token"
 UPLOAD_TOKEN = "unit-test-upload-token"
+EXECUTION_TOKEN = "unit-test-execution-token"
 
 
 @unittest.skipIf(TestClient is None, "fastapi extra is not installed")
@@ -53,6 +55,24 @@ class GuestAgentServerTests(unittest.TestCase):
             "X-Sample-Sha256": "0" * 64,
             "X-Original-Filename": "eicar.txt",
         }
+
+    def _execution_headers(self, token: str = EXECUTION_TOKEN) -> dict[str, str]:
+        return {
+            **self._headers(),
+            "X-Execution-Token": token,
+        }
+
+    def _execution_client(self) -> TestClient:
+        return TestClient(
+            create_app(
+                workdir=self.workdir,
+                token=TOKEN,
+                upload_token=UPLOAD_TOKEN,
+                execution_enabled=True,
+                execution_token=EXECUTION_TOKEN,
+                app_version="test-version",
+            )
+        )
 
     def test_health_success(self) -> None:
         response = self.client.get("/health", headers=self._headers())
@@ -97,6 +117,7 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertTrue(case_file.is_file())
         self.assertTrue(state_file.is_file())
         self.assertTrue(events_file.is_file())
+        self.assertTrue((workspace / "case_report.json").is_file())
         saved = json.loads(case_file.read_text(encoding="utf-8"))
         self.assertEqual(saved["case"]["id"], "case-001__tencent-pc-manager")
         self.assertEqual(
@@ -143,7 +164,10 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         workspace = Path(response.json()["data"]["workspace"])
         files = sorted(path.name for path in workspace.iterdir())
-        self.assertEqual(files, ["case.json", "case_state.json", "events.jsonl"])
+        self.assertEqual(
+            files,
+            ["case.json", "case_report.json", "case_state.json", "events.jsonl"],
+        )
         saved_text = (workspace / "case.json").read_text(encoding="utf-8")
         self.assertIn("cos://bucket/redacted/case-001.bin", saved_text)
         self.assertNotIn("local_path", saved_text)
@@ -451,6 +475,305 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertNotIn("DO-NOT-READ-SAMPLE-CONTENT", body)
         self.assertNotIn(TOKEN, body)
         self.assertNotIn(UPLOAD_TOKEN, body)
+
+    def test_case_report_success_generates_delivery_report(self) -> None:
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        self.client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=self._upload_headers(),
+            content=b"EICAR harmless placeholder",
+        )
+        self.client.get(
+            "/cases/case-001__tencent-pc-manager/status",
+            headers=self._headers(),
+        )
+
+        response = self.client.get(
+            "/cases/case-001__tencent-pc-manager/report",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        report = payload["data"]
+        self.assertEqual(payload["message"], "case report loaded")
+        self.assertEqual(report["case_id"], "case-001__tencent-pc-manager")
+        self.assertEqual(report["sample_id"], "case-001")
+        self.assertEqual(report["vm_id"], "sg-win10")
+        self.assertEqual(report["product_id"], "tencent-pc-manager")
+        self.assertEqual(report["upload_state"], "stable")
+        self.assertTrue(report["saved_once"])
+        self.assertTrue(report["post_write_exists"])
+        self.assertFalse(report["removed_after_save"])
+        self.assertFalse(report["locked_or_busy"])
+        self.assertTrue(report["stable"])
+        self.assertEqual(report["original_filename"], "eicar.txt")
+        self.assertEqual(report["sha256"], "0" * 64)
+        self.assertEqual(report["size"], len(b"EICAR harmless placeholder"))
+        self.assertTrue(report["prepared_at_utc"])
+        self.assertTrue(report["uploaded_at_utc"])
+        self.assertTrue(report["updated_at_utc"])
+        self.assertGreaterEqual(len(report["recent_events"]), 1)
+        report_file = (
+            self.workdir / "cases" / "case-001__tencent-pc-manager" / "case_report.json"
+        )
+        self.assertTrue(report_file.is_file())
+
+    def test_case_report_missing_case_returns_404(self) -> None:
+        response = self.client.get(
+            "/cases/missing-case/report",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("guest-prepare-case", response.json()["detail"])
+
+    def test_case_report_rejects_path_traversal_case_id(self) -> None:
+        response = self.client.get(
+            "/cases/..%2Fescape/report",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse((self.workdir.parent / "escape").exists())
+
+    def test_case_report_does_not_read_sample_content_or_leak_token(self) -> None:
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        self.client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=self._upload_headers(),
+            content=b"DO-NOT-READ-SAMPLE-CONTENT",
+        )
+
+        response = self.client.get(
+            "/cases/case-001__tencent-pc-manager/report",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.text
+        self.assertNotIn("DO-NOT-READ-SAMPLE-CONTENT", body)
+        self.assertNotIn(TOKEN, body)
+        self.assertNotIn(UPLOAD_TOKEN, body)
+
+    def test_action_execute_uploaded_sample_is_disabled_by_default(self) -> None:
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+
+        response = self.client.post(
+            "/cases/case-001__tencent-pc-manager/actions",
+            headers=self._headers(),
+            json={"action": "execute_uploaded_sample"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertFalse(data["execution_enabled"])
+        self.assertEqual(data["execution_state"], "execution_disabled")
+        self.assertIn("no sample was executed", data["message"])
+
+    def test_action_whitelist_rejects_unknown_action(self) -> None:
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+
+        response = self.client.post(
+            "/cases/case-001__tencent-pc-manager/actions",
+            headers=self._headers(),
+            json={"action": "run-command"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not allowed", response.json()["detail"])
+
+    def test_action_rejects_arbitrary_command_path_and_shell_args(self) -> None:
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+
+        for forbidden_payload in (
+            {"action": "dry_run_execute_uploaded_sample", "command": "calc.exe"},
+            {"action": "dry_run_execute_uploaded_sample", "path": r"C:\Temp\x.exe"},
+            {"action": "dry_run_execute_uploaded_sample", "args": ["/c", "whoami"]},
+            {"action": "dry_run_execute_uploaded_sample", "shell": "powershell"},
+        ):
+            response = self.client.post(
+                "/cases/case-001__tencent-pc-manager/actions",
+                headers=self._headers(),
+                json=forbidden_payload,
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("forbidden execution fields", response.json()["detail"])
+
+    def test_action_dry_run_checks_metadata_without_execution(self) -> None:
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        self.client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=self._upload_headers(),
+            content=b"EICAR harmless placeholder",
+        )
+
+        response = self.client.post(
+            "/cases/case-001__tencent-pc-manager/actions",
+            headers=self._headers(),
+            json={
+                "action": "dry_run_execute_uploaded_sample",
+                "sample_id": "case-001",
+                "expected_sha256": "0" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["execution_state"], "execution_dry_run_checked")
+        self.assertTrue(data["expected_sha256_match"])
+        self.assertTrue(data["sample_path_under_case"])
+        self.assertIn("no sample was executed", data["message"])
+        events_file = (
+            self.workdir / "cases" / "case-001__tencent-pc-manager" / "events.jsonl"
+        )
+        event_types = [event["event_type"] for event in _read_events(events_file)]
+        self.assertIn("execution_dry_run_checked", event_types)
+
+    def test_action_execution_enabled_requires_execution_token(self) -> None:
+        client = self._execution_client()
+        client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+
+        missing = client.post(
+            "/cases/case-001__tencent-pc-manager/actions",
+            headers=self._headers(),
+            json={"action": "execute_uploaded_sample"},
+        )
+        wrong = client.post(
+            "/cases/case-001__tencent-pc-manager/actions",
+            headers=self._execution_headers("wrong-execution-token"),
+            json={"action": "execute_uploaded_sample"},
+        )
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(wrong.status_code, 403)
+        self.assertNotIn(EXECUTION_TOKEN, missing.text)
+        self.assertNotIn(EXECUTION_TOKEN, wrong.text)
+
+    def test_action_execute_uploaded_sample_starts_registered_file(self) -> None:
+        client = self._execution_client()
+        upload_headers = self._upload_headers()
+        upload_headers["X-Original-Filename"] = "proof.exe"
+        client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=upload_headers,
+            content=b"MZ harmless placeholder",
+        )
+
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server.workspace.subprocess.Popen"
+        ) as popen:
+            popen.return_value.pid = 4321
+            response = client.post(
+                "/cases/case-001__tencent-pc-manager/actions",
+                headers=self._execution_headers(),
+                json={
+                    "action": "execute_uploaded_sample",
+                    "sample_id": "case-001",
+                    "expected_sha256": "0" * 64,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["execution_state"], "execution_started")
+        self.assertEqual(data["pid"], 4321)
+        args, kwargs = popen.call_args
+        self.assertEqual(len(args), 1)
+        self.assertEqual(len(args[0]), 1)
+        self.assertTrue(args[0][0].endswith("proof.exe"))
+        self.assertFalse(kwargs["shell"])
+        self.assertTrue(kwargs["cwd"].endswith("sample"))
+        self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["stdout"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
+        self.assertIsInstance(kwargs["creationflags"], int)
+        self.assertTrue(kwargs["close_fds"])
+        workspace = self.workdir / "cases" / "case-001__tencent-pc-manager"
+        state = json.loads((workspace / "case_state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["phase"], "execution_started")
+        self.assertEqual(state["execution"]["pid"], 4321)
+        self.assertEqual(state["execution"]["state"], "execution_started")
+        self.assertEqual(state["execution"]["stored_filename"], "proof.exe")
+        events = _read_events(workspace / "events.jsonl")
+        execution_events = [
+            event for event in events if event["event_type"] == "execution_started"
+        ]
+        self.assertEqual(len(execution_events), 1)
+        self.assertEqual(execution_events[0]["data"]["pid"], 4321)
+        self.assertIn("started_at_utc", execution_events[0]["data"])
+
+    def test_action_execute_uploaded_sample_missing_file_is_blocked(self) -> None:
+        client = self._execution_client()
+        upload_headers = self._upload_headers()
+        upload_headers["X-Original-Filename"] = "proof.exe"
+        client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        upload = client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=upload_headers,
+            content=b"MZ harmless placeholder",
+        )
+        sample_dir = Path(upload.json()["data"]["sample_dir"])
+        (sample_dir / "proof.exe").unlink()
+
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server.workspace.subprocess.Popen"
+        ) as popen:
+            response = client.post(
+                "/cases/case-001__tencent-pc-manager/actions",
+                headers=self._execution_headers(),
+                json={
+                    "action": "execute_uploaded_sample",
+                    "sample_id": "case-001",
+                    "expected_sha256": "0" * 64,
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("missing before execution", response.json()["detail"])
+        popen.assert_not_called()
+        events = _read_events(
+            self.workdir / "cases" / "case-001__tencent-pc-manager" / "events.jsonl"
+        )
+        event_types = [event["event_type"] for event in events]
+        self.assertIn("sample_missing_before_execution", event_types)
 
 
 def _prepare_payload() -> dict[str, object]:

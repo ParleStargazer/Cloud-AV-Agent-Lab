@@ -51,11 +51,21 @@ class NetworkConfig:
 
 
 @dataclass(frozen=True)
+class GuestAgentExecutionConfig:
+    enabled: bool = False
+    token_env: str = "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
+    timeout_seconds: float = 30.0
+
+
+@dataclass(frozen=True)
 class GuestAgentConfig:
     enabled: bool = False
     base_url: str = "http://127.0.0.1:8080"
     token_env: str = "CLOUD_AV_GUEST_AGENT_TOKEN"
     timeout_seconds: float = 10.0
+    execution: GuestAgentExecutionConfig = field(
+        default_factory=GuestAgentExecutionConfig
+    )
 
 
 @dataclass(frozen=True)

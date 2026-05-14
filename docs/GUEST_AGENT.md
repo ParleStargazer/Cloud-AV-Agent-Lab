@@ -26,6 +26,10 @@ chain for EICAR or harmless test files:
 - `GET /cases/{case_id}/status`: read case status, sample metadata, and recent
   events without reading sample contents; this endpoint performs a current
   `Path.exists` / `Path.stat` metadata check.
+- `GET /cases/{case_id}/report`: generate and return `case_report.json`, a
+  delivery-stage summary built only from metadata, case state, and events.
+- `POST /cases/{case_id}/actions`: controlled action skeleton. It is not a
+  command execution interface; real execution is disabled in this stage.
 
 The server implementation lives in `src/cloud_av_agent_lab/guest_agent_server/`.
 Windows packaging and Lighthouse deployment notes live in
@@ -65,6 +69,11 @@ enabled = false
 base_url = "http://127.0.0.1:8080"
 token_env = "CLOUD_AV_GUEST_AGENT_TOKEN"
 timeout_seconds = 10
+
+[guest_agent.execution]
+enabled = false
+token_env = "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
+timeout_seconds = 30
 ```
 
 The default is disabled. When `enabled = true`, the token environment variable
@@ -136,6 +145,77 @@ python -m cloud_av_agent_lab guest-case-status --config configs/lab.local.toml -
 `removed_after_save` and `locked_or_busy` are not treated as upload failures.
 They are recorded as observations for the current case. `locked_or_busy` should
 be followed by a later `guest-case-status` query.
+
+Delivery-stage reports can be generated without reading sample bytes:
+
+```powershell
+python -m cloud_av_agent_lab guest-case-report --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
+```
+
+The report is stored as `case_report.json` under the case workspace and contains
+only metadata fields such as `case_id`, `sample_id`, `vm_id`, `product_id`,
+`upload_state`, saved/removed/locked/stable flags, original filename, hash,
+size, timestamps, and recent events. It does not read Defender logs or any other
+AV product logs; evaluation-stage evidence collection remains a later phase.
+
+## Controlled Action Skeleton
+
+CLI entrypoint:
+
+```powershell
+python -m cloud_av_agent_lab guest-execute-sample --config configs/lab.local.toml --vm-id sg-win10 --sample-id case-001 --case-id case-001__tencent-pc-manager
+```
+
+By default this command sends `dry_run_execute_uploaded_sample`. It validates
+the registered sample metadata, expected sha256, and case-owned sample path, then
+records `execution_dry_run_checked`. It does not start a process.
+
+Passing `--real-action` requests `execute_uploaded_sample`. Real execution only
+starts when the cloud-side Guest Agent was launched with execution enabled and
+the request includes the correct execution token from
+`CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN`. The server then re-validates the current
+case metadata, verifies that the uploaded file still exists with `os.path.exists`,
+and starts only that registered file with:
+
+```python
+subprocess.Popen(
+    [str(sample_path)],
+    cwd=str(sample_dir),
+    shell=False,
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    creationflags=subprocess.CREATE_NO_WINDOW,
+    close_fds=True,
+)
+```
+
+The working directory is the case-owned `sample` directory, so harmless test
+programs that write relative files write inside the case workspace. The process
+PID and start time are recorded in `case_state.json` and `events.jsonl` as
+`execution_started`.
+
+`POST /cases/{case_id}/actions` currently accepts only a small whitelist:
+
+- `generate_report`
+- `observe_case`
+- `dry_run_execute_uploaded_sample`
+- `execute_uploaded_sample`
+
+The endpoint rejects client-provided paths, shell/cmd/PowerShell fields,
+commands, executable names, and arbitrary arguments. `execute_uploaded_sample`
+returns `execution_disabled` unless execution is explicitly enabled on the cloud
+Guest Agent. The dry-run action checks only metadata, path ownership under the
+current case sample directory, and optional `expected_sha256`; it records
+`execution_dry_run_checked` and does not start a process.
+
+Current manual validation may use EICAR or a harmless command exe such as a
+program that writes `execution_proof.txt`. This still does not permit harmful
+samples. The local control plane must not execute the uploaded file; only the
+cloud-isolated Guest Agent may trigger the registered sample when execution is
+explicitly enabled for the manual test.
+
+The full future trigger model is documented in `docs/EXECUTION_MODEL.md`.
 
 ## Status Observation Notes
 

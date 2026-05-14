@@ -50,3 +50,6 @@ init.ps1
 
 #Server Token
 token.txt
+
+#built resources
+scripts/pack/

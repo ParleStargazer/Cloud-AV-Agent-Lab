@@ -17,7 +17,10 @@ from cloud_av_agent_lab.adapters.guest_agent_client import (
     GuestAgentError,
 )
 from cloud_av_agent_lab.config import load_config
-from cloud_av_agent_lab.core.contracts import GuestAgentConfig
+from cloud_av_agent_lab.core.contracts import (
+    GuestAgentConfig,
+    GuestAgentExecutionConfig,
+)
 from cloud_av_agent_lab.core.pipeline import TestPipeline
 from cloud_av_agent_lab.network.client import NetworkResponse
 
@@ -45,6 +48,12 @@ class FailingNetworkClient(FakeNetworkClient):
     def request_bytes(self, **kwargs: object) -> NetworkResponse:
         self.calls.append(kwargs)
         raise RuntimeError("secret upload-token should not leak")
+
+
+class ConnectionFailingNetworkClient(FakeNetworkClient):
+    def request_json(self, **kwargs: object) -> NetworkResponse:
+        self.calls.append(kwargs)
+        raise ConnectionError("target refused connection")
 
 
 class HttpErrorNetworkClient(FakeNetworkClient):
@@ -169,6 +178,176 @@ class GuestAgentClientTests(TestCase):
         self.assertIsInstance(headers, dict)
         self.assertEqual(headers["Authorization"], "Bearer secret")
 
+    def test_case_report_uses_network_client(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            timeout_seconds=5,
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=200,
+                headers={},
+                body=b'{"status":"ok","message":"case report loaded","data":{"case_id":"case-001__tencent-pc-manager","upload_state":"stable"}}',
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "secret"}
+        )
+
+        response = client.case_report("case-001__tencent-pc-manager")
+
+        self.assertEqual(response.data["upload_state"], "stable")
+        self.assertEqual(len(network.calls), 1)
+        call = network.calls[0]
+        self.assertEqual(call["method"], "GET")
+        self.assertEqual(
+            call["url"],
+            "http://guest-agent.local:8080/cases/case-001__tencent-pc-manager/report",
+        )
+        self.assertEqual(call["timeout_seconds"], 5)
+        headers = call["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+
+    def test_case_report_404_has_clear_prepare_case_hint(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=404,
+                headers={},
+                body=b'{"detail":"case workspace does not exist; run guest-prepare-case first"}',
+                reason="Not Found",
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "agent-secret"}
+        )
+
+        with self.assertRaises(GuestAgentError) as error:
+            client.case_report("missing-case")
+
+        message = str(error.exception)
+        self.assertEqual(error.exception.status_code, 404)
+        self.assertIn("HTTP 404 Not Found", message)
+        self.assertIn("guest-prepare-case", message)
+        self.assertNotIn("agent-secret", message)
+
+    def test_execute_uploaded_sample_defaults_to_dry_run_action(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            execution=GuestAgentExecutionConfig(timeout_seconds=7),
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=200,
+                headers={},
+                body=b'{"status":"ok","message":"dry-run checked uploaded sample metadata; no sample was executed","data":{"execution_state":"execution_dry_run_checked"}}',
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "agent-secret"}
+        )
+
+        response = client.execute_uploaded_sample(
+            case_id="case-001__tencent-pc-manager",
+            sample_id="case-001",
+            expected_sha256="0" * 64,
+        )
+
+        self.assertEqual(response.data["execution_state"], "execution_dry_run_checked")
+        self.assertEqual(len(network.calls), 1)
+        call = network.calls[0]
+        self.assertEqual(call["method"], "POST")
+        self.assertEqual(
+            call["url"],
+            "http://guest-agent.local:8080/cases/case-001__tencent-pc-manager/actions",
+        )
+        self.assertEqual(call["timeout_seconds"], 7)
+        self.assertEqual(
+            call["payload"],
+            {
+                "action": "dry_run_execute_uploaded_sample",
+                "sample_id": "case-001",
+                "expected_sha256": "0" * 64,
+            },
+        )
+        headers = call["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer agent-secret")
+        self.assertNotIn("X-Execution-Token", headers)
+
+    def test_case_action_injects_execution_token_when_enabled(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            execution=GuestAgentExecutionConfig(
+                enabled=True,
+                token_env="EXEC_TOKEN",
+                timeout_seconds=9,
+            ),
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=200,
+                headers={},
+                body=b'{"status":"ok","message":"execution is disabled; no sample was executed","data":{"execution_state":"execution_disabled"}}',
+            )
+        )
+        client = GuestAgentClient(
+            config,
+            network=network,
+            env={"GUEST_TOKEN": "agent-secret", "EXEC_TOKEN": "execution-secret"},
+        )
+
+        response = client.execute_uploaded_sample(
+            case_id="case-001__tencent-pc-manager",
+            sample_id="case-001",
+            dry_run=False,
+        )
+
+        self.assertEqual(response.data["execution_state"], "execution_disabled")
+        call = network.calls[0]
+        self.assertEqual(call["timeout_seconds"], 9)
+        self.assertEqual(call["payload"]["action"], "execute_uploaded_sample")
+        headers = call["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer agent-secret")
+        self.assertEqual(headers["X-Execution-Token"], "execution-secret")
+
+    def test_case_action_requires_execution_token_when_enabled(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            execution=GuestAgentExecutionConfig(
+                enabled=True,
+                token_env="EXEC_TOKEN",
+            ),
+        )
+        client = GuestAgentClient(
+            config, network=FakeNetworkClient(), env={"GUEST_TOKEN": "agent-secret"}
+        )
+
+        with self.assertRaises(GuestAgentError) as error:
+            client.execute_uploaded_sample(
+                case_id="case-001__tencent-pc-manager",
+                sample_id="case-001",
+                dry_run=False,
+            )
+
+        message = str(error.exception)
+        self.assertIn("EXEC_TOKEN", message)
+        self.assertNotIn("agent-secret", message)
+
     def test_case_status_404_has_clear_prepare_case_hint(self) -> None:
         config = GuestAgentConfig(
             enabled=True,
@@ -214,6 +393,28 @@ class GuestAgentClientTests(TestCase):
 
         self.assertIn("HTTP 500", str(error.exception))
         self.assertIn("boom", str(error.exception))
+        self.assertEqual(error.exception.source, "remote")
+
+    def test_connection_error_is_tagged_as_network_error(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+        )
+        client = GuestAgentClient(
+            config,
+            network=ConnectionFailingNetworkClient(),
+            env={"GUEST_TOKEN": "secret"},
+        )
+
+        with self.assertRaises(GuestAgentError) as error:
+            client.health()
+
+        message = str(error.exception)
+        self.assertEqual(error.exception.source, "network")
+        self.assertIn("无法连接到 Guest Agent", message)
+        self.assertIn("ConnectionError", message)
+        self.assertNotIn("secret", message)
 
     def test_http_error_detail_raises_guest_agent_error(self) -> None:
         config = GuestAgentConfig(
