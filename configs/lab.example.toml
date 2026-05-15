@@ -68,7 +68,7 @@ port = 7890
 
 [guest_agent]
 # 云端隔离 Windows 主机内的 Guest Agent。默认只做连通性、环境准备、
-# EICAR/无害文件上传、状态观测和投送阶段报告；受控触发需在
+# EICAR/无害文件上传、状态观测、受控触发和执行观测摘要；真实触发需在
 # [guest_agent.execution] 中显式开启。
 enabled = false
 base_url = "http://127.0.0.1:8080"

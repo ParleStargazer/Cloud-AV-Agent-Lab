@@ -59,12 +59,12 @@ class ConfigTests(TestCase):
         enabled_config = config_text.replace(
             "[guest_agent]\n"
             "# 云端隔离 Windows 主机内的 Guest Agent。默认只做连通性、环境准备、\n"
-            "# EICAR/无害文件上传、状态观测和投送阶段报告；受控触发需在\n"
+            "# EICAR/无害文件上传、状态观测、受控触发和执行观测摘要；真实触发需在\n"
             "# [guest_agent.execution] 中显式开启。\n"
             "enabled = false",
             "[guest_agent]\n"
             "# 云端隔离 Windows 主机内的 Guest Agent。默认只做连通性、环境准备、\n"
-            "# EICAR/无害文件上传、状态观测和投送阶段报告；受控触发需在\n"
+            "# EICAR/无害文件上传、状态观测、受控触发和执行观测摘要；真实触发需在\n"
             "# [guest_agent.execution] 中显式开启。\n"
             "enabled = true",
         )

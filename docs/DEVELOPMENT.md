@@ -226,7 +226,7 @@ python -m cloud_av_agent_lab guest-execute-sample --config configs/lab.local.tom
 
 `removed_after_save` 和 `locked_or_busy` 都不是 HTTP 上传失败。CLI 会给出 warning，并建议需要时使用 `guest-case-status` 查询 `case_state.json`、`sample.json` 和最近事件。只有鉴权失败、case 不存在、路径非法或磁盘写入失败等基础设施问题才会让命令失败退出。
 
-`guest-case-report` 会生成并读取云端 case 工作目录下的 `case_report.json`，只汇总投送阶段 metadata 和最近事件：case/sample/vm/product 标识、上传状态、saved/removed/locked/stable 标记、文件名、哈希、大小和时间戳。它不读取样本内容，不读取 Defender 或其他杀软日志；杀软日志采集和检测判定属于后续评测阶段。
+`guest-case-report` 会生成并读取云端 case 工作目录下的 `case_report.json`，汇总投送阶段 metadata、execution 观测摘要和最近事件：case/sample/vm/product 标识、上传状态、saved/removed/locked/stable 标记、文件名、哈希、大小、root PID、退出码、子进程摘要和时间戳。它不读取样本内容，不读取 Defender 或其他杀软日志；杀软日志采集和检测判定属于后续评测阶段。
 
 2026-05-13 实测结论：Microsoft Defender 在云端环境下对 EICAR 的处理时间存在波动，单次状态查询容易得到“处决前”的假 `stable`。因此不要把耗时观测放回 `POST /sample`，也不要把单次 `guest-case-status` 当作最终判定。当前推荐策略是 `guest-upload-sample` 自动执行动态轮询：先等待 10 秒，再每 2 秒查询一次，最多 30 秒；期间一旦出现 `removed_after_save` 即判定拦截成功，只有完整窗口结束后仍为 `stable` 才判定样本存活。
 

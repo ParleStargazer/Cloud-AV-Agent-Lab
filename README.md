@@ -196,7 +196,7 @@ Agent 不应直接操作本地样本，也不应生成规避检测建议。
 
 ## Guest Agent MVP
 
-Guest Agent 运行在云端隔离 Windows 主机内，本地只通过统一 `NetworkClient` 发起 HTTP 控制面调用。MVP 支持 `/health`、`/system-info`、`/prepare-case`、`/cases/{case_id}/sample`、`/cases/{case_id}/status`、`/cases/{case_id}/report` 和受控 `/cases/{case_id}/actions`，用于连通性、系统信息、无害工作目录准备、EICAR/无害测试文件上传、上传后状态观测、投送阶段报告生成，以及默认关闭的受控触发。不接触真实病毒样本，不暴露任意命令执行接口；默认工作流不执行样本，真实触发必须显式启用 execution 并限定为当前 case 已登记的上传文件。
+Guest Agent 运行在云端隔离 Windows 主机内，本地只通过统一 `NetworkClient` 发起 HTTP 控制面调用。MVP 支持 `/health`、`/system-info`、`/prepare-case`、`/cases/{case_id}/sample`、`/cases/{case_id}/status`、`/cases/{case_id}/report`、`/cases/{case_id}/execution-status` 和受控 `/cases/{case_id}/actions`，用于连通性、系统信息、无害工作目录准备、EICAR/无害测试文件上传、上传后状态观测、case 报告、默认关闭的受控触发，以及低侵入式执行观测。不接触真实病毒样本，不暴露任意命令执行接口；默认工作流不执行样本，真实触发必须显式启用 execution 并限定为当前 case 已登记的上传文件。
 
 配置默认关闭：
 

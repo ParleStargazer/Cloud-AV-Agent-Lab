@@ -204,7 +204,10 @@ The server resolves the target file from `sample.json`, verifies it is under
 with `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`. Standard
 input, output, and error are redirected to `DEVNULL`; Windows runs with
 `CREATE_NO_WINDOW`; inherited handles are closed. The response and case state
-record the process PID and `execution_started` time.
+record the root PID, `execution_started` time, expected hash metadata, and path
+ownership result. After a real trigger, the local CLI polls
+`/cases/{case_id}/execution-status` to observe root and child process metadata;
+it does not check proof files as the long-term success signal.
 
 ## Later Service Work
 
@@ -222,6 +225,7 @@ The MVP server only exposes:
 - `POST /cases/{case_id}/sample`
 - `GET /cases/{case_id}/status`
 - `GET /cases/{case_id}/report`
+- `GET /cases/{case_id}/execution-status`
 - `POST /cases/{case_id}/actions`
 
 It does not download real malware, expose arbitrary command execution, accept
