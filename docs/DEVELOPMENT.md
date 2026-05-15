@@ -84,7 +84,22 @@ $env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="lhins-yyyyyyyy"
 
 ## 腾讯云适配器
 
-腾讯云适配器位于 `src/cloud_av_agent_lab/adapters/tencent_cloud.py`。
+腾讯云适配器对外入口仍是 `src/cloud_av_agent_lab/adapters/tencent_cloud.py`，但该文件现在只作为 facade/re-export，保证旧 import 不变：
+
+```python
+from cloud_av_agent_lab.adapters.tencent_cloud import TencentCloudLighthouseAdapter
+from cloud_av_agent_lab.adapters.tencent_cloud import parse_lighthouse_instance_status
+from cloud_av_agent_lab.adapters.tencent_cloud import build_tc3_headers
+```
+
+具体实现已拆到 `src/cloud_av_agent_lab/adapters/tencent_lighthouse/`：
+
+- `errors.py`：腾讯云配置和 API 错误；
+- `models.py`：鉴权、操作描述和 `LighthouseInstanceStatus`；
+- `auth.py`：环境变量优先的鉴权加载；
+- `signing.py`：TC3-HMAC-SHA256 签名；
+- `parsing.py`：`DescribeInstances` 和 JSON 响应解析；
+- `adapter.py`：`TencentCloudLighthouseAdapter` 主逻辑、轮询和写操作保护。
 
 当前已完成真实接入前的结构准备：
 
@@ -107,7 +122,7 @@ $env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="lhins-yyyyyyyy"
 
 `mode = "mock"` 时不会访问网络，只返回统一的 `VMOperationResponse`。`mode = "real"` 时进入真实 API 路径，但只要 `dry_run = true`，所有云 API 调用都会被拦截。
 
-真实 API 调用集中在 `TencentCloudLighthouseAdapter._call_api()`，当前已经完成：
+真实 API 调用集中在 `TencentCloudLighthouseAdapter._call_api()`，实现位于 `tencent_lighthouse/adapter.py`。当前已经完成：
 
 - 腾讯云 TC3-HMAC-SHA256 请求签名；
 - Lighthouse API action 到请求参数的映射，快照回滚使用 `ApplyInstanceSnapshot`；
@@ -257,6 +272,20 @@ Guest Agent 的职责应限制在云端隔离 VM 内：
 不要把样本下载到本地主机。
 
 协议和单实例串行锁设计见 `docs/GUEST_AGENT.md`。Windows 免 Python 打包和 Lighthouse 手动部署流程见 `docs/GUEST_AGENT_DEPLOYMENT.md`。
+
+## 结构拆分记录
+
+2026-05-15 已完成两个 facade 包拆分，用于降低大文件维护成本，同时保持外部 import 兼容：
+
+- Guest Agent Server：`guest_agent_server/workspace.py` 拆为 `guest_agent_server/workspace/` 包，`__init__.py` 继续 re-export `prepare_case_workspace`、`save_uploaded_sample`、`read_case_status`、`run_case_action`、`ExecutionRegistry` 等稳定 API。
+- 腾讯云 Lighthouse：`adapters/tencent_cloud.py` 改为 facade，内部实现拆到 `adapters/tencent_lighthouse/`，分别承载 errors、models、auth、signing、parsing 和 adapter。
+
+下一步计划拆分 `cli.py`，但仍保持 `cloud_av_agent_lab.cli:main` 入口不变。建议分阶段推进：
+
+- 先拆 parser 构建、输出格式化和错误归因 helper，避免改变命令行为；
+- 再拆 Guest Agent 命令处理，如 health、prepare、upload、status、report、execute；
+- 最后拆 cloud lifecycle 命令处理，如 status、start、stop、reboot、restore snapshot；
+- 每个阶段至少运行 `tests.test_cli`，涉及云适配器或 Guest Agent 客户端时同步运行 `tests.test_adapter`、`tests.test_tencent_cloud_adapter`、`tests.test_guest_agent_client`。
 
 ## 测试与校验
 

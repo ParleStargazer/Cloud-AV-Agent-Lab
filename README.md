@@ -85,7 +85,7 @@ cloud-av-agent-lab report-template --config configs/lab.example.toml --out repor
 
 ## 腾讯云 Lighthouse 接入
 
-`src/cloud_av_agent_lab/adapters/tencent_cloud.py` 提供 `TencentCloudLighthouseAdapter`，预留了 Lighthouse 实例开机、关机、重启、快照回滚、实例状态查询和截图产物引用接口。当前实现支持 `mock` / `real` mode，并已接入腾讯云 API 3.0 的 TC3-HMAC-SHA256 签名和统一请求路径。
+`src/cloud_av_agent_lab/adapters/tencent_cloud.py` 是对外兼容 facade，继续导出 `TencentCloudLighthouseAdapter`、`parse_lighthouse_instance_status`、`build_tc3_headers` 等稳定 API。具体实现已拆入 `src/cloud_av_agent_lab/adapters/tencent_lighthouse/`：鉴权、TC3 签名、响应解析、状态模型和 adapter 主逻辑分模块维护。当前实现支持 `mock` / `real` mode，并已接入腾讯云 API 3.0 的 TC3-HMAC-SHA256 签名和统一请求路径。
 
 `mode = "mock"` 时只返回统一的 `VMOperationResponse`。`mode = "real"` 且 `dry_run = true` 时会拦截所有云 API 调用，并输出类似：
 
@@ -139,7 +139,7 @@ $env:TENCENTCLOUD_INSTANCE_ID_WIN10_TENCENT_MANAGER="lhins-yyyyyyyy"
 
 其中带 VM ID 后缀的变量优先级最高，后缀会把 VM ID 转成大写并把非字母数字替换为 `_`。
 
-真实 API 调用集中在 `TencentCloudLighthouseAdapter._call_api()`：
+真实 API 调用集中在 `TencentCloudLighthouseAdapter._call_api()`，实现位于 `adapters/tencent_lighthouse/adapter.py`：
 
 - 使用已解析的 `TencentCloudAuth` 凭据；
 - 使用 TC3-HMAC-SHA256 生成请求签名；

@@ -119,7 +119,7 @@ state.
 
 ## Tencent Cloud Lighthouse Adapter
 
-`TencentCloudLighthouseAdapter` is the first cloud adapter. It reserves methods for Lighthouse lifecycle operations and keeps real Tencent Cloud API integration behind one `_call_api()` method.
+`TencentCloudLighthouseAdapter` is the first cloud adapter. The public import remains `cloud_av_agent_lab.adapters.tencent_cloud`, which is now a small facade. The implementation lives under `cloud_av_agent_lab.adapters.tencent_lighthouse`, with separate modules for auth loading, TC3 signing, response parsing, status models, errors, and adapter lifecycle logic. Real Tencent Cloud API integration remains behind one `_call_api()` method on the adapter.
 
 The adapter has two modes:
 
