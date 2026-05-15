@@ -243,7 +243,7 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(upload.status_code, 200)
 
         with patch(
-            "cloud_av_agent_lab.guest_agent_server.workspace._probe_sample_current_status",
+            "cloud_av_agent_lab.guest_agent_server.workspace.sample_status._probe_sample_current_status",
             return_value=FileProbe(exists=False, stat_ok=False),
         ):
             response = self.client.get(
@@ -282,7 +282,7 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(upload.status_code, 200)
 
         with patch(
-            "cloud_av_agent_lab.guest_agent_server.workspace._probe_sample_current_status",
+            "cloud_av_agent_lab.guest_agent_server.workspace.sample_status._probe_sample_current_status",
             return_value=FileProbe(
                 exists=True,
                 stat_ok=False,
@@ -318,7 +318,7 @@ class GuestAgentServerTests(unittest.TestCase):
         )
 
         with patch(
-            "cloud_av_agent_lab.guest_agent_server.workspace._probe_sample_current_status"
+            "cloud_av_agent_lab.guest_agent_server.workspace.sample_status._probe_sample_current_status"
         ) as status_probe:
             response = self.client.post(
                 "/cases/case-001__tencent-pc-manager/sample",
@@ -721,7 +721,7 @@ class GuestAgentServerTests(unittest.TestCase):
         )
 
         with patch(
-            "cloud_av_agent_lab.guest_agent_server.workspace.subprocess.Popen"
+            "cloud_av_agent_lab.guest_agent_server.workspace.execution.subprocess.Popen"
         ) as popen:
             popen.return_value.pid = 4321
             response = client.post(
@@ -781,7 +781,7 @@ class GuestAgentServerTests(unittest.TestCase):
         )
 
         with patch(
-            "cloud_av_agent_lab.guest_agent_server.workspace.subprocess.Popen"
+            "cloud_av_agent_lab.guest_agent_server.workspace.execution.subprocess.Popen"
         ) as popen:
             popen.return_value.pid = 4321
             popen.return_value.poll.return_value = None
@@ -826,7 +826,7 @@ class GuestAgentServerTests(unittest.TestCase):
         )
 
         with patch(
-            "cloud_av_agent_lab.guest_agent_server.workspace.subprocess.Popen"
+            "cloud_av_agent_lab.guest_agent_server.workspace.execution.subprocess.Popen"
         ) as popen:
             popen.return_value.pid = 4321
             popen.return_value.poll.return_value = 0
@@ -872,7 +872,7 @@ class GuestAgentServerTests(unittest.TestCase):
         )
 
         with patch(
-            "cloud_av_agent_lab.guest_agent_server.workspace.subprocess.Popen",
+            "cloud_av_agent_lab.guest_agent_server.workspace.execution.subprocess.Popen",
             side_effect=OSError("blocked"),
         ):
             start = client.post(
@@ -917,7 +917,7 @@ class GuestAgentServerTests(unittest.TestCase):
         (sample_dir / "proof.exe").unlink()
 
         with patch(
-            "cloud_av_agent_lab.guest_agent_server.workspace.subprocess.Popen"
+            "cloud_av_agent_lab.guest_agent_server.workspace.execution.subprocess.Popen"
         ) as popen:
             response = client.post(
                 "/cases/case-001__tencent-pc-manager/actions",
