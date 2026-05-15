@@ -158,6 +158,21 @@ only metadata fields such as `case_id`, `sample_id`, `vm_id`, `product_id`,
 size, timestamps, and recent events. It does not read Defender logs or any other
 AV product logs; evaluation-stage evidence collection remains a later phase.
 
+Execution observation can be queried separately after a real controlled trigger:
+
+```powershell
+python -m cloud_av_agent_lab guest-execution-status --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
+```
+
+`GET /cases/{case_id}/execution-status` is read-only. It observes only the
+`root_pid` that was started by the current case action and any child process
+metadata visible from that root. It does not accept arbitrary PIDs, paths,
+commands, shell arguments, or client-supplied process names. The query is
+low-intrusion: `psutil` process objects are created only for a short metadata
+snapshot and are not cached or held across requests, so the Agent should not
+interfere with Windows Defender or another security product terminating the
+sample process.
+
 ## Controlled Action Skeleton
 
 CLI entrypoint:
@@ -195,6 +210,14 @@ programs that write relative files write inside the case workspace. The process
 PID and start time are recorded in `case_state.json` and `events.jsonl` as
 `execution_started`.
 
+After `--real-action`, the CLI no longer checks proof files. It polls
+`execution-status` every 2 seconds for up to 60 seconds and reports states such
+as `running`, `exited_cleanly`, `exited_with_error`,
+`terminated_or_disappeared`, or `timeout_still_running`. These are execution
+phenomena only. A vanished process is not automatically labeled as an AV
+interception; later evaluation must combine process observation with delivery
+state and product log evidence.
+
 `POST /cases/{case_id}/actions` currently accepts only a small whitelist:
 
 - `generate_report`
@@ -210,10 +233,11 @@ current case sample directory, and optional `expected_sha256`; it records
 `execution_dry_run_checked` and does not start a process.
 
 Current manual validation may use EICAR or a harmless command exe such as a
-program that writes `execution_proof.txt`. This still does not permit harmful
-samples. The local control plane must not execute the uploaded file; only the
-cloud-isolated Guest Agent may trigger the registered sample when execution is
-explicitly enabled for the manual test.
+program that writes `execution_proof.txt`. That proof file is only an early
+smoke-test aid; the durable observation model is now process metadata and exit
+state. This still does not permit harmful samples. The local control plane must
+not execute the uploaded file; only the cloud-isolated Guest Agent may trigger
+the registered sample when execution is explicitly enabled for the manual test.
 
 The full future trigger model is documented in `docs/EXECUTION_MODEL.md`.
 
@@ -243,9 +267,15 @@ server exists:
 6. Upload an EICAR or harmless test file to `/cases/{case_id}/sample`.
 7. Call Guest Agent `/cases/{case_id}/status`.
 8. Generate or update the report with preparation/upload status.
-9. Restore the baseline snapshot.
+9. Optionally trigger the controlled action only when execution is explicitly
+   enabled for harmless validation.
+10. Query `/cases/{case_id}/execution-status` to observe root PID and child
+   process metadata.
+11. Restore the baseline snapshot.
 
-Real `execute_sample` behavior is intentionally out of scope for the MVP.
+Arbitrary `execute_sample` behavior remains out of scope. The only real trigger
+implemented here is the default-off, token-protected, case-bound
+`execute_uploaded_sample` action for EICAR or harmless validation files.
 
 ## Single-Instance Serial Lock
 

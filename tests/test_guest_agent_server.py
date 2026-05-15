@@ -583,6 +583,33 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(data["execution_state"], "execution_disabled")
         self.assertIn("no sample was executed", data["message"])
 
+    def test_execution_status_not_started_for_prepared_case(self) -> None:
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+
+        response = self.client.get(
+            "/cases/case-001__tencent-pc-manager/execution-status",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["execution_state"], "not_started")
+        self.assertIsNone(data["root_pid"])
+        self.assertEqual(data["children"], [])
+
+    def test_execution_status_missing_case_returns_404(self) -> None:
+        response = self.client.get(
+            "/cases/missing-case/execution-status",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("guest-prepare-case", response.json()["detail"])
+
     def test_action_whitelist_rejects_unknown_action(self) -> None:
         self.client.post(
             "/prepare-case",
@@ -709,8 +736,8 @@ class GuestAgentServerTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         data = response.json()["data"]
-        self.assertEqual(data["execution_state"], "execution_started")
-        self.assertEqual(data["pid"], 4321)
+        self.assertEqual(data["execution_state"], "running")
+        self.assertEqual(data["root_pid"], 4321)
         args, kwargs = popen.call_args
         self.assertEqual(len(args), 1)
         self.assertEqual(len(args[0]), 1)
@@ -726,8 +753,10 @@ class GuestAgentServerTests(unittest.TestCase):
         state = json.loads((workspace / "case_state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["phase"], "execution_started")
         self.assertEqual(state["execution"]["pid"], 4321)
-        self.assertEqual(state["execution"]["state"], "execution_started")
+        self.assertEqual(state["execution"]["root_pid"], 4321)
+        self.assertEqual(state["execution"]["state"], "running")
         self.assertEqual(state["execution"]["stored_filename"], "proof.exe")
+        self.assertTrue(state["execution"]["sample_path_under_case"])
         events = _read_events(workspace / "events.jsonl")
         execution_events = [
             event for event in events if event["event_type"] == "execution_started"
@@ -735,6 +764,140 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(len(execution_events), 1)
         self.assertEqual(execution_events[0]["data"]["pid"], 4321)
         self.assertIn("started_at_utc", execution_events[0]["data"])
+
+    def test_execution_status_observes_running_root_process(self) -> None:
+        client = self._execution_client()
+        upload_headers = self._upload_headers()
+        upload_headers["X-Original-Filename"] = "proof.exe"
+        client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=upload_headers,
+            content=b"MZ harmless placeholder",
+        )
+
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server.workspace.subprocess.Popen"
+        ) as popen:
+            popen.return_value.pid = 4321
+            popen.return_value.poll.return_value = None
+            start = client.post(
+                "/cases/case-001__tencent-pc-manager/actions",
+                headers=self._execution_headers(),
+                json={
+                    "action": "execute_uploaded_sample",
+                    "sample_id": "case-001",
+                    "expected_sha256": "0" * 64,
+                },
+            )
+            status_response = client.get(
+                "/cases/case-001__tencent-pc-manager/execution-status",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(start.status_code, 200)
+        self.assertEqual(status_response.status_code, 200)
+        data = status_response.json()["data"]
+        self.assertEqual(data["execution_state"], "running")
+        self.assertEqual(data["root_pid"], 4321)
+        self.assertIsNone(data["exit_code"])
+        workspace = self.workdir / "cases" / "case-001__tencent-pc-manager"
+        events = _read_events(workspace / "events.jsonl")
+        event_types = [event["event_type"] for event in events]
+        self.assertIn("execution_observed", event_types)
+
+    def test_execution_status_records_clean_exit_and_report_execution(self) -> None:
+        client = self._execution_client()
+        upload_headers = self._upload_headers()
+        upload_headers["X-Original-Filename"] = "proof.exe"
+        client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=upload_headers,
+            content=b"MZ harmless placeholder",
+        )
+
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server.workspace.subprocess.Popen"
+        ) as popen:
+            popen.return_value.pid = 4321
+            popen.return_value.poll.return_value = 0
+            client.post(
+                "/cases/case-001__tencent-pc-manager/actions",
+                headers=self._execution_headers(),
+                json={
+                    "action": "execute_uploaded_sample",
+                    "sample_id": "case-001",
+                    "expected_sha256": "0" * 64,
+                },
+            )
+            status_response = client.get(
+                "/cases/case-001__tencent-pc-manager/execution-status",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(status_response.status_code, 200)
+        data = status_response.json()["data"]
+        self.assertEqual(data["execution_state"], "exited_cleanly")
+        self.assertEqual(data["exit_code"], 0)
+        report = client.get(
+            "/cases/case-001__tencent-pc-manager/report",
+            headers=self._headers(),
+        ).json()["data"]
+        self.assertEqual(report["execution"]["state"], "exited_cleanly")
+        self.assertEqual(report["execution"]["root_pid"], 4321)
+        self.assertEqual(report["execution"]["exit_code"], 0)
+
+    def test_execution_status_records_launch_failed(self) -> None:
+        client = self._execution_client()
+        upload_headers = self._upload_headers()
+        upload_headers["X-Original-Filename"] = "proof.exe"
+        client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=upload_headers,
+            content=b"MZ harmless placeholder",
+        )
+
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server.workspace.subprocess.Popen",
+            side_effect=OSError("blocked"),
+        ):
+            start = client.post(
+                "/cases/case-001__tencent-pc-manager/actions",
+                headers=self._execution_headers(),
+                json={
+                    "action": "execute_uploaded_sample",
+                    "sample_id": "case-001",
+                    "expected_sha256": "0" * 64,
+                },
+            )
+        status_response = client.get(
+            "/cases/case-001__tencent-pc-manager/execution-status",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(start.status_code, 400)
+        self.assertEqual(status_response.status_code, 200)
+        data = status_response.json()["data"]
+        self.assertEqual(data["execution_state"], "launch_failed")
+        workspace = self.workdir / "cases" / "case-001__tencent-pc-manager"
+        event_types = [
+            event["event_type"] for event in _read_events(workspace / "events.jsonl")
+        ]
+        self.assertIn("execution_launch_failed", event_types)
 
     def test_action_execute_uploaded_sample_missing_file_is_blocked(self) -> None:
         client = self._execution_client()

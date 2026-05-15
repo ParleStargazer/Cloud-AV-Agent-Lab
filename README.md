@@ -252,6 +252,11 @@ python -m cloud_av_agent_lab guest-execute-sample `
   --vm-id <vm-id> `
   --sample-id <sample-id> `
   --case-id <case-id>
+
+python -m cloud_av_agent_lab guest-execution-status `
+  --config configs/lab.local.toml `
+  --vm-id <vm-id> `
+  --case-id <case-id>
 ```
 
 `guest-upload-sample` 会在上传成功后自动等待 10 秒，并每 2 秒轮询一次状态，最多观察 30 秒。`guest-execute-sample` 默认是 dry-run，只验证 metadata、sha256 和路径归属，不启动进程。
@@ -268,15 +273,15 @@ python -m cloud_av_agent_lab guest-execute-sample `
   --real-action
 ```
 
-该真实触发只会在云端 Guest Agent 中启动当前 case 已登记的上传文件，记录 PID 和 `execution_started` 事件；本地控制面仍不执行该文件。
+该真实触发只会在云端 Guest Agent 中启动当前 case 已登记的上传文件，记录 root PID、启动时间、路径归属校验结果和 `execution_started` 事件；本地控制面仍不执行该文件。触发成功后 CLI 会自动轮询 `guest-execution-status` 的底层接口，默认每 2 秒查询一次，最多 60 秒，记录 `running`、`exited_cleanly`、`exited_with_error`、`terminated_or_disappeared` 或 `timeout_still_running` 等执行现象。
 
 上传成功不等于文件最终保留。EICAR 可能被杀毒软件立即删除，这是预期的安全产品处理行为。Guest Agent 会记录 `stable`、`removed_after_save` 或 `locked_or_busy` 等状态，并写入 case 状态和事件日志；`removed_after_save` 和 `locked_or_busy` 不被视为传输失败。
 
 上传接口只负责写盘并立即返回，耗时等待放在本地 CLI：`guest-upload-sample` 会在上传成功后先等待 10 秒，然后每 2 秒轮询一次状态，最多观察到 30 秒；一旦出现 `removed_after_save` 会立即报告拦截成功。需要继续观察时，可以手动重复运行 `guest-case-status`。
 
-每个 case 会维护 `case_state.json`、`events.jsonl` 和 `case_report.json`。`guest-case-report` 只汇总投送阶段 metadata，不读取 Defender 或其他杀软日志，不读取样本内容。
+每个 case 会维护 `case_state.json`、`events.jsonl` 和 `case_report.json`。`guest-case-report` 汇总投送阶段 metadata 和 execution 区域，但不读取 Defender 或其他杀软日志，不读取样本内容。
 
-受控触发能力默认关闭。`guest-execute-sample` 默认请求 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata 和路径归属，不启动样本进程；显式加 `--real-action` 时会请求 `execute_uploaded_sample`，只有云端 Guest Agent 启用 execution 且提供正确执行 token 时，才会直接启动当前 case 的已登记上传文件。该真实执行路径使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`，不接受任意路径、命令、shell/cmd/PowerShell 或参数。下一步验证可以使用 EICAR 或无害命令 exe；依旧不引入有害样本，本地也仍不执行任何样本。详细协议和单实例串行锁设计见 [GUEST_AGENT.md](docs/GUEST_AGENT.md)，受控触发模型见 [EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md)，Windows 免 Python 部署见 [GUEST_AGENT_DEPLOYMENT.md](docs/GUEST_AGENT_DEPLOYMENT.md)。
+受控触发能力默认关闭。`guest-execute-sample` 默认请求 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata 和路径归属，不启动样本进程；显式加 `--real-action` 时会请求 `execute_uploaded_sample`，只有云端 Guest Agent 启用 execution 且提供正确执行 token 时，才会直接启动当前 case 的已登记上传文件。该真实执行路径使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`，不接受任意路径、命令、shell/cmd/PowerShell 或参数。执行观测是低侵入式只读元信息快照，只观测当前 case 的 root PID 及子进程，不缓存进程对象，不阻碍 Defender 或其他安全软件终止进程。下一步验证可以使用 EICAR 或无害命令 exe；依旧不引入有害样本，本地也仍不执行任何样本。proof 文件只作为早期联调辅助，长期评测需要结合投送状态、执行观测和后续只读安全产品日志证据。详细协议和单实例串行锁设计见 [GUEST_AGENT.md](docs/GUEST_AGENT.md)，受控触发模型见 [EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md)，Windows 免 Python 部署见 [GUEST_AGENT_DEPLOYMENT.md](docs/GUEST_AGENT_DEPLOYMENT.md)。
 
 ## 后续接入点
 

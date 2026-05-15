@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urlencode, urljoin
 
 from cloud_av_agent_lab.core.contracts import GuestAgentConfig, TestCase
 from cloud_av_agent_lab.network.client import NetworkClient, NetworkResponse
@@ -80,6 +80,22 @@ class GuestAgentClient:
             f"cases/{quote(case_id, safe='')}/report",
             method="GET",
         )
+
+    def execution_status(
+        self,
+        case_id: str,
+        mark_timeout: bool = False,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
+        path = f"cases/{quote(case_id, safe='')}/execution-status"
+        query: dict[str, str] = {}
+        if mark_timeout:
+            query["mark_timeout"] = "true"
+        if timeout_seconds is not None:
+            query["timeout_seconds"] = f"{timeout_seconds:g}"
+        if query:
+            path += "?" + urlencode(query)
+        return self._request(path, method="GET")
 
     def case_action(
         self,

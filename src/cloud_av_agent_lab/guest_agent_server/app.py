@@ -15,9 +15,11 @@ from cloud_av_agent_lab.guest_agent_server.auth import (
     verify_upload_token,
 )
 from cloud_av_agent_lab.guest_agent_server.workspace import (
+    ExecutionRegistry,
     WorkspaceError,
     WorkspaceNotFoundError,
     prepare_case_workspace,
+    read_case_execution_status,
     read_case_report,
     read_case_status,
     run_case_action,
@@ -37,6 +39,7 @@ def create_app(
     workdir_path = Path(workdir)
     resolved_version = app_version or _package_version()
     app = FastAPI(title="Cloud AV Agent Lab Guest Agent", version=resolved_version)
+    execution_registry = ExecutionRegistry()
 
     def authorize(authorization: str | None) -> None:
         verify_bearer_token(authorization, token)
@@ -209,6 +212,37 @@ def create_app(
             "data": payload,
         }
 
+    @app.get("/cases/{case_id:path}/execution-status")
+    def execution_status(
+        case_id: str,
+        authorization: str | None = Header(default=None),
+        mark_timeout: bool = False,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        authorize(authorization)
+        try:
+            payload = read_case_execution_status(
+                workdir_path,
+                case_id,
+                execution_registry=execution_registry,
+                timeout_seconds=(timeout_seconds if mark_timeout else None),
+            )
+        except WorkspaceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except WorkspaceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return {
+            "status": "ok",
+            "message": "execution status observed",
+            "data": payload,
+        }
+
     @app.post("/cases/{case_id:path}/actions")
     def case_action(
         case_id: str,
@@ -223,6 +257,7 @@ def create_app(
                 case_id=case_id,
                 payload=payload,
                 execution_enabled=execution_enabled,
+                execution_registry=execution_registry,
             )
         except WorkspaceNotFoundError as exc:
             raise HTTPException(

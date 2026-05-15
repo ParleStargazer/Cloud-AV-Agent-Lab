@@ -22,10 +22,11 @@ flowchart LR
     Detectors --> Report["Markdown / JSON report"]
 ```
 
-## Three-Stage Flow
+## Four-Stage Flow
 
-The project separates delivery, trigger, and evaluation so the control plane can
-be tested without mixing upload status, process launch, and AV verdict logic.
+The project separates delivery, trigger, execution observation, and evaluation
+so the control plane can be tested without mixing upload status, process launch,
+process facts, and AV verdict logic.
 
 ```mermaid
 stateDiagram-v2
@@ -41,7 +42,8 @@ stateDiagram-v2
     TriggerRealRequested --> SampleMissing: sample removed before execution
     TriggerRealRequested --> ExecutionStarted: controlled Popen
 
-    ExecutionStarted --> EvaluationPending
+    ExecutionStarted --> ExecutionObserved: guest-execution-status polling
+    ExecutionObserved --> EvaluationPending
     ExecutionDisabled --> EvaluationPending
     SampleMissing --> EvaluationPending
     EvaluationPending --> SnapshotRestore: future AV log collection and verdicts
@@ -63,6 +65,11 @@ cloud agent started with `--enable-execution-actions`. The server resolves the
 file from `sample.json`, rejects arbitrary paths or shell arguments, verifies
 that the file is still under `<workdir>\cases\<case_id>\sample\`, and starts it
 with `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`.
+
+Execution observation is read-only and low-intrusion. The Agent observes only
+the root PID recorded for the current case and its descendants, takes short
+metadata snapshots, does not cache process objects, does not accept arbitrary
+PIDs, and does not infer AV blocking from process disappearance alone.
 
 Evaluation is intentionally separate. Future work should read AV logs,
 screenshots, and product-specific telemetry after the trigger phase, produce a

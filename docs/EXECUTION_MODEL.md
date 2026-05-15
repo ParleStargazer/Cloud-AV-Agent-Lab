@@ -7,13 +7,17 @@ validation with EICAR or harmless test binaries only.
 
 ## Scope
 
-The project is intentionally split into three stages:
+The project is intentionally split into four stages:
 
 1. Delivery: prepare a case, upload an EICAR or harmless test file, and record
    whether it was saved, removed by security software, locked, or stable.
 2. Trigger: a bounded action may trigger only the uploaded sample already
    registered in the current case, and only when execution is explicitly enabled.
-3. Evaluation: a separate later phase may collect product logs and generate
+3. Execution observation: read-only observation of the root PID started for the
+   current case and its child process metadata. This records process state,
+   exit code, children, and timestamps, but it does not read sample contents or
+   security product logs.
+4. Evaluation: a separate later phase may collect product logs and generate
    detection reports. Defender or other AV log reading is not part of this
    stage.
 
@@ -90,13 +94,45 @@ using `shell=False` and `cwd` set to that sample directory. Standard input,
 standard output, and standard error are redirected to `subprocess.DEVNULL`; on
 Windows the process is started with `CREATE_NO_WINDOW`, and file descriptors are
 closed to avoid inheriting Guest Agent server handles. It records
-`execution_started` with PID and start time in `events.jsonl`, and stores the
-same PID metadata in `case_state.json`.
+`execution_started` with root PID and start time in `events.jsonl`, and stores
+the same PID metadata in `case_state.json`.
+
+After a real trigger, `guest-execute-sample --real-action` polls
+`GET /cases/{case_id}/execution-status` every 2 seconds by default for up to 60
+seconds. The status endpoint observes only the recorded `root_pid` for the
+current case and its descendants. It does not accept paths, commands, shell
+arguments, or arbitrary PIDs from the client.
+
+Process observation is deliberately low-intrusion. The Guest Agent takes short
+read-only metadata snapshots with `psutil` when available, records only fields
+such as PID, parent PID, name, status, and creation time, and does not keep
+`psutil.Process` objects beyond a single request. Once the root process reaches
+a terminal state, the in-memory `Popen` handle is removed from the registry so
+the Agent does not hold process handles longer than needed. Observation must not
+block Windows Defender or another security product from terminating a process.
+
+Observation states are facts, not verdicts:
+
+- `running`: root or child process is still observable.
+- `exited_cleanly`: root exit code is 0 and no live child process is observed.
+- `exited_with_error`: root exit code is non-zero.
+- `launch_failed`: `Popen` failed before a root process was created.
+- `terminated_or_disappeared`: a process was started but is no longer
+  observable and no exit code is available.
+- `timeout_still_running`: the CLI observation window ended while the process
+  tree was still running.
+- `unknown`: the Agent does not have enough information.
+
+The disappearance of a process is not treated as proof of AV blocking. That
+judgment belongs to the later evaluation stage, where delivery state, execution
+state, product logs, and snapshot rollback evidence can be combined.
 
 Manual trigger validation may use a harmless command exe that writes a proof
-file such as `execution_proof.txt` inside the case sample directory. This does
-not relax the harmful-sample boundary: no harmful samples are introduced, and
-the local control plane must never execute uploaded files.
+file such as `execution_proof.txt` inside the case sample directory. That proof
+file is only an early smoke-test aid, not the long-term evaluation model. The
+durable model is process-tree observation plus later evaluation evidence. This
+does not relax the harmful-sample boundary: no harmful samples are introduced,
+and the local control plane must never execute uploaded files.
 
 ## Future State Machine
 
@@ -106,9 +142,11 @@ The future controlled trigger stage should use explicit states:
 - `execution_requested`
 - `sample_missing_before_execution`
 - `execution_started`
-- `execution_blocked_or_failed`
+- `execution_launch_failed`
+- `execution_observed`
+- `execution_child_observed`
 - `execution_exited`
-- `execution_timeout`
+- `execution_timeout_still_running`
 - `execution_recorded`
 
 After any future execution-stage action, orchestration should move to the

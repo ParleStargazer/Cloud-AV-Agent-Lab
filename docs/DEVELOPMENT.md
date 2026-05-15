@@ -239,11 +239,13 @@ token_env = "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
 timeout_seconds = 30
 ```
 
-`POST /cases/{case_id}/actions` 只接受白名单 action，不接受任意路径、命令、shell/cmd/PowerShell 或参数。`guest-execute-sample` 默认发送 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata、路径归属和可选 sha256，不启动进程；显式传入 `--real-action` 时请求 `execute_uploaded_sample`。真实启动只有在云端 Guest Agent 启用 execution 且请求携带正确 `CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN` 时才会发生，服务端会再次 `os.path.exists` 确认文件仍存在，并使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)` 直接启动当前 case 已登记文件。标准输入/输出/错误会重定向到 `DEVNULL`，Windows 下使用 `CREATE_NO_WINDOW` 并关闭继承句柄。PID 和启动时间会写入 `case_state.json`，并记录 `execution_started` 事件。完整设计见 `docs/EXECUTION_MODEL.md`。
+`POST /cases/{case_id}/actions` 只接受白名单 action，不接受任意路径、命令、shell/cmd/PowerShell 或参数。`guest-execute-sample` 默认发送 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata、路径归属和可选 sha256，不启动进程；显式传入 `--real-action` 时请求 `execute_uploaded_sample`。真实启动只有在云端 Guest Agent 启用 execution 且请求携带正确 `CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN` 时才会发生，服务端会再次 `os.path.exists` 确认文件仍存在，并使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)` 直接启动当前 case 已登记文件。标准输入/输出/错误会重定向到 `DEVNULL`，Windows 下使用 `CREATE_NO_WINDOW` 并关闭继承句柄。root PID、启动时间和路径归属校验结果会写入 `case_state.json`，并记录 `execution_started` 事件。
+
+`guest-execute-sample --real-action` 启动成功后会改为执行状态轮询，不再检查 proof 文件。CLI 默认每 2 秒查询一次 `GET /cases/{case_id}/execution-status`，最多 60 秒；每次输出 root PID、状态和子进程数量。Guest Agent 只做低侵入式只读元信息快照：只观测当前 case 记录的 `root_pid` 及其子进程，不接受任意 PID，不缓存 `psutil.Process` 对象，不读取样本内容或杀软日志，也不能阻碍 Defender 或其他安全软件终止进程。`terminated_or_disappeared` 只表示进程已退出或不可观察，不能单独当作杀软拦截结论。完整设计见 `docs/EXECUTION_MODEL.md`。
 
 Guest Agent CLI 报错按来源归因：`[Local Check]` 表示本地配置或环境变量问题，`[Network]` 表示无法连接云端 Guest Agent，`[Remote Agent]` 表示云端鉴权或业务拒绝，例如 execution 未启用。
 
-下一步可以使用 EICAR 或无害命令 exe 验证触发链路，例如只在云端 case 的 sample 目录内写入 `execution_proof.txt` 的测试程序。仍然不引入有害样本，本地也不能执行、打开、解压、扫描或解析任何样本文件。
+下一步可以使用 EICAR 或无害命令 exe 验证触发链路，例如只在云端 case 的 sample 目录内写入 `execution_proof.txt` 的测试程序。该 proof 文件只适合早期联调，不再作为长期评测模型；后续评测应结合投送状态、执行观测和只读安全产品日志证据。仍然不引入有害样本，本地也不能执行、打开、解压、扫描或解析任何样本文件。
 
 Guest Agent 的职责应限制在云端隔离 VM 内：
 

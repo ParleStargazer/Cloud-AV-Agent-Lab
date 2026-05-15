@@ -211,6 +211,67 @@ class GuestAgentClientTests(TestCase):
         self.assertIsInstance(headers, dict)
         self.assertEqual(headers["Authorization"], "Bearer secret")
 
+    def test_execution_status_uses_network_client(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            timeout_seconds=5,
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=200,
+                headers={},
+                body=b'{"status":"ok","message":"execution status observed","data":{"execution_state":"running","root_pid":1234}}',
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "secret"}
+        )
+
+        response = client.execution_status("case-001__tencent-pc-manager")
+
+        self.assertEqual(response.data["execution_state"], "running")
+        self.assertEqual(response.data["root_pid"], 1234)
+        self.assertEqual(len(network.calls), 1)
+        call = network.calls[0]
+        self.assertEqual(call["method"], "GET")
+        self.assertEqual(
+            call["url"],
+            "http://guest-agent.local:8080/cases/case-001__tencent-pc-manager/execution-status",
+        )
+        self.assertEqual(call["timeout_seconds"], 5)
+        headers = call["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+
+    def test_execution_status_404_has_clear_prepare_case_hint(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=404,
+                headers={},
+                body=b'{"detail":"case workspace does not exist; run guest-prepare-case first"}',
+                reason="Not Found",
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "agent-secret"}
+        )
+
+        with self.assertRaises(GuestAgentError) as error:
+            client.execution_status("missing-case")
+
+        message = str(error.exception)
+        self.assertEqual(error.exception.status_code, 404)
+        self.assertIn("HTTP 404 Not Found", message)
+        self.assertIn("guest-prepare-case", message)
+        self.assertNotIn("agent-secret", message)
+
     def test_case_report_404_has_clear_prepare_case_hint(self) -> None:
         config = GuestAgentConfig(
             enabled=True,

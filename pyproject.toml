@@ -16,6 +16,7 @@ dependencies = [
 guest-agent = [
   "fastapi",
   "httpx",
+  "psutil",
   "uvicorn",
   "pydantic",
 ]

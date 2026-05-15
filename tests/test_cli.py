@@ -202,6 +202,27 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(exit_error.exception.code, 2)
         self.assertIn("[Local Check]", stderr.getvalue())
 
+    def test_guest_execution_status_exits_clearly_when_guest_agent_disabled(
+        self,
+    ) -> None:
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+            main(
+                [
+                    "guest-execution-status",
+                    "--config",
+                    str(ROOT / "configs" / "lab.example.toml"),
+                    "--vm-id",
+                    "win10-tencent-manager",
+                    "--case-id",
+                    "case-001__tencent-pc-manager",
+                ]
+            )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("[Local Check]", stderr.getvalue())
+
     def test_guest_execute_sample_exits_clearly_when_guest_agent_disabled(
         self,
     ) -> None:
@@ -550,6 +571,57 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertIn("[Remote Agent]", output)
         self.assertIn("云端拒绝了执行请求", output)
 
+    def test_guest_execute_sample_real_action_polls_execution_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-execution-enabled.toml"
+            config_path.write_text(
+                _guest_agent_execution_enabled_config(),
+                encoding="utf-8",
+            )
+            fake_client = _FakeGuestAgentClient(
+                real_execution_state="running",
+                execution_status_states=["running", "exited_cleanly"],
+            )
+            stdout = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                patch("cloud_av_agent_lab.cli.time.sleep"),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "guest-execute-sample",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-tencent-manager",
+                        "--sample-id",
+                        "case-001",
+                        "--case-id",
+                        "case-001__tencent-pc-manager",
+                        "--real-action",
+                        "--poll-interval-seconds",
+                        "2",
+                        "--poll-timeout-seconds",
+                        "6",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(fake_client.execute_calls), 1)
+        self.assertFalse(fake_client.execute_calls[0]["dry_run"])
+        self.assertEqual(fake_client.execution_status_calls, 2)
+        output = stdout.getvalue()
+        self.assertIn("[Execution Polling] 检查执行状态", output)
+        self.assertIn("state=running", output)
+        self.assertIn("state=exited_cleanly", output)
+        self.assertIn("root 进程正常退出", output)
+        self.assertNotIn("execution_proof", output)
+
     def test_guest_upload_404_suggests_prepare_case(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
@@ -682,11 +754,16 @@ class _FakeGuestAgentClient:
         self,
         status_upload_state: str = "stable",
         status_upload_states: list[str] | None = None,
+        real_execution_state: str = "execution_disabled",
+        execution_status_states: list[str] | None = None,
     ) -> None:
         self.status_upload_state = status_upload_state
         self.status_upload_states = list(status_upload_states or [])
+        self.real_execution_state = real_execution_state
+        self.execution_status_states = list(execution_status_states or [])
         self.upload_calls = 0
         self.case_status_calls = 0
+        self.execution_status_calls = 0
         self.execute_calls: list[dict[str, object]] = []
         self.execute_called = False
 
@@ -735,6 +812,37 @@ class _FakeGuestAgentClient:
             },
         )
 
+    def execution_status(
+        self,
+        case_id: str,
+        mark_timeout: bool = False,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
+        self.execution_status_calls += 1
+        if mark_timeout:
+            state = "timeout_still_running"
+        elif self.execution_status_states:
+            state = self.execution_status_states.pop(0)
+        else:
+            state = self.real_execution_state
+        return GuestAgentResponse(
+            status="ok",
+            message="execution status observed",
+            data={
+                "case_id": case_id,
+                "execution_state": state,
+                "root_pid": 4321,
+                "exit_code": 0 if state == "exited_cleanly" else None,
+                "children": [],
+                "execution": {
+                    "state": state,
+                    "root_pid": 4321,
+                    "exit_code": 0 if state == "exited_cleanly" else None,
+                    "children": [],
+                },
+            },
+        )
+
     def execute_uploaded_sample(
         self,
         case_id: str,
@@ -765,11 +873,18 @@ class _FakeGuestAgentClient:
             )
         return GuestAgentResponse(
             status="ok",
-            message="execution is disabled; no sample was executed",
+            message=(
+                "uploaded sample process started"
+                if self.real_execution_state != "execution_disabled"
+                else "execution is disabled; no sample was executed"
+            ),
             data={
                 "case_id": case_id,
                 "sample_id": sample_id,
-                "execution_state": "execution_disabled",
+                "execution_state": self.real_execution_state,
+                "root_pid": 4321
+                if self.real_execution_state != "execution_disabled"
+                else None,
             },
         )
 
@@ -792,6 +907,14 @@ class _FailingGuestAgentClient:
         raise self.error
 
     def case_report(self, case_id: str) -> GuestAgentResponse:
+        raise self.error
+
+    def execution_status(
+        self,
+        case_id: str,
+        mark_timeout: bool = False,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
         raise self.error
 
     def execute_uploaded_sample(

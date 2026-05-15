@@ -31,6 +31,14 @@ RESTORE_SNAPSHOT_COMMAND = "cloud-restore-snapshot"
 GUEST_UPLOAD_STATUS_INITIAL_WAIT_SECONDS = 10.0
 GUEST_UPLOAD_STATUS_POLL_INTERVAL_SECONDS = 2.0
 GUEST_UPLOAD_STATUS_TIMEOUT_SECONDS = 30.0
+GUEST_EXECUTION_POLL_INTERVAL_SECONDS = 2.0
+GUEST_EXECUTION_POLL_TIMEOUT_SECONDS = 60.0
+GUEST_EXECUTION_TERMINAL_STATES = {
+    "exited_cleanly",
+    "exited_with_error",
+    "launch_failed",
+    "terminated_or_disappeared",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -94,6 +102,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     guest_report.add_argument("--case-id", required=True, help="prepared case id")
 
+    guest_execution_status = subparsers.add_parser(
+        "guest-execution-status",
+        help="query cloud-side Guest Agent execution process observation status",
+    )
+    guest_execution_status.add_argument(
+        "--config", required=True, help="path to TOML config"
+    )
+    guest_execution_status.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+    guest_execution_status.add_argument(
+        "--case-id", required=True, help="prepared case id"
+    )
+
     guest_execute = subparsers.add_parser(
         "guest-execute-sample",
         help=(
@@ -121,6 +143,18 @@ def build_parser() -> argparse.ArgumentParser:
             "request execute_uploaded_sample instead of dry-run; requires "
             "[guest_agent.execution].enabled=true and a matching execution token"
         ),
+    )
+    guest_execute.add_argument(
+        "--poll-interval-seconds",
+        type=float,
+        default=GUEST_EXECUTION_POLL_INTERVAL_SECONDS,
+        help="execution-status poll interval after --real-action",
+    )
+    guest_execute.add_argument(
+        "--poll-timeout-seconds",
+        type=float,
+        default=GUEST_EXECUTION_POLL_TIMEOUT_SECONDS,
+        help="maximum seconds to observe execution after --real-action",
     )
 
     guest_upload = subparsers.add_parser(
@@ -311,6 +345,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_guest_response(response)
         return 0
 
+    if args.command == "guest-execution-status":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        _ensure_guest_agent_enabled(parser, config)
+        try:
+            response = _create_guest_agent_client(config).execution_status(args.case_id)
+        except GuestAgentError as exc:
+            parser.exit(2, _format_guest_error(exc))
+        _print_guest_response(response)
+        return 0
+
     if args.command == "guest-execute-sample":
         vm = config.vms.get(args.vm_id)
         if vm is None:
@@ -327,8 +373,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "token 环境变量后再使用 --real-action。\n",
             )
         expected_sha256 = args.expected_sha256 or sample.sha256
+        if args.real_action:
+            _validate_guest_execution_polling_args(parser, args)
+        client = _create_guest_agent_client(config)
         try:
-            response = _create_guest_agent_client(config).execute_uploaded_sample(
+            response = client.execute_uploaded_sample(
                 case_id=args.case_id,
                 sample_id=sample.id,
                 expected_sha256=expected_sha256,
@@ -344,6 +393,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "info: guest-execute-sample 默认只做 dry-run metadata 校验；"
                 "没有启动样本进程。"
             )
+        else:
+            try:
+                execution_response = _poll_guest_execution_status(
+                    client=client,
+                    case_id=args.case_id,
+                    poll_interval_seconds=args.poll_interval_seconds,
+                    timeout_seconds=args.poll_timeout_seconds,
+                )
+            except GuestAgentError as exc:
+                parser.exit(2, _format_guest_error(exc))
+            _print_guest_response(execution_response)
+            message = _execution_state_message(
+                _extract_execution_state(execution_response.data)
+            )
+            if message:
+                print(message)
         return 0
 
     if args.command == "guest-upload-sample":
@@ -473,6 +538,16 @@ def _validate_lifecycle_polling_args(
         )
 
 
+def _validate_guest_execution_polling_args(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> None:
+    if args.poll_timeout_seconds <= 0:
+        parser.exit(2, "error: --poll-timeout-seconds must be greater than 0\n")
+    if args.poll_interval_seconds <= 0:
+        parser.exit(2, "error: --poll-interval-seconds must be greater than 0\n")
+
+
 def _write_execution_guard(
     config: LabConfig,
     resolved_instance_id: str,
@@ -598,11 +673,73 @@ def _poll_guest_upload_status(
     return last_response
 
 
+def _poll_guest_execution_status(
+    client: GuestAgentClient,
+    case_id: str,
+    poll_interval_seconds: float = GUEST_EXECUTION_POLL_INTERVAL_SECONDS,
+    timeout_seconds: float = GUEST_EXECUTION_POLL_TIMEOUT_SECONDS,
+) -> GuestAgentResponse:
+    elapsed = 0.0
+    last_response: GuestAgentResponse | None = None
+    while True:
+        last_response = client.execution_status(case_id)
+        execution_state = str(_extract_execution_state(last_response.data) or "unknown")
+        root_pid = _extract_root_pid(last_response.data)
+        children_count = _extract_children_count(last_response.data)
+        print(
+            "[Execution Polling] 检查执行状态 "
+            f"({elapsed:g}s/{timeout_seconds:g}s)... "
+            f"state={execution_state} root_pid={root_pid} "
+            f"children={children_count}"
+        )
+        if execution_state in GUEST_EXECUTION_TERMINAL_STATES:
+            break
+        if elapsed >= timeout_seconds:
+            if execution_state == "running":
+                last_response = client.execution_status(
+                    case_id,
+                    mark_timeout=True,
+                    timeout_seconds=timeout_seconds,
+                )
+            break
+        wait_seconds = min(poll_interval_seconds, timeout_seconds - elapsed)
+        if wait_seconds <= 0:
+            break
+        time.sleep(wait_seconds)
+        elapsed += wait_seconds
+
+    return last_response
+
+
 def _extract_upload_state(data: dict[str, object]) -> object:
     state = data.get("state")
     if isinstance(state, dict):
         return state.get("upload_state")
     return data.get("upload_state")
+
+
+def _extract_execution_state(data: dict[str, object]) -> object:
+    execution = data.get("execution")
+    if isinstance(execution, dict):
+        return execution.get("state") or data.get("execution_state")
+    return data.get("execution_state")
+
+
+def _extract_root_pid(data: dict[str, object]) -> object:
+    execution = data.get("execution")
+    if isinstance(execution, dict):
+        return execution.get("root_pid") or data.get("root_pid")
+    return data.get("root_pid")
+
+
+def _extract_children_count(data: dict[str, object]) -> int:
+    execution = data.get("execution")
+    children: object
+    if isinstance(execution, dict):
+        children = execution.get("children", [])
+    else:
+        children = data.get("children", [])
+    return len(children) if isinstance(children, list) else 0
 
 
 def _upload_state_message(upload_state: object) -> str:
@@ -615,6 +752,27 @@ def _upload_state_message(upload_state: object) -> str:
         return (
             "warning: 上传成功，但文件可能正在被安全软件占用；"
             "建议稍后运行 guest-case-status 查询。"
+        )
+    return ""
+
+
+def _execution_state_message(execution_state: object) -> str:
+    state = str(execution_state or "")
+    if state == "exited_cleanly":
+        return "info: 执行观测显示 root 进程正常退出。"
+    if state == "exited_with_error":
+        return "warning: 执行观测显示 root 进程以非零退出码结束。"
+    if state == "launch_failed":
+        return "error: 执行启动失败，详见 execution-status 与事件日志。"
+    if state == "terminated_or_disappeared":
+        return (
+            "info: 进程已退出或不可观察；这本身不等同于杀软拦截，"
+            "需结合后续评测证据判断。"
+        )
+    if state == "timeout_still_running":
+        return (
+            "info: 轮询窗口结束时进程仍在运行，已记录为 "
+            "timeout_still_running；这不等同于失败或拦截。"
         )
     return ""
 
