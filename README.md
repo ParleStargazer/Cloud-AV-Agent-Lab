@@ -196,7 +196,7 @@ Agent 不应直接操作本地样本，也不应生成规避检测建议。
 
 ## Guest Agent MVP
 
-Guest Agent 运行在云端隔离 Windows 主机内，本地只通过统一 `NetworkClient` 发起 HTTP 控制面调用。MVP 支持 `/health`、`/system-info`、`/prepare-case`、`/cases/{case_id}/sample`、`/cases/{case_id}/status`、`/cases/{case_id}/report`、`/cases/{case_id}/execution-status` 和受控 `/cases/{case_id}/actions`，用于连通性、系统信息、无害工作目录准备、EICAR/无害测试文件上传、上传后状态观测、case 报告、默认关闭的受控触发，以及低侵入式执行观测。不接触真实病毒样本，不暴露任意命令执行接口；默认工作流不执行样本，真实触发必须显式启用 execution 并限定为当前 case 已登记的上传文件。
+Guest Agent 运行在云端隔离 Windows 主机内，本地只通过统一 `NetworkClient` 发起 HTTP 控制面调用。MVP 支持 `/health`、`/system-info`、`/prepare-case`、`/cases/{case_id}/sample`、`/cases/{case_id}/status`、`/cases/{case_id}/report`、`/cases/{case_id}/summary`、`/cases/{case_id}/evidence-bundle`、`/cases/{case_id}/execution-status`、受控 `/cases/{case_id}/actions`，以及 `/cases/{case_id}/collection/{product_id}` 日志收集接口，用于连通性、系统信息、无害工作目录准备、EICAR/无害测试文件上传、上传后状态观测、case 报告、保守评测摘要、metadata-only 证据包、默认关闭的受控触发、低侵入式执行观测和产品日志归一化。不接触真实病毒样本，不暴露任意命令执行接口；默认工作流不执行样本，真实触发必须显式启用 execution 并限定为当前 case 已登记的上传文件。
 
 配置默认关闭：
 
@@ -222,6 +222,9 @@ python -m cloud_av_agent_lab guest-upload-sample --config configs/lab.local.toml
 python -m cloud_av_agent_lab guest-case-status --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
 python -m cloud_av_agent_lab guest-case-report --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
 python -m cloud_av_agent_lab guest-execute-sample --config configs/lab.local.toml --vm-id sg-win10 --sample-id case-001 --case-id case-001__tencent-pc-manager
+python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml --vm-id win10-huorong --case-id case-001__huorong --product huorong
+python -m cloud_av_agent_lab guest-case-summary --config configs/lab.local.toml --vm-id win10-huorong --case-id case-001__huorong
+python -m cloud_av_agent_lab guest-export-evidence --config configs/lab.local.toml --vm-id win10-huorong --case-id case-001__huorong --output .\artifacts\case_evidence_case-001__huorong.zip
 ```
 
 最小端到端验证流程可以使用 EICAR 或无害命令 exe。以下命令只展示控制面顺序，真实值请替换为本地配置中的 `vm-id`、`sample-id` 和准备好的 `case-id`：
@@ -281,7 +284,11 @@ python -m cloud_av_agent_lab guest-execute-sample `
 
 每个 case 会维护 `case_state.json`、`events.jsonl` 和 `case_report.json`。`guest-case-report` 汇总投送阶段 metadata 和 execution 区域，但不读取 Defender 或其他杀软日志，不读取样本内容。
 
-受控触发能力默认关闭。`guest-execute-sample` 默认请求 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata 和路径归属，不启动样本进程；显式加 `--real-action` 时会请求 `execute_uploaded_sample`，只有云端 Guest Agent 启用 execution 且提供正确执行 token 时，才会直接启动当前 case 的已登记上传文件。该真实执行路径使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`，不接受任意路径、命令、shell/cmd/PowerShell 或参数。执行观测是低侵入式只读元信息快照，只观测当前 case 的 root PID 及子进程，不缓存进程对象，不阻碍 Defender 或其他安全软件终止进程。下一步验证可以使用 EICAR 或无害命令 exe；依旧不引入有害样本，本地也仍不执行任何样本。proof 文件只作为早期联调辅助，长期评测需要结合投送状态、执行观测和后续只读安全产品日志证据。详细协议和单实例串行锁设计见 [GUEST_AGENT.md](docs/GUEST_AGENT.md)，受控触发模型见 [EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md)，Windows 免 Python 部署见 [GUEST_AGENT_DEPLOYMENT.md](docs/GUEST_AGENT_DEPLOYMENT.md)。
+收集阶段新增 `guest-collect-logs --product huorong`，通过云端 Guest Agent 读取火绒日志副本并输出 `case_collection.json`。火绒 collector 会先把 `C:\ProgramData\Huorong\sysdiag\log.db`、`log.db-shm`、`log.db-wal` 复制到当前 case 的 `collection\huorong\` artifact 目录，再只读打开 SQLite 并自动发现最新的 `HrLogV3_*` 表。JSON payload 列会优先按常见列名识别，包含真实火绒表里的 DB 列 `detail`；该列 JSON 内部还有嵌套 `detail` 对象。识别不到时按火绒导出脚本的约定读取第 5 列。输出包含统一时间线、时间窗口、normalized product-log events 和保守 verdict：只有产品日志证据匹配当前 case 的 hash、sample path、root/child PID 或时间窗口时才判定 `intercepted`；单独的文件消失或进程不可观察不会被直接判定为杀软拦截。设计见 [COLLECTION_MODEL.md](docs/COLLECTION_MODEL.md)。
+
+Evaluation / Evidence Export MVP 在 collection 之后运行。collector 只负责产品日志收集和归一化；`evaluation` 模块汇总投送、执行和 collection 证据，生成保守的 `case_summary.json` / `case_summary.md`，CLI 命令为 `guest-case-summary`。CLI 默认输出类似 `case_summary.md` 的简洁结论；需要完整结构时显式加 `--json`。summary timeline 会剔除重复轮询事件，只保留 upload/execution 状态变化、collection 边界和产品日志证据；完整审计流水仍保留在 `events.jsonl`。`evidence` exporter 生成可归档的 `case_evidence_<case_id>.zip`，CLI 命令为 `guest-export-evidence`。证据包只包含 metadata：`manifest.json`、`case_state.json`、`case_report.json`、`case_collection.json`、`case_summary.json`、`events.jsonl` 和 normalized evidence；不包含 `sample/` 目录、上传样本本体、token、环境变量、云密钥或真实云配置文件。verdict 仍保持保守：产品日志有明确证据才给出 `detected_or_blocked`，单独的文件消失只会被汇总为 `suspiciously_removed`，进程消失不会单独解释为杀软拦截。
+
+受控触发能力默认关闭。`guest-execute-sample` 默认请求 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata 和路径归属，不启动样本进程；显式加 `--real-action` 时会请求 `execute_uploaded_sample`，只有云端 Guest Agent 启用 execution 且提供正确执行 token 时，才会直接启动当前 case 的已登记上传文件。该真实执行路径使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`，不接受任意路径、命令、shell/cmd/PowerShell 或参数。执行观测是低侵入式只读元信息快照，只观测当前 case 的 root PID 及子进程，不缓存进程对象，不阻碍 Defender 或其他安全软件终止进程。下一步验证可以使用 EICAR 或无害命令 exe；依旧不引入有害样本，本地也仍不执行任何样本。proof 文件只作为早期联调辅助，长期评测需要结合投送状态、执行观测和只读安全产品日志证据。详细协议和单实例串行锁设计见 [GUEST_AGENT.md](docs/GUEST_AGENT.md)，受控触发模型见 [EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md)，收集模型见 [COLLECTION_MODEL.md](docs/COLLECTION_MODEL.md)，Windows 免 Python 部署见 [GUEST_AGENT_DEPLOYMENT.md](docs/GUEST_AGENT_DEPLOYMENT.md)。
 
 ## 后续接入点
 

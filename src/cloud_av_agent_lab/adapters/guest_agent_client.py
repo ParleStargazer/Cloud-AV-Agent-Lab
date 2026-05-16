@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,6 +79,72 @@ class GuestAgentClient:
     def case_report(self, case_id: str) -> GuestAgentResponse:
         return self._request(
             f"cases/{quote(case_id, safe='')}/report",
+            method="GET",
+        )
+
+    def case_summary(self, case_id: str) -> GuestAgentResponse:
+        return self._request(
+            f"cases/{quote(case_id, safe='')}/summary",
+            method="GET",
+        )
+
+    def export_evidence_bundle(
+        self,
+        case_id: str,
+        output_path: str | Path,
+    ) -> GuestAgentResponse:
+        if not self.config.enabled:
+            raise GuestAgentError("Guest Agent is disabled in config", source="local")
+        url = urljoin(
+            self.base_url,
+            f"cases/{quote(case_id, safe='')}/evidence-bundle",
+        )
+        try:
+            response = self.network.request_binary(
+                method="GET",
+                url=url,
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout_seconds=self.config.timeout_seconds,
+            )
+        except Exception as exc:
+            raise GuestAgentError(
+                _format_network_error("evidence-bundle", exc),
+                source="network",
+            ) from exc
+
+        if not 200 <= response.status < 300:
+            return _decode_guest_agent_response("evidence-bundle", response)
+
+        destination = Path(output_path)
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(response.body)
+        except OSError as exc:
+            raise GuestAgentError(
+                "failed to write evidence bundle output",
+                source="local",
+            ) from exc
+        return GuestAgentResponse(
+            status="ok",
+            message="evidence bundle saved",
+            data={
+                "case_id": case_id,
+                "output_path": str(destination),
+                "size": len(response.body),
+                "sha256": hashlib.sha256(response.body).hexdigest(),
+                "content_type": str(response.headers.get("content-type", "")),
+            },
+        )
+
+    def collect_logs(self, case_id: str, product_id: str) -> GuestAgentResponse:
+        return self._request(
+            f"cases/{quote(case_id, safe='')}/collection/{quote(product_id, safe='')}",
+            method="POST",
+        )
+
+    def collection_status(self, case_id: str) -> GuestAgentResponse:
+        return self._request(
+            f"cases/{quote(case_id, safe='')}/collection/status",
             method="GET",
         )
 

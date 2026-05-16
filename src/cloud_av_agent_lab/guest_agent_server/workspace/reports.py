@@ -37,6 +37,7 @@ def _build_case_report(workspace: Path, max_events: int) -> dict[str, Any]:
     case_data = _read_json_file(workspace / "case.json")
     state = _read_json_file(workspace / "case_state.json")
     sample_metadata = _read_json_file(workspace / "sample" / "sample.json")
+    collection_data = _read_json_file(workspace / "case_collection.json")
     all_events = _read_recent_events(workspace / "events.jsonl", max_events=1000)
     recent_events = all_events[-max(0, max_events) :]
 
@@ -108,6 +109,18 @@ def _build_case_report(workspace: Path, max_events: int) -> dict[str, Any]:
             "sample_path_under_case": bool(
                 execution_state.get("sample_path_under_case", False)
             ),
+        },
+        "collection": {
+            "product_id": str(collection_data.get("product_id", "")),
+            "state": str(collection_data.get("collection_state", "not_collected")),
+            "verdict": str(collection_data.get("verdict", "unknown")),
+            "intercepted": collection_data.get("intercepted"),
+            "reason": str(collection_data.get("reason", "")),
+            "evidence_count": _coerce_int(collection_data.get("evidence_count")) or 0,
+            "collected_at_utc": str(collection_data.get("collected_at_utc", "")),
+            "errors": list(collection_data.get("errors", []))
+            if isinstance(collection_data.get("errors"), list)
+            else [],
         },
         "recent_events": recent_events,
     }

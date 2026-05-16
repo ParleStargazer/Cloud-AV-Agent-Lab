@@ -202,6 +202,49 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(exit_error.exception.code, 2)
         self.assertIn("[Local Check]", stderr.getvalue())
 
+    def test_guest_case_summary_exits_clearly_when_guest_agent_disabled(self) -> None:
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+            main(
+                [
+                    "guest-case-summary",
+                    "--config",
+                    str(ROOT / "configs" / "lab.example.toml"),
+                    "--vm-id",
+                    "win10-tencent-manager",
+                    "--case-id",
+                    "case-001__tencent-pc-manager",
+                ]
+            )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("[Local Check]", stderr.getvalue())
+
+    def test_guest_export_evidence_exits_clearly_when_guest_agent_disabled(
+        self,
+    ) -> None:
+        stderr = StringIO()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+                main(
+                    [
+                        "guest-export-evidence",
+                        "--config",
+                        str(ROOT / "configs" / "lab.example.toml"),
+                        "--vm-id",
+                        "win10-tencent-manager",
+                        "--case-id",
+                        "case-001__tencent-pc-manager",
+                        "--output",
+                        str(Path(tmp) / "bundle.zip"),
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("[Local Check]", stderr.getvalue())
+
     def test_guest_execution_status_exits_clearly_when_guest_agent_disabled(
         self,
     ) -> None:
@@ -217,6 +260,27 @@ class CloudLifecycleCliGuardTests(TestCase):
                     "win10-tencent-manager",
                     "--case-id",
                     "case-001__tencent-pc-manager",
+                ]
+            )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("[Local Check]", stderr.getvalue())
+
+    def test_guest_collect_logs_exits_clearly_when_guest_agent_disabled(self) -> None:
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+            main(
+                [
+                    "guest-collect-logs",
+                    "--config",
+                    str(ROOT / "configs" / "lab.example.toml"),
+                    "--vm-id",
+                    "win10-huorong",
+                    "--case-id",
+                    "case-001__huorong",
+                    "--product",
+                    "huorong",
                 ]
             )
 
@@ -245,6 +309,221 @@ class CloudLifecycleCliGuardTests(TestCase):
 
         self.assertEqual(exit_error.exception.code, 2)
         self.assertIn("[Local Check]", stderr.getvalue())
+
+    def test_guest_collect_logs_calls_collect_method(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+            stdout = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "guest-collect-logs",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-huorong",
+                        "--case-id",
+                        "case-001__huorong",
+                        "--product",
+                        "huorong",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_client.collect_calls, 1)
+        self.assertIn('"message": "collection completed"', stdout.getvalue())
+        self.assertIn('"verdict": "intercepted"', stdout.getvalue())
+
+    def test_guest_case_summary_outputs_verdict_and_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+            stdout = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "guest-case-summary",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-huorong",
+                        "--case-id",
+                        "case-001__huorong",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("Verdict: detected_or_blocked", output)
+        self.assertIn("Huorong collector", output)
+        self.assertIn("Timeline:", output)
+        self.assertNotIn('"status": "ok"', output)
+
+    def test_guest_case_summary_json_outputs_full_response(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+            stdout = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "guest-case-summary",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-huorong",
+                        "--case-id",
+                        "case-001__huorong",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn('"status": "ok"', output)
+        self.assertIn('"timeline"', output)
+        self.assertNotIn("Key Reasons:", output)
+
+    def test_guest_export_evidence_saves_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            output_path = Path(tmp) / "case_evidence.zip"
+            fake_client = _FakeGuestAgentClient()
+            stdout = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "guest-export-evidence",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-huorong",
+                        "--case-id",
+                        "case-001__huorong",
+                        "--output",
+                        str(output_path),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(output_path.is_file())
+            self.assertEqual(fake_client.export_calls, 1)
+            self.assertIn("Evidence bundle saved to:", stdout.getvalue())
+
+    def test_guest_collect_logs_404_suggests_prepare_case(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FailingGuestAgentClient(
+                GuestAgentError(
+                    "Guest Agent cases/missing-case/collection/huorong returned "
+                    "HTTP 404 Not Found: case workspace does not exist; run "
+                    "guest-prepare-case first",
+                    status_code=404,
+                )
+            )
+            stderr = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
+                main(
+                    [
+                        "guest-collect-logs",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-huorong",
+                        "--case-id",
+                        "missing-case",
+                        "--product",
+                        "huorong",
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        output = stderr.getvalue()
+        self.assertIn("HTTP 404 Not Found", output)
+        self.assertIn("guest-prepare-case", output)
+        self.assertIn("请确认 case_id 是否正确", output)
+
+    def test_guest_case_summary_404_suggests_prepare_case(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FailingGuestAgentClient(
+                GuestAgentError(
+                    "Guest Agent cases/missing-case/summary returned HTTP 404 "
+                    "Not Found: case workspace does not exist; run "
+                    "guest-prepare-case first",
+                    status_code=404,
+                )
+            )
+            stderr = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
+                main(
+                    [
+                        "guest-case-summary",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-huorong",
+                        "--case-id",
+                        "missing-case",
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        output = stderr.getvalue()
+        self.assertIn("HTTP 404 Not Found", output)
+        self.assertIn("guest-prepare-case", output)
+        self.assertIn("请确认 case_id 是否正确", output)
 
     def test_guest_upload_command_only_calls_upload_method(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -763,6 +1042,9 @@ class _FakeGuestAgentClient:
         self.execution_status_states = list(execution_status_states or [])
         self.upload_calls = 0
         self.case_status_calls = 0
+        self.collect_calls = 0
+        self.summary_calls = 0
+        self.export_calls = 0
         self.execution_status_calls = 0
         self.execute_calls: list[dict[str, object]] = []
         self.execute_called = False
@@ -809,6 +1091,77 @@ class _FakeGuestAgentClient:
             data={
                 "case_id": case_id,
                 "upload_state": self.status_upload_state,
+            },
+        )
+
+    def case_summary(self, case_id: str) -> GuestAgentResponse:
+        self.summary_calls += 1
+        return GuestAgentResponse(
+            status="ok",
+            message="case summary loaded",
+            data={
+                "case_id": case_id,
+                "sample_id": "case-001",
+                "product_id": "huorong",
+                "verdict": "detected_or_blocked",
+                "confidence": "high",
+                "summary": "Huorong collector 找到了明确拦截证据。",
+                "reasons": [
+                    "collection evidence_count>0",
+                    "product log evidence indicates detection or blocking",
+                ],
+                "timeline": [
+                    {
+                        "timestamp_utc": "2026-05-16T00:00:00Z",
+                        "source": "product_log",
+                        "event_type": "av_quarantined",
+                        "message": "Huorong collector matched this case",
+                    }
+                ],
+            },
+        )
+
+    def export_evidence_bundle(
+        self,
+        case_id: str,
+        output_path: str | Path,
+    ) -> GuestAgentResponse:
+        self.export_calls += 1
+        destination = Path(output_path)
+        destination.write_bytes(b"fake-zip")
+        return GuestAgentResponse(
+            status="ok",
+            message="evidence bundle saved",
+            data={
+                "case_id": case_id,
+                "output_path": str(destination),
+                "size": len(b"fake-zip"),
+                "sha256": "0" * 64,
+            },
+        )
+
+    def collect_logs(self, case_id: str, product_id: str) -> GuestAgentResponse:
+        self.collect_calls += 1
+        return GuestAgentResponse(
+            status="ok",
+            message="collection completed",
+            data={
+                "case_id": case_id,
+                "product_id": product_id,
+                "collection_state": "collected",
+                "verdict": "intercepted",
+                "intercepted": True,
+                "evidence_count": 1,
+            },
+        )
+
+    def collection_status(self, case_id: str) -> GuestAgentResponse:
+        return GuestAgentResponse(
+            status="ok",
+            message="collection status loaded",
+            data={
+                "case_id": case_id,
+                "collection_state": "collected",
             },
         )
 
@@ -907,6 +1260,22 @@ class _FailingGuestAgentClient:
         raise self.error
 
     def case_report(self, case_id: str) -> GuestAgentResponse:
+        raise self.error
+
+    def case_summary(self, case_id: str) -> GuestAgentResponse:
+        raise self.error
+
+    def export_evidence_bundle(
+        self,
+        case_id: str,
+        output_path: str | Path,
+    ) -> GuestAgentResponse:
+        raise self.error
+
+    def collect_logs(self, case_id: str, product_id: str) -> GuestAgentResponse:
+        raise self.error
+
+    def collection_status(self, case_id: str) -> GuestAgentResponse:
         raise self.error
 
     def execution_status(

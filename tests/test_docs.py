@@ -18,3 +18,17 @@ class DocsTests(TestCase):
         self.assertIn("must not accept or run shell", text)
         self.assertIn("execute_uploaded_sample", text)
         self.assertIn("execution_disabled", text)
+
+    def test_collection_model_exists_and_documents_conservative_verdicts(self) -> None:
+        path = ROOT / "docs" / "COLLECTION_MODEL.md"
+
+        self.assertTrue(path.is_file())
+        text = path.read_text(encoding="utf-8").casefold()
+        self.assertIn("collector plugin model", text)
+        self.assertIn("unified event timeline", text)
+        self.assertIn("time window", text)
+        self.assertIn("conservative verdict", text)
+        self.assertIn("removed_after_save", text)
+        self.assertIn("evaluator", text)
+        self.assertIn("exporter", text)
+        self.assertIn("uploaded sample body", text)

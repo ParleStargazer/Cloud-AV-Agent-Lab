@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,11 +19,15 @@ try:
     from fastapi.testclient import TestClient
 
     from cloud_av_agent_lab.guest_agent_server.app import create_app
+    from cloud_av_agent_lab.guest_agent_server.collectors.huorong import (
+        HuorongLogCollector,
+    )
     from cloud_av_agent_lab.guest_agent_server.workspace import FileProbe
 except ModuleNotFoundError:  # pragma: no cover - optional dependency absent
     TestClient = None
     create_app = None
     FileProbe = None
+    HuorongLogCollector = None
 
 
 TOKEN = "unit-test-token"
@@ -938,6 +946,383 @@ class GuestAgentServerTests(unittest.TestCase):
         event_types = [event["event_type"] for event in events]
         self.assertIn("sample_missing_before_execution", event_types)
 
+    def test_collect_huorong_logs_writes_case_collection(self) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        _write_huorong_log_db(
+            log_dir / "log.db",
+            sha256="0" * 64,
+            sample_path=r"C:\CloudAvAgentLab\cases\case-001__huorong\sample\eicar.txt",
+        )
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+        self.client.post(
+            "/cases/case-001__huorong/sample",
+            headers=self._upload_headers(),
+            content=b"EICAR harmless placeholder",
+        )
+
+        with patch.object(HuorongLogCollector, "DEFAULT_LOG_DIR", log_dir):
+            response = self.client.post(
+                "/cases/case-001__huorong/collection/huorong",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_state"], "collected")
+        self.assertEqual(data["verdict"], "intercepted")
+        self.assertTrue(data["intercepted"])
+        self.assertEqual(data["evidence_count"], 1)
+        self.assertEqual(data["events"][0]["event_type"], "av_quarantined")
+        self.assertEqual(data["timeline"][-1]["source"], "product_log")
+        workspace = self.workdir / "cases" / "case-001__huorong"
+        collection_file = workspace / "case_collection.json"
+        self.assertTrue(collection_file.is_file())
+        saved = json.loads(collection_file.read_text(encoding="utf-8"))
+        self.assertEqual(saved["product_id"], "huorong")
+        self.assertTrue((workspace / "collection" / "huorong" / "log.db").is_file())
+        self.assertNotIn(TOKEN, response.text)
+        self.assertNotIn(UPLOAD_TOKEN, response.text)
+
+    def test_collect_huorong_logs_discovers_rotated_table_name(self) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        _write_huorong_log_db(
+            log_dir / "log.db",
+            sha256="0" * 64,
+            table_name="HrLogV3_61",
+        )
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+        self.client.post(
+            "/cases/case-001__huorong/sample",
+            headers=self._upload_headers(),
+            content=b"EICAR harmless placeholder",
+        )
+
+        with patch.object(HuorongLogCollector, "DEFAULT_LOG_DIR", log_dir):
+            response = self.client.post(
+                "/cases/case-001__huorong/collection/huorong",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_state"], "collected")
+        self.assertEqual(data["verdict"], "intercepted")
+        self.assertEqual(data["evidence_count"], 1)
+
+    def test_collect_huorong_logs_accepts_millisecond_timestamps(self) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        _write_huorong_log_db(
+            log_dir / "log.db",
+            sha256="0" * 64,
+            timestamp=int(datetime.now(timezone.utc).timestamp() * 1000),
+        )
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+        self.client.post(
+            "/cases/case-001__huorong/sample",
+            headers=self._upload_headers(),
+            content=b"EICAR harmless placeholder",
+        )
+
+        with patch.object(HuorongLogCollector, "DEFAULT_LOG_DIR", log_dir):
+            response = self.client.post(
+                "/cases/case-001__huorong/collection/huorong",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_state"], "collected")
+        self.assertEqual(data["verdict"], "intercepted")
+        self.assertEqual(data["evidence_count"], 1)
+
+    def test_collect_huorong_logs_reads_json_from_fifth_column(self) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        _write_huorong_log_db(
+            log_dir / "log.db",
+            sha256="0" * 64,
+            timestamp_column="timestamp",
+            json_column="payload",
+        )
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+        self.client.post(
+            "/cases/case-001__huorong/sample",
+            headers=self._upload_headers(),
+            content=b"EICAR harmless placeholder",
+        )
+
+        with patch.object(HuorongLogCollector, "DEFAULT_LOG_DIR", log_dir):
+            response = self.client.post(
+                "/cases/case-001__huorong/collection/huorong",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_state"], "collected")
+        self.assertEqual(data["verdict"], "intercepted")
+        self.assertEqual(data["evidence_count"], 1)
+        self.assertEqual(data["events"][0]["evidence"]["json_column"], "payload")
+
+    def test_collect_huorong_logs_reads_detail_column_with_nested_detail(self) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        _write_huorong_log_db(
+            log_dir / "log.db",
+            sha256="0" * 64,
+            timestamp_column="timestamp",
+            json_column="detail",
+        )
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+        self.client.post(
+            "/cases/case-001__huorong/sample",
+            headers=self._upload_headers(),
+            content=b"EICAR harmless placeholder",
+        )
+
+        with patch.object(HuorongLogCollector, "DEFAULT_LOG_DIR", log_dir):
+            response = self.client.post(
+                "/cases/case-001__huorong/collection/huorong",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_state"], "collected")
+        self.assertEqual(data["verdict"], "intercepted")
+        self.assertEqual(data["evidence_count"], 1)
+        self.assertEqual(data["events"][0]["evidence"]["json_column"], "detail")
+        self.assertEqual(
+            data["events"][0]["evidence"]["detail"]["recname"],
+            "TEST/AVEngTestFile!EICAR",
+        )
+
+    def test_collect_huorong_logs_returns_available_tables_on_missing_table(
+        self,
+    ) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        _write_huorong_log_db(
+            log_dir / "log.db",
+            sha256="0" * 64,
+            table_name="OtherLogTable",
+        )
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+
+        with patch.object(HuorongLogCollector, "DEFAULT_LOG_DIR", log_dir):
+            response = self.client.post(
+                "/cases/case-001__huorong/collection/huorong",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_state"], "failed")
+        self.assertEqual(data["verdict"], "unknown")
+        self.assertIn("available_tables", data["errors"][0])
+        self.assertIn("OtherLogTable", data["errors"][0])
+
+    def test_collection_status_reads_case_collection_without_sample_content(
+        self,
+    ) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        _write_huorong_log_db(log_dir / "log.db", sha256="0" * 64)
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+        self.client.post(
+            "/cases/case-001__huorong/sample",
+            headers=self._upload_headers(),
+            content=b"DO-NOT-READ-SAMPLE-CONTENT",
+        )
+        with patch.object(HuorongLogCollector, "DEFAULT_LOG_DIR", log_dir):
+            self.client.post(
+                "/cases/case-001__huorong/collection/huorong",
+                headers=self._headers(),
+            )
+
+        response = self.client.get(
+            "/cases/case-001__huorong/collection/status",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_state"], "collected")
+        self.assertEqual(data["verdict"], "intercepted")
+        self.assertNotIn("DO-NOT-READ-SAMPLE-CONTENT", response.text)
+        self.assertNotIn(TOKEN, response.text)
+
+    def test_collection_missing_case_returns_404(self) -> None:
+        response = self.client.post(
+            "/cases/missing-case/collection/huorong",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("guest-prepare-case", response.json()["detail"])
+
+    def test_collection_rejects_path_traversal_case_id(self) -> None:
+        response = self.client.post(
+            "/cases/..%2Fescape/collection/huorong",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse((self.workdir.parent / "escape").exists())
+
+    def test_case_summary_success_generates_conservative_verdict(self) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        _write_huorong_log_db(log_dir / "log.db", sha256="0" * 64)
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+        self.client.post(
+            "/cases/case-001__huorong/sample",
+            headers=self._upload_headers(),
+            content=b"EICAR harmless placeholder",
+        )
+        with patch.object(HuorongLogCollector, "DEFAULT_LOG_DIR", log_dir):
+            self.client.post(
+                "/cases/case-001__huorong/collection/huorong",
+                headers=self._headers(),
+            )
+
+        response = self.client.get(
+            "/cases/case-001__huorong/summary",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        summary = payload["data"]
+        self.assertEqual(payload["message"], "case summary loaded")
+        self.assertEqual(summary["case_id"], "case-001__huorong")
+        self.assertEqual(summary["verdict"], "detected_or_blocked")
+        self.assertEqual(summary["confidence"], "high")
+        self.assertGreaterEqual(len(summary["reasons"]), 1)
+        workspace = self.workdir / "cases" / "case-001__huorong"
+        self.assertTrue((workspace / "case_summary.json").is_file())
+        self.assertTrue((workspace / "case_summary.md").is_file())
+        self.assertNotIn(TOKEN, response.text)
+        self.assertNotIn("EICAR harmless placeholder", response.text)
+
+    def test_case_summary_missing_case_returns_404(self) -> None:
+        response = self.client.get(
+            "/cases/missing-case/summary",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("guest-prepare-case", response.json()["detail"])
+
+    def test_evidence_bundle_success_excludes_sample_and_has_manifest_hashes(
+        self,
+    ) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        _write_huorong_log_db(log_dir / "log.db", sha256="0" * 64)
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+        self.client.post(
+            "/cases/case-001__huorong/sample",
+            headers=self._upload_headers(),
+            content=b"DO-NOT-READ-SAMPLE-CONTENT",
+        )
+        with patch.object(HuorongLogCollector, "DEFAULT_LOG_DIR", log_dir):
+            self.client.post(
+                "/cases/case-001__huorong/collection/huorong",
+                headers=self._headers(),
+            )
+
+        response = self.client.get(
+            "/cases/case-001__huorong/evidence-bundle",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/zip")
+        bundle_path = self.workdir / "bundle.zip"
+        bundle_path.write_bytes(response.content)
+        with zipfile.ZipFile(bundle_path) as bundle:
+            names = set(bundle.namelist())
+            self.assertIn("manifest.json", names)
+            self.assertIn("case_state.json", names)
+            self.assertIn("case_report.json", names)
+            self.assertIn("case_collection.json", names)
+            self.assertIn("case_summary.json", names)
+            self.assertIn("events.jsonl", names)
+            self.assertIn("collector/normalized_evidence.json", names)
+            self.assertFalse(any(name.startswith("sample/") for name in names))
+            self.assertNotIn("configs/real.toml", names)
+            manifest = json.loads(bundle.read("manifest.json").decode("utf-8"))
+            for item in manifest["files"]:
+                content = bundle.read(item["path"])
+                self.assertEqual(item["sha256"], hashlib.sha256(content).hexdigest())
+            bundle_text = "\n".join(
+                bundle.read(name).decode("utf-8", errors="ignore")
+                for name in names
+                if name.endswith((".json", ".jsonl", ".md"))
+            )
+        self.assertNotIn("DO-NOT-READ-SAMPLE-CONTENT", bundle_text)
+        self.assertNotIn(TOKEN, bundle_text)
+        self.assertNotIn(UPLOAD_TOKEN, bundle_text)
+        self.assertNotIn("real.toml", bundle_text.casefold())
+
+    def test_evidence_bundle_missing_case_returns_404(self) -> None:
+        response = self.client.get(
+            "/cases/missing-case/evidence-bundle",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("guest-prepare-case", response.json()["detail"])
+
 
 def _prepare_payload() -> dict[str, object]:
     return {
@@ -965,6 +1350,72 @@ def _prepare_payload() -> dict[str, object]:
             "vendor": "Tencent",
         },
     }
+
+
+def _prepare_huorong_payload() -> dict[str, object]:
+    payload = _prepare_payload()
+    payload["case"] = {"id": "case-001__huorong"}
+    payload["vm"] = {
+        **payload["vm"],
+        "id": "sg-win10-huorong",
+        "product_id": "huorong",
+    }
+    payload["product"] = {
+        "id": "huorong",
+        "display_name": "Huorong Internet Security",
+        "vendor": "Huorong",
+    }
+    return payload
+
+
+def _write_huorong_log_db(
+    path: Path,
+    sha256: str,
+    sample_path: str = r"C:\CloudAvAgentLab\cases\case-001__huorong\sample\eicar.txt",
+    table_name: str = "HrLogV3_60",
+    timestamp: int | None = None,
+    timestamp_column: str = "ts",
+    json_column: str = "raw_json",
+) -> None:
+    db = sqlite3.connect(path)
+    try:
+        db.execute(
+            f"CREATE TABLE {table_name} ("
+            f"id INTEGER, fid INTEGER, fname TEXT, {timestamp_column} INTEGER, "
+            f"{json_column} TEXT, guid INTEGER"
+            ")"
+        )
+        raw_json = {
+            "guid": 1,
+            "fid": 60,
+            "detail": {
+                "recname": "TEST/AVEngTestFile!EICAR",
+                "description": "EICAR test string detected",
+                "risk": "high",
+                "action": "quarantine",
+                "treatment": "quarantine",
+                "result": "success",
+                "pathname": sample_path,
+                "sha256": sha256,
+            },
+            "version": {"product": "Huorong", "dbtime": "test"},
+        }
+        db.execute(
+            f"INSERT INTO {table_name} (id, fid, fname, {timestamp_column}, "
+            f"{json_column}, guid) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                60,
+                "filemon",
+                timestamp or int(datetime.now(timezone.utc).timestamp()),
+                json.dumps(raw_json),
+                1,
+            ),
+        )
+        db.commit()
+    finally:
+        db.close()
 
 
 def _read_events(path: Path) -> list[dict[str, object]]:

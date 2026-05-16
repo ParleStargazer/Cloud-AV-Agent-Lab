@@ -102,6 +102,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     guest_report.add_argument("--case-id", required=True, help="prepared case id")
 
+    guest_summary = subparsers.add_parser(
+        "guest-case-summary",
+        help="query cloud-side Guest Agent evaluation summary verdict",
+    )
+    guest_summary.add_argument("--config", required=True, help="path to TOML config")
+    guest_summary.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+    guest_summary.add_argument("--case-id", required=True, help="prepared case id")
+    guest_summary.add_argument(
+        "--json",
+        action="store_true",
+        help="print full case_summary JSON instead of concise text",
+    )
+
+    guest_export = subparsers.add_parser(
+        "guest-export-evidence",
+        help="download a metadata-only Guest Agent evidence bundle zip",
+    )
+    guest_export.add_argument("--config", required=True, help="path to TOML config")
+    guest_export.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+    guest_export.add_argument("--case-id", required=True, help="prepared case id")
+    guest_export.add_argument(
+        "--output",
+        required=True,
+        help="destination path for case_evidence_<case_id>.zip",
+    )
+
     guest_execution_status = subparsers.add_parser(
         "guest-execution-status",
         help="query cloud-side Guest Agent execution process observation status",
@@ -114,6 +144,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     guest_execution_status.add_argument(
         "--case-id", required=True, help="prepared case id"
+    )
+
+    guest_collect = subparsers.add_parser(
+        "guest-collect-logs",
+        help="collect cloud-side security product logs for a prepared case",
+    )
+    guest_collect.add_argument("--config", required=True, help="path to TOML config")
+    guest_collect.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+    guest_collect.add_argument("--case-id", required=True, help="prepared case id")
+    guest_collect.add_argument(
+        "--product",
+        required=True,
+        choices=["huorong"],
+        help="collector product id; currently supported: huorong",
     )
 
     guest_execute = subparsers.add_parser(
@@ -345,6 +391,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_guest_response(response)
         return 0
 
+    if args.command == "guest-case-summary":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        _ensure_guest_agent_enabled(parser, config)
+        try:
+            response = _create_guest_agent_client(config).case_summary(args.case_id)
+        except GuestAgentError as exc:
+            parser.exit(2, _format_guest_error(exc))
+        if args.json:
+            _print_guest_response(response)
+        else:
+            _print_case_summary(response.data)
+        return 0
+
+    if args.command == "guest-export-evidence":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        _ensure_guest_agent_enabled(parser, config)
+        try:
+            response = _create_guest_agent_client(config).export_evidence_bundle(
+                args.case_id,
+                args.output,
+            )
+        except GuestAgentError as exc:
+            parser.exit(2, _format_guest_error(exc))
+        _print_guest_response(response)
+        print(f"Evidence bundle saved to: {response.data.get('output_path', '')}")
+        return 0
+
     if args.command == "guest-execution-status":
         vm = config.vms.get(args.vm_id)
         if vm is None:
@@ -352,6 +429,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         _ensure_guest_agent_enabled(parser, config)
         try:
             response = _create_guest_agent_client(config).execution_status(args.case_id)
+        except GuestAgentError as exc:
+            parser.exit(2, _format_guest_error(exc))
+        _print_guest_response(response)
+        return 0
+
+    if args.command == "guest-collect-logs":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        if args.product not in config.products:
+            parser.exit(2, f"error: unknown product id {args.product!r}\n")
+        if vm.product_id != args.product:
+            parser.exit(
+                2,
+                "error: [Local Check] VM profile product_id does not match "
+                f"--product ({vm.product_id!r} != {args.product!r})\n",
+            )
+        _ensure_guest_agent_enabled(parser, config)
+        try:
+            response = _create_guest_agent_client(config).collect_logs(
+                args.case_id,
+                args.product,
+            )
         except GuestAgentError as exc:
             parser.exit(2, _format_guest_error(exc))
         _print_guest_response(response)
@@ -627,6 +727,38 @@ def _print_guest_response(response: GuestAgentResponse) -> None:
             indent=2,
         )
     )
+
+
+def _print_case_summary(data: dict[str, object]) -> None:
+    print(f"Case: {data.get('case_id', '')}")
+    print(f"Product: {data.get('product_id', '')}")
+    print(f"Sample: {data.get('sample_id', '')}")
+    print(f"Verdict: {data.get('verdict', '')}")
+    print(f"Confidence: {data.get('confidence', '')}")
+    summary = str(data.get("summary", ""))
+    if summary:
+        print("")
+        print("Summary:")
+        print(summary)
+    reasons = data.get("reasons", [])
+    if isinstance(reasons, list) and reasons:
+        print("")
+        print("Key Reasons:")
+        for reason in reasons:
+            print(f"- {reason}")
+    timeline = data.get("timeline", [])
+    if isinstance(timeline, list) and timeline:
+        print("")
+        print("Timeline:")
+        for item in timeline:
+            if not isinstance(item, dict):
+                continue
+            print(
+                "- "
+                f"{item.get('timestamp_utc', '')} "
+                f"[{item.get('source', '')}] "
+                f"{item.get('event_type', '')}: {item.get('message', '')}"
+            )
 
 
 def _print_guest_upload_response(response: GuestAgentResponse) -> None:

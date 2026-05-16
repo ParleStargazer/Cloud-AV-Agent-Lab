@@ -225,6 +225,7 @@ python -m cloud_av_agent_lab guest-upload-sample --config configs/lab.local.toml
 python -m cloud_av_agent_lab guest-case-status --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
 python -m cloud_av_agent_lab guest-case-report --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
 python -m cloud_av_agent_lab guest-execute-sample --config configs/lab.local.toml --vm-id sg-win10 --sample-id case-001 --case-id case-001__tencent-pc-manager
+python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml --vm-id win10-huorong --case-id case-001__huorong --product huorong
 ```
 
 `[guest_agent]` 默认 `enabled = false`。启用后，`GuestAgentClient` 会从 `token_env` 指定的环境变量读取 token，并发送 `Authorization: Bearer ...`。如果启用但 token 缺失，会抛出清晰配置错误。`prepare-case` 只发送 case、VM、产品和样本云端 URI/metadata，不发送本地样本路径，也不触发样本下载或执行。
@@ -242,6 +243,10 @@ python -m cloud_av_agent_lab guest-execute-sample --config configs/lab.local.tom
 `removed_after_save` 和 `locked_or_busy` 都不是 HTTP 上传失败。CLI 会给出 warning，并建议需要时使用 `guest-case-status` 查询 `case_state.json`、`sample.json` 和最近事件。只有鉴权失败、case 不存在、路径非法或磁盘写入失败等基础设施问题才会让命令失败退出。
 
 `guest-case-report` 会生成并读取云端 case 工作目录下的 `case_report.json`，汇总投送阶段 metadata、execution 观测摘要和最近事件：case/sample/vm/product 标识、上传状态、saved/removed/locked/stable 标记、文件名、哈希、大小、root PID、退出码、子进程摘要和时间戳。它不读取样本内容，不读取 Defender 或其他杀软日志；杀软日志采集和检测判定属于后续评测阶段。
+
+收集阶段已新增 `docs/COLLECTION_MODEL.md` 和 Guest Agent collector 插件模型。统一 schema 位于 `src/cloud_av_agent_lab/guest_agent_server/collectors/base.py`，首个产品实现位于 `collectors/huorong/`。`guest-collect-logs --product huorong` 会调用云端 `POST /cases/{case_id}/collection/huorong`，在 Guest Agent 内复制火绒 `C:\ProgramData\Huorong\sysdiag\log.db*` 到当前 case 的 `collection/huorong/` artifact 目录，再只读打开 SQLite 并自动发现最新的 `HrLogV3_*` 表。JSON payload 列会优先按 `detail`、`raw_json`、`payload`、`data`、`event_json` 等名称识别；真实火绒表中通常是 DB 列 `detail`，且该列 JSON 里还有嵌套 `detail` 对象。识别不到列名时按火绒导出脚本的约定读取第 5 列。输出写入 `case_collection.json`，包含 normalized product events、统一时间线、时间窗口、collection_state 和保守 verdict。只有产品日志中的 hash/path/pid/time-window 证据才会产生 `intercepted`；单独的 `removed_after_save` 或进程消失不会被直接判定为拦截。SQLite 读取失败会返回安全诊断信息，例如可用表名，不返回样本内容或 token。
+
+Evaluation / Evidence Export MVP 新增两条 Guest Agent CLI：`guest-case-summary` 和 `guest-export-evidence`。`guest-case-summary` 调用 `GET /cases/{case_id}/summary`，由 `cloud_av_agent_lab.evaluation` 汇总投送、执行和 collection 证据，生成 `case_summary.json` / `case_summary.md`。CLI 默认输出简洁结论，显式加 `--json` 时才打印完整结构；summary timeline 会折叠重复轮询事件，只保留关键状态变化、collection 边界和产品日志证据，完整审计仍在 `events.jsonl`。结论采用保守 verdict：产品日志证据优先给出 `detected_or_blocked`；只有文件消失但缺少日志证据时给出 `suspiciously_removed`；执行未发生或不可观察时不会武断判定未检出。`guest-export-evidence` 调用 `GET /cases/{case_id}/evidence-bundle`，保存 `case_evidence_<case_id>.zip`。证据包包含 manifest、case metadata、summary、events 和 normalized evidence，不包含 `sample/`、上传样本本体、token、环境变量、云密钥、真实云配置文件或 raw copied log DB。manifest 会记录 bundle 内每个文件的 SHA-256，便于后续归档核验。
 
 2026-05-13 实测结论：Microsoft Defender 在云端环境下对 EICAR 的处理时间存在波动，单次状态查询容易得到“处决前”的假 `stable`。因此不要把耗时观测放回 `POST /sample`，也不要把单次 `guest-case-status` 当作最终判定。当前推荐策略是 `guest-upload-sample` 自动执行动态轮询：先等待 10 秒，再每 2 秒查询一次，最多 30 秒；期间一旦出现 `removed_after_save` 即判定拦截成功，只有完整窗口结束后仍为 `stable` 才判定样本存活。
 

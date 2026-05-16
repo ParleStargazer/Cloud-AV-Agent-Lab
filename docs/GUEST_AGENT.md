@@ -28,6 +28,16 @@ chain for EICAR or harmless test files:
   `Path.exists` / `Path.stat` metadata check.
 - `GET /cases/{case_id}/report`: generate and return `case_report.json`, a
   delivery-stage summary built only from metadata, case state, and events.
+- `POST /cases/{case_id}/collection/{product_id}`: collect product logs for the
+  prepared case. The first supported collector is `huorong`.
+- `GET /cases/{case_id}/collection/status`: return the latest
+  `case_collection.json` summary without reading sample bytes.
+- `GET /cases/{case_id}/summary`: generate the conservative
+  `case_summary.json` evaluator result.
+- `GET /cases/{case_id}/evidence-bundle`: return a metadata-only evidence zip
+  that excludes sample bytes and secrets.
+- `GET /cases/{case_id}/execution-status`: observe only the current case root
+  PID and child process metadata.
 - `POST /cases/{case_id}/actions`: controlled action skeleton. It is not a
   command execution interface; real execution is disabled in this stage.
 
@@ -241,6 +251,73 @@ the registered sample when execution is explicitly enabled for the manual test.
 
 The full future trigger model is documented in `docs/EXECUTION_MODEL.md`.
 
+## Collection Stage
+
+The collection stage reads only security product logs and case metadata inside
+the cloud-isolated guest. It does not read sample contents and does not infer an
+AV verdict from upload or process observations alone.
+
+Current CLI:
+
+```powershell
+python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__huorong --product huorong
+python -m cloud_av_agent_lab guest-case-summary --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__huorong
+python -m cloud_av_agent_lab guest-export-evidence --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__huorong --output .\artifacts\case_evidence_case-001__huorong.zip
+```
+
+For Huorong, the Guest Agent copies `log.db`, `log.db-shm`, and `log.db-wal`
+from `C:\ProgramData\Huorong\sysdiag\` into
+`<workdir>\cases\<case_id>\collection\huorong\`, then opens the copied SQLite
+database in read-only mode. It discovers the latest `HrLogV3_*` table, parses
+the JSON payload column by known name or by the fifth-column convention used by
+the helper export script, and normalizes matching rows into product-log events.
+The observed Huorong schema uses a database column named `detail`, whose JSON
+payload also contains a nested `detail` object.
+
+The result is written to `case_collection.json` and includes:
+
+- `collection_state`: `collected`, `partial`, `failed`, or `not_collected`.
+- `verdict`: `intercepted`, `not_intercepted`, or `unknown`.
+- `events`: normalized product-log evidence.
+- `timeline`: Guest Agent events and product-log events sorted by UTC time.
+- `errors`: non-fatal collection or parse errors.
+
+Verdict handling is conservative. `removed_after_save` and process disappearance
+are useful observations, but they are not automatically treated as AV
+interception without product-log evidence. Full design details are in
+`docs/COLLECTION_MODEL.md`.
+
+## Evaluation And Evidence Export
+
+After collection, the project keeps three responsibilities separate:
+
+- collector: product-specific log copy, parse, and normalization;
+- evaluator: conservative verdict generation from delivery, execution, and
+  collection evidence;
+- exporter: metadata-only archive creation for review and long-term storage.
+
+`GET /cases/{case_id}/summary` generates and returns `case_summary.json`.
+The summary is intentionally compact: product, sample, verdict, confidence,
+short summary, key reasons, and a compact timeline. Repeated polling events are
+not copied into the summary timeline; it keeps only important state changes,
+collection boundaries, and product-log evidence. The full audit trail remains
+available in `events.jsonl` and in the evidence bundle. The CLI mirrors this:
+`guest-case-summary` prints concise text by default and prints the full JSON
+only when `--json` is provided. The evaluator prefers
+`detected_or_blocked` only when product-log evidence matches the current case.
+If the file was removed after save without product-log evidence, the verdict is
+`suspiciously_removed`; if execution did not happen or could not be observed,
+the verdict stays conservative rather than claiming a clean miss.
+
+`GET /cases/{case_id}/evidence-bundle` returns
+`case_evidence_<case_id>.zip`. The bundle contains `manifest.json`,
+`case_state.json`, `case_report.json`, `case_collection.json`,
+`case_summary.json`, `events.jsonl`, and normalized collector evidence. It does
+not include the `sample/` directory, uploaded sample bytes, token values,
+environment variables, cloud credentials, raw collector database copies, or real
+cloud configuration files. The manifest records SHA-256 hashes for every file
+included in the zip so the bundle can be archived and later verified.
+
 ## Status Observation Notes
 
 2026-05-13 EICAR testing with Microsoft Defender showed that single status
@@ -271,7 +348,8 @@ server exists:
    enabled for harmless validation.
 10. Query `/cases/{case_id}/execution-status` to observe root PID and child
    process metadata.
-11. Restore the baseline snapshot.
+11. Collect product logs with `/cases/{case_id}/collection/{product_id}`.
+12. Restore the baseline snapshot.
 
 Arbitrary `execute_sample` behavior remains out of scope. The only real trigger
 implemented here is the default-off, token-protected, case-bound

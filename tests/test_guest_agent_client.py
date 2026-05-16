@@ -43,6 +43,10 @@ class FakeNetworkClient:
         self.calls.append(kwargs)
         return self.response
 
+    def request_binary(self, **kwargs: object) -> NetworkResponse:
+        self.calls.append(kwargs)
+        return self.response
+
 
 class FailingNetworkClient(FakeNetworkClient):
     def request_bytes(self, **kwargs: object) -> NetworkResponse:
@@ -211,6 +215,141 @@ class GuestAgentClientTests(TestCase):
         self.assertIsInstance(headers, dict)
         self.assertEqual(headers["Authorization"], "Bearer secret")
 
+    def test_case_summary_uses_network_client(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            timeout_seconds=5,
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=200,
+                headers={},
+                body=b'{"status":"ok","message":"case summary loaded","data":{"case_id":"case-001__huorong","verdict":"detected_or_blocked"}}',
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "secret"}
+        )
+
+        response = client.case_summary("case-001__huorong")
+
+        self.assertEqual(response.data["verdict"], "detected_or_blocked")
+        self.assertEqual(len(network.calls), 1)
+        call = network.calls[0]
+        self.assertEqual(call["method"], "GET")
+        self.assertEqual(
+            call["url"],
+            "http://guest-agent.local:8080/cases/case-001__huorong/summary",
+        )
+        self.assertEqual(call["timeout_seconds"], 5)
+        headers = call["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+
+    def test_export_evidence_bundle_uses_network_client(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            timeout_seconds=5,
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=200,
+                headers={"content-type": "application/zip"},
+                body=b"fake zip bytes",
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "secret"}
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "bundle.zip"
+            response = client.export_evidence_bundle("case-001__huorong", output_path)
+
+            self.assertEqual(output_path.read_bytes(), b"fake zip bytes")
+
+        self.assertEqual(response.message, "evidence bundle saved")
+        self.assertEqual(response.data["size"], len(b"fake zip bytes"))
+        self.assertEqual(len(network.calls), 1)
+        call = network.calls[0]
+        self.assertEqual(call["method"], "GET")
+        self.assertEqual(
+            call["url"],
+            "http://guest-agent.local:8080/cases/case-001__huorong/evidence-bundle",
+        )
+        headers = call["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+
+    def test_collect_logs_uses_network_client(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            timeout_seconds=5,
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=200,
+                headers={},
+                body=b'{"status":"ok","message":"collection completed","data":{"product_id":"huorong","verdict":"intercepted"}}',
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "secret"}
+        )
+
+        response = client.collect_logs("case-001__huorong", "huorong")
+
+        self.assertEqual(response.data["verdict"], "intercepted")
+        self.assertEqual(len(network.calls), 1)
+        call = network.calls[0]
+        self.assertEqual(call["method"], "POST")
+        self.assertEqual(
+            call["url"],
+            "http://guest-agent.local:8080/cases/case-001__huorong/collection/huorong",
+        )
+        self.assertEqual(call["timeout_seconds"], 5)
+        headers = call["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+
+    def test_collection_status_uses_network_client(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            timeout_seconds=5,
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=200,
+                headers={},
+                body=b'{"status":"ok","message":"collection status loaded","data":{"collection_state":"collected"}}',
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "secret"}
+        )
+
+        response = client.collection_status("case-001__huorong")
+
+        self.assertEqual(response.data["collection_state"], "collected")
+        self.assertEqual(len(network.calls), 1)
+        call = network.calls[0]
+        self.assertEqual(call["method"], "GET")
+        self.assertEqual(
+            call["url"],
+            "http://guest-agent.local:8080/cases/case-001__huorong/collection/status",
+        )
+        headers = call["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+
     def test_execution_status_uses_network_client(self) -> None:
         config = GuestAgentConfig(
             enabled=True,
@@ -292,6 +431,88 @@ class GuestAgentClientTests(TestCase):
 
         with self.assertRaises(GuestAgentError) as error:
             client.case_report("missing-case")
+
+        message = str(error.exception)
+        self.assertEqual(error.exception.status_code, 404)
+        self.assertIn("HTTP 404 Not Found", message)
+        self.assertIn("guest-prepare-case", message)
+        self.assertNotIn("agent-secret", message)
+
+    def test_case_summary_404_has_clear_prepare_case_hint(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=404,
+                headers={},
+                body=b'{"detail":"case workspace does not exist; run guest-prepare-case first"}',
+                reason="Not Found",
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "agent-secret"}
+        )
+
+        with self.assertRaises(GuestAgentError) as error:
+            client.case_summary("missing-case")
+
+        message = str(error.exception)
+        self.assertEqual(error.exception.status_code, 404)
+        self.assertIn("HTTP 404 Not Found", message)
+        self.assertIn("guest-prepare-case", message)
+        self.assertNotIn("agent-secret", message)
+
+    def test_export_evidence_bundle_404_has_clear_prepare_case_hint(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=404,
+                headers={},
+                body=b'{"detail":"case workspace does not exist; run guest-prepare-case first"}',
+                reason="Not Found",
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "agent-secret"}
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(GuestAgentError) as error:
+                client.export_evidence_bundle("missing-case", Path(tmp) / "bundle.zip")
+
+        message = str(error.exception)
+        self.assertEqual(error.exception.status_code, 404)
+        self.assertIn("HTTP 404 Not Found", message)
+        self.assertIn("guest-prepare-case", message)
+        self.assertNotIn("agent-secret", message)
+
+    def test_collect_logs_404_has_clear_prepare_case_hint(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=404,
+                headers={},
+                body=b'{"detail":"case workspace does not exist; run guest-prepare-case first"}',
+                reason="Not Found",
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "agent-secret"}
+        )
+
+        with self.assertRaises(GuestAgentError) as error:
+            client.collect_logs("missing-case", "huorong")
 
         message = str(error.exception)
         self.assertEqual(error.exception.status_code, 404)

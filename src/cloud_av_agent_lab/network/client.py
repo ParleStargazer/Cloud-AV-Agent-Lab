@@ -108,6 +108,35 @@ class NetworkClient:
                 reason=getattr(response, "reason", ""),
             )
 
+    def request_binary(
+        self,
+        method: str,
+        url: str,
+        headers: Mapping[str, str] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> NetworkResponse:
+        request_headers = {
+            "Accept": "application/zip,application/octet-stream,*/*",
+            **dict(headers or {}),
+        }
+        request = urllib.request.Request(
+            url=url,
+            headers=request_headers,
+            method=method.upper(),
+        )
+        try:
+            response = self.build_opener().open(request, timeout=timeout_seconds)
+        except urllib.error.HTTPError as exc:
+            return _response_from_http_error(exc)
+
+        with response:
+            return NetworkResponse(
+                status=response.status,
+                headers=dict(response.headers.items()),
+                body=response.read(),
+                reason=getattr(response, "reason", ""),
+            )
+
 
 def encode_json_payload(payload: Mapping[str, Any]) -> bytes:
     return json.dumps(

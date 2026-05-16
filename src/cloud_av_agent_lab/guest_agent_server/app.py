@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import FileResponse
 
 from cloud_av_agent_lab.guest_agent_server.auth import (
     verify_bearer_token,
@@ -18,9 +19,13 @@ from cloud_av_agent_lab.guest_agent_server.workspace import (
     ExecutionRegistry,
     WorkspaceError,
     WorkspaceNotFoundError,
+    collect_case_logs,
+    export_case_evidence_bundle,
     prepare_case_workspace,
+    read_case_collection_status,
     read_case_execution_status,
     read_case_report,
+    read_case_summary,
     read_case_status,
     run_case_action,
     save_uploaded_sample,
@@ -164,6 +169,55 @@ def create_app(
             },
         }
 
+    @app.post("/cases/{case_id:path}/collection/{product_id}")
+    def collect_logs(
+        case_id: str,
+        product_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        authorize(authorization)
+        try:
+            payload = collect_case_logs(workdir_path, case_id, product_id)
+        except WorkspaceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except WorkspaceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return {
+            "status": "ok",
+            "message": "collection completed",
+            "data": payload,
+        }
+
+    @app.get("/cases/{case_id:path}/collection/status")
+    def collection_status(
+        case_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        authorize(authorization)
+        try:
+            payload = read_case_collection_status(workdir_path, case_id)
+        except WorkspaceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except WorkspaceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return {
+            "status": "ok",
+            "message": "collection status loaded",
+            "data": payload,
+        }
+
     @app.get("/cases/{case_id:path}/status")
     def case_status(
         case_id: str,
@@ -211,6 +265,57 @@ def create_app(
             "message": "case report loaded",
             "data": payload,
         }
+
+    @app.get("/cases/{case_id:path}/summary")
+    def case_summary(
+        case_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        authorize(authorization)
+        try:
+            payload = read_case_summary(workdir_path, case_id)
+        except WorkspaceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except WorkspaceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return {
+            "status": "ok",
+            "message": "case summary loaded",
+            "data": payload,
+        }
+
+    @app.get("/cases/{case_id:path}/evidence-bundle")
+    def evidence_bundle(
+        case_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> FileResponse:
+        authorize(authorization)
+        try:
+            payload = export_case_evidence_bundle(workdir_path, case_id)
+        except WorkspaceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except WorkspaceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return FileResponse(
+            payload["bundle_path"],
+            media_type="application/zip",
+            filename=payload["filename"],
+            headers={
+                "X-Evidence-Bundle-Sha256": str(payload.get("sha256", "")),
+            },
+        )
 
     @app.get("/cases/{case_id:path}/execution-status")
     def execution_status(
