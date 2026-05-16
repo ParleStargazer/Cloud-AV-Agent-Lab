@@ -1,0 +1,898 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from cloud_av_agent_lab.adapters.cloud import CloudProviderError, CloudVmAdapter
+from cloud_av_agent_lab.adapters.factory import create_cloud_adapter
+from cloud_av_agent_lab.adapters.guest_agent_client import (
+    GuestAgentClient,
+    GuestAgentError,
+    GuestAgentResponse,
+)
+from cloud_av_agent_lab.config import load_config
+from cloud_av_agent_lab.core.contracts import LabConfig, TestCase
+from cloud_av_agent_lab.core.safety import assert_safe_config
+from cloud_av_agent_lab.evaluation import render_summary_markdown
+from cloud_av_agent_lab.network.client import NetworkClient
+
+from .locks import InstanceLock, acquire_lock
+from .logging_context import configure_run_logging, run_log_context
+from .run_state import RunState
+from .timeout import (
+    EVIDENCE_EXPORT_TIMEOUT,
+    GUEST_CONTROL_TIMEOUT,
+    GUEST_HEALTH_TIMEOUT,
+    SALVAGE_TIMEOUT,
+    NetworkTimeoutProfile,
+)
+
+LOGGER = logging.getLogger("cloud_av_agent_lab.orchestration.single_run")
+
+DEFAULT_GUEST_READY_TIMEOUT_SECONDS = 120.0
+DEFAULT_GUEST_READY_INTERVAL_SECONDS = 5.0
+DEFAULT_GUEST_READY_SUCCESSES = 2
+DEFAULT_SETTLING_COOLDOWN_SECONDS = 15.0
+DEFAULT_UPLOAD_INITIAL_WAIT_SECONDS = 10.0
+DEFAULT_UPLOAD_POLL_INTERVAL_SECONDS = 2.0
+DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS = 30.0
+DEFAULT_EXECUTION_POLL_INTERVAL_SECONDS = 2.0
+DEFAULT_EXECUTION_POLL_TIMEOUT_SECONDS = 60.0
+TERMINAL_EXECUTION_STATES = {
+    "exited_cleanly",
+    "exited_with_error",
+    "launch_failed",
+    "terminated_or_disappeared",
+}
+NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS = {
+    "uploaded sample is missing before execution": "sample_missing_before_execution",
+    "uploaded sample failed to start": "launch_failed",
+    "execute_uploaded_sample requires a previously uploaded sample": "not_uploaded",
+}
+
+
+class SingleRunError(RuntimeError):
+    """Raised when single-run orchestration cannot continue."""
+
+
+@dataclass(frozen=True)
+class SingleRunOptions:
+    instance_id: str
+    snapshot_id: str
+    region: str
+    sample_name: str
+    sample_path: Path
+    guest_agent_url: str
+    product_id: str = "huorong"
+    dry_run: bool = False
+    force_unlock: bool = False
+    runs_dir: Path = Path("runs")
+    guest_ready_timeout_seconds: float = DEFAULT_GUEST_READY_TIMEOUT_SECONDS
+    guest_ready_interval_seconds: float = DEFAULT_GUEST_READY_INTERVAL_SECONDS
+    guest_ready_successes: int = DEFAULT_GUEST_READY_SUCCESSES
+    settling_cooldown_seconds: float = DEFAULT_SETTLING_COOLDOWN_SECONDS
+    upload_initial_wait_seconds: float = DEFAULT_UPLOAD_INITIAL_WAIT_SECONDS
+    upload_poll_interval_seconds: float = DEFAULT_UPLOAD_POLL_INTERVAL_SECONDS
+    upload_poll_timeout_seconds: float = DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS
+    execution_poll_interval_seconds: float = DEFAULT_EXECUTION_POLL_INTERVAL_SECONDS
+    execution_poll_timeout_seconds: float = DEFAULT_EXECUTION_POLL_TIMEOUT_SECONDS
+    cloud_poll_timeout_seconds: float = 600.0
+    cloud_poll_interval_seconds: float = 5.0
+    lock_ttl_seconds: float = 7200.0
+    lock_heartbeat_stale_seconds: float = 900.0
+    normal_evidence_timeout: NetworkTimeoutProfile = EVIDENCE_EXPORT_TIMEOUT
+    salvage_timeout: NetworkTimeoutProfile = SALVAGE_TIMEOUT
+
+
+@dataclass(frozen=True)
+class SingleRunResult:
+    run_id: str
+    case_id: str
+    run_dir: Path
+    run_state_path: Path
+    generated_config_path: Path
+    summary_path: Path | None
+    evidence_bundle_path: Path | None
+    verdict: str
+    confidence: str
+    final_status: str
+    cleanup_status: str
+    emergency_poweroff_status: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "case_id": self.case_id,
+            "run_dir": str(self.run_dir),
+            "run_state_path": str(self.run_state_path),
+            "generated_config_path": str(self.generated_config_path),
+            "summary_path": str(self.summary_path or ""),
+            "evidence_bundle_path": str(self.evidence_bundle_path or ""),
+            "verdict": self.verdict,
+            "confidence": self.confidence,
+            "final_status": self.final_status,
+            "cleanup_status": self.cleanup_status,
+            "emergency_poweroff_status": self.emergency_poweroff_status,
+        }
+
+
+CloudAdapterFactory = Callable[..., CloudVmAdapter]
+GuestClientFactory = Callable[[LabConfig], GuestAgentClient]
+SleepFunc = Callable[[float], None]
+
+
+def run_single_case(
+    options: SingleRunOptions,
+    *,
+    cloud_adapter_factory: CloudAdapterFactory = create_cloud_adapter,
+    guest_client_factory: GuestClientFactory | None = None,
+    sleep: SleepFunc = time.sleep,
+) -> SingleRunResult:
+    sample_path = Path(options.sample_path)
+    if not sample_path.is_file():
+        raise SingleRunError(f"sample file does not exist: {sample_path}")
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    sample_id = _safe_identifier(options.sample_name)
+    product_id = _safe_identifier(options.product_id)
+    case_id = f"{sample_id}__{product_id}__{stamp}"
+    run_id = f"{stamp}_{sample_id}__{product_id}"
+    run_dir = Path(options.runs_dir) / run_id
+    locks_dir = Path(options.runs_dir) / ".locks"
+    lock = acquire_lock(
+        locks_dir,
+        instance_id=options.instance_id,
+        run_id=run_id,
+        case_id=case_id,
+        ttl_seconds=options.lock_ttl_seconds,
+        heartbeat_stale_seconds=options.lock_heartbeat_stale_seconds,
+        force_unlock=options.force_unlock,
+        pid=os.getpid(),
+    )
+
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        with (
+            configure_run_logging(run_dir),
+            run_log_context(
+                options.instance_id,
+                run_id,
+            ),
+        ):
+            return _run_single_case_locked(
+                options=options,
+                run_id=run_id,
+                case_id=case_id,
+                sample_id=sample_id,
+                product_id=product_id,
+                run_dir=run_dir,
+                lock=lock,
+                cloud_adapter_factory=cloud_adapter_factory,
+                guest_client_factory=guest_client_factory,
+                sleep=sleep,
+            )
+    finally:
+        lock.release()
+
+
+def wait_guest_agent_ready(
+    client: GuestAgentClient,
+    *,
+    timeout_seconds: float = DEFAULT_GUEST_READY_TIMEOUT_SECONDS,
+    interval_seconds: float = DEFAULT_GUEST_READY_INTERVAL_SECONDS,
+    required_successes: int = DEFAULT_GUEST_READY_SUCCESSES,
+    timeout_profile: NetworkTimeoutProfile = GUEST_HEALTH_TIMEOUT,
+    sleep: SleepFunc = time.sleep,
+) -> GuestAgentResponse:
+    deadline = time.monotonic() + timeout_seconds
+    successes = 0
+    last_response: GuestAgentResponse | None = None
+    while True:
+        elapsed = max(0.0, timeout_seconds - max(deadline - time.monotonic(), 0.0))
+        try:
+            last_response = client.health(
+                timeout_seconds=timeout_profile.socket_timeout_seconds()
+            )
+        except GuestAgentError as exc:
+            if exc.status_code in {401, 403} or exc.source == "local":
+                raise
+            LOGGER.info(
+                "Guest Agent health failed (%.0fs/%.0fs): %s",
+                elapsed,
+                timeout_seconds,
+                type(exc).__name__,
+            )
+            successes = 0
+        else:
+            successes += 1
+            LOGGER.info("Guest Agent health ok %d/%d", successes, required_successes)
+            if successes >= required_successes:
+                return last_response
+
+        if time.monotonic() >= deadline:
+            raise SingleRunError(
+                f"timed out waiting for Guest Agent health after {timeout_seconds:g}s"
+            )
+        sleep(min(interval_seconds, max(deadline - time.monotonic(), 0.0)))
+
+
+def _run_single_case_locked(
+    *,
+    options: SingleRunOptions,
+    run_id: str,
+    case_id: str,
+    sample_id: str,
+    product_id: str,
+    run_dir: Path,
+    lock: InstanceLock,
+    cloud_adapter_factory: CloudAdapterFactory,
+    guest_client_factory: GuestClientFactory | None,
+    sleep: SleepFunc,
+) -> SingleRunResult:
+    state = RunState(
+        run_dir / "run_state.json",
+        run_id=run_id,
+        case_id=case_id,
+        instance_id=options.instance_id,
+        snapshot_id=options.snapshot_id,
+        region=options.region,
+        product_id=product_id,
+        sample_name=sample_id,
+        sample_path=str(options.sample_path),
+    )
+    generated_config_path = run_dir / "lab.generated.toml"
+    summary_path: Path | None = None
+    evidence_path: Path | None = None
+    verdict = ""
+    confidence = ""
+    case_started = False
+    evidence_saved = False
+    case_error: BaseException | None = None
+
+    LOGGER.info("single-run started")
+
+    try:
+        with state.step("hash_sample"):
+            sha256, size = _hash_file(Path(options.sample_path))
+            state.set_sample_hash(sha256, size)
+            LOGGER.info("sample metadata calculated: name=%s size=%d", sample_id, size)
+
+        with state.step("write_generated_config"):
+            generated_config_path.write_text(
+                _render_generated_config(
+                    options=options,
+                    sample_id=sample_id,
+                    product_id=product_id,
+                    sha256=sha256,
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(generated_config_path)
+            assert_safe_config(config)
+            LOGGER.info("generated non-sensitive config: %s", generated_config_path)
+
+        network = NetworkClient.from_config(config.network)
+        adapter = cloud_adapter_factory(
+            config,
+            network=network,
+            dry_run=options.dry_run,
+            confirmed_instance_id=("" if options.dry_run else options.instance_id),
+            confirmed_snapshot_id=("" if options.dry_run else options.snapshot_id),
+            poll_timeout_seconds=options.cloud_poll_timeout_seconds,
+            poll_interval_seconds=options.cloud_poll_interval_seconds,
+        )
+        client = (
+            guest_client_factory(config)
+            if guest_client_factory is not None
+            else GuestAgentClient(config.guest_agent, network=network)
+        )
+        vm = next(iter(config.vms.values()))
+        sample = config.samples[sample_id]
+        product = config.products[product_id]
+        case = TestCase(id=case_id, sample=sample, vm=vm, product=product)
+
+        _restore_and_start_clean_instance(adapter, vm, state, lock)
+
+        with state.step("wait_guest_agent_ready"):
+            lock.heartbeat()
+            wait_guest_agent_ready(
+                client,
+                timeout_seconds=options.guest_ready_timeout_seconds,
+                interval_seconds=options.guest_ready_interval_seconds,
+                required_successes=options.guest_ready_successes,
+                sleep=sleep,
+            )
+
+        with state.step("settling_cooldown"):
+            LOGGER.info(
+                "Settling cooldown started: %.0fs",
+                options.settling_cooldown_seconds,
+            )
+            sleep(max(options.settling_cooldown_seconds, 0.0))
+            LOGGER.info("Environment settled; continue prepare-case")
+
+        with state.step("prepare_case"):
+            lock.heartbeat()
+            client.prepare_case(
+                case,
+                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+            )
+            case_started = True
+            state.mark("case_started", True)
+
+        with state.step("upload_sample"):
+            lock.heartbeat()
+            client.upload_sample(
+                case_id=case_id,
+                sample_id=sample_id,
+                file_path=options.sample_path,
+                sha256=sha256,
+                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+            )
+            upload_response = _poll_upload_status(
+                client,
+                case_id,
+                initial_wait_seconds=options.upload_initial_wait_seconds,
+                poll_interval_seconds=options.upload_poll_interval_seconds,
+                timeout_seconds=options.upload_poll_timeout_seconds,
+                sleep=sleep,
+            )
+            upload_state = str(_extract_upload_state(upload_response.data) or "unknown")
+            state.mark("post_upload_state", upload_state)
+
+        with state.step("execute_action"):
+            lock.heartbeat()
+            execution_result = _execute_after_upload_observation(
+                client=client,
+                case_id=case_id,
+                sample_id=sample_id,
+                expected_sha256=sha256,
+                upload_state=upload_state,
+                dry_run=options.dry_run,
+                poll_interval_seconds=options.execution_poll_interval_seconds,
+                poll_timeout_seconds=options.execution_poll_timeout_seconds,
+                sleep=sleep,
+            )
+            state.mark("execution_action_status", execution_result["status"])
+            state.mark("execution_action_state", execution_result["execution_state"])
+            state.mark("execution_action_reason", execution_result["reason"])
+
+        with state.step("collect_logs"):
+            lock.heartbeat()
+            client.collect_logs(
+                case_id,
+                product_id,
+                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+            )
+
+        with state.step("case_summary"):
+            lock.heartbeat()
+            summary_response = client.case_summary(
+                case_id,
+                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+            )
+            summary_path = _write_summary_outputs(run_dir, summary_response.data)
+            verdict = str(summary_response.data.get("verdict", ""))
+            confidence = str(summary_response.data.get("confidence", ""))
+
+        with state.step("export_evidence"):
+            lock.heartbeat()
+            evidence_response = client.export_evidence_bundle(
+                case_id,
+                run_dir / f"case_evidence_{case_id}.zip",
+                timeout_seconds=options.normal_evidence_timeout.socket_timeout_seconds(),
+            )
+            evidence_path = Path(str(evidence_response.data.get("output_path", "")))
+            evidence_saved = True
+            state.mark("evidence_export_status", "saved")
+            state.mark("evidence_bundle_path", str(evidence_path))
+
+    except Exception as exc:
+        case_error = exc
+        state.add_error("single_run", exc)
+        if isinstance(exc, GuestAgentError) and exc.source == "network":
+            state.mark("agent_dead", True)
+        LOGGER.error("single-run case flow failed: %s", exc)
+    finally:
+        if case_started and not evidence_saved:
+            salvaged_path = _try_fast_fail_salvage(
+                client=locals().get("client"),
+                case_id=case_id,
+                run_dir=run_dir,
+                state=state,
+                timeout=options.salvage_timeout,
+            )
+            if salvaged_path is not None:
+                evidence_path = salvaged_path
+                evidence_saved = True
+        cleanup_failed = _cleanup_instance(
+            adapter=locals().get("adapter"), vm=locals().get("vm"), state=state
+        )
+
+    final_status = _final_status(case_error, cleanup_failed)
+    state.mark("final_status", final_status)
+    if case_error is not None and cleanup_failed:
+        LOGGER.critical(
+            "cleanup restore failed and emergency stop failed. "
+            "Manual intervention required: %s",
+            options.instance_id,
+        )
+    LOGGER.info("single-run finished: %s", final_status)
+    return SingleRunResult(
+        run_id=run_id,
+        case_id=case_id,
+        run_dir=run_dir,
+        run_state_path=run_dir / "run_state.json",
+        generated_config_path=generated_config_path,
+        summary_path=summary_path,
+        evidence_bundle_path=evidence_path,
+        verdict=verdict,
+        confidence=confidence,
+        final_status=final_status,
+        cleanup_status=str(state.data.get("cleanup_status", "")),
+        emergency_poweroff_status=str(state.data.get("emergency_poweroff_status", "")),
+    )
+
+
+def _restore_and_start_clean_instance(
+    adapter: CloudVmAdapter,
+    vm: Any,
+    state: RunState,
+    lock: InstanceLock,
+) -> None:
+    with state.step("check_instance_status"):
+        lock.heartbeat()
+        status_response = adapter.get_instance_status(vm)
+        LOGGER.info("instance status checked: %s", status_response.status)
+
+    if _instance_state(status_response) == "RUNNING":
+        with state.step("stop_before_restore"):
+            lock.heartbeat()
+            stop_response = adapter.stop_vm(vm)
+            LOGGER.info("stop before restore: %s", stop_response.status)
+
+    with state.step("restore_snapshot_initial"):
+        lock.heartbeat()
+        restore_response = adapter.restore_snapshot(vm)
+        LOGGER.info("initial snapshot restore: %s", restore_response.status)
+
+    if _instance_state(restore_response) not in {"RUNNING", ""}:
+        with state.step("start_instance"):
+            lock.heartbeat()
+            start_response = adapter.start_vm(vm)
+            LOGGER.info("start instance: %s", start_response.status)
+
+
+def _cleanup_instance(adapter: object, vm: object, state: RunState) -> bool:
+    if adapter is None or vm is None:
+        state.mark("cleanup_status", "skipped")
+        state.mark("emergency_poweroff_status", "skipped")
+        return False
+    try:
+        with state.step("cleanup_check_instance_status"):
+            status_response = adapter.get_instance_status(vm)  # type: ignore[attr-defined]
+            LOGGER.info("cleanup status checked: %s", status_response.status)
+        if _instance_state(status_response) == "RUNNING":
+            with state.step("cleanup_stop_before_restore"):
+                stop_response = adapter.stop_vm(vm)  # type: ignore[attr-defined]
+                LOGGER.info("cleanup stop before restore: %s", stop_response.status)
+        with state.step("cleanup_restore_snapshot"):
+            response = adapter.restore_snapshot(vm)  # type: ignore[attr-defined]
+            state.mark("cleanup_status", "dry_run" if response.dry_run else "restored")
+            LOGGER.info("cleanup restore finished: %s", response.status)
+        state.mark("emergency_poweroff_status", "not_needed")
+        return False
+    except CloudProviderError as restore_error:
+        state.mark("cleanup_status", "restore_failed")
+        state.add_error("cleanup_restore", restore_error)
+        LOGGER.error("cleanup restore failed: %s", restore_error)
+        try:
+            with state.step("emergency_poweroff"):
+                response = adapter.stop_vm(vm)  # type: ignore[attr-defined]
+                state.mark(
+                    "emergency_poweroff_status",
+                    "dry_run" if response.dry_run else "stopped",
+                )
+                LOGGER.warning("emergency poweroff attempted: %s", response.status)
+            return False
+        except CloudProviderError as stop_error:
+            state.mark("emergency_poweroff_status", "failed")
+            state.add_error("emergency_poweroff", stop_error)
+            LOGGER.critical("emergency poweroff failed: %s", stop_error)
+            return True
+
+
+def _try_fast_fail_salvage(
+    *,
+    client: object,
+    case_id: str,
+    run_dir: Path,
+    state: RunState,
+    timeout: NetworkTimeoutProfile,
+) -> Path | None:
+    if client is None:
+        state.mark("evidence_export_status", "failed")
+        return None
+    try:
+        with state.step("evidence_fast_fail_salvage"):
+            response = client.export_evidence_bundle(  # type: ignore[attr-defined]
+                case_id,
+                run_dir / f"case_evidence_{case_id}.zip",
+                timeout_seconds=timeout.socket_timeout_seconds(),
+            )
+            output_path = Path(str(response.data.get("output_path", "")))
+            state.mark("evidence_export_status", "saved")
+            state.mark("evidence_bundle_path", str(output_path))
+            LOGGER.warning("fast-fail evidence salvage saved: %s", output_path)
+            return output_path
+    except GuestAgentError as exc:
+        if exc.source == "network":
+            state.mark("agent_dead", True)
+        state.mark("evidence_export_status", "failed")
+        state.add_error("evidence_salvage", exc)
+        LOGGER.warning("fast-fail evidence salvage failed: %s", exc)
+    except Exception as exc:
+        state.mark("evidence_export_status", "failed")
+        state.add_error("evidence_salvage", exc)
+        LOGGER.warning("fast-fail evidence salvage failed: %s", exc)
+    return None
+
+
+def _poll_upload_status(
+    client: GuestAgentClient,
+    case_id: str,
+    *,
+    initial_wait_seconds: float,
+    poll_interval_seconds: float,
+    timeout_seconds: float,
+    sleep: SleepFunc,
+) -> GuestAgentResponse:
+    LOGGER.info(
+        "upload saved; waiting %.0fs before polling post-upload state",
+        initial_wait_seconds,
+    )
+    elapsed = 0.0
+    if initial_wait_seconds > 0:
+        sleep(initial_wait_seconds)
+        elapsed = min(initial_wait_seconds, timeout_seconds)
+
+    last_response: GuestAgentResponse | None = None
+    while True:
+        last_response = client.case_status(
+            case_id,
+            timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+        )
+        upload_state = str(_extract_upload_state(last_response.data) or "unknown")
+        LOGGER.info(
+            "upload polling (%.0fs/%.0fs): state=%s",
+            elapsed,
+            timeout_seconds,
+            upload_state,
+        )
+        if upload_state == "removed_after_save" or elapsed >= timeout_seconds:
+            return last_response
+        wait_seconds = min(poll_interval_seconds, timeout_seconds - elapsed)
+        if wait_seconds <= 0:
+            return last_response
+        sleep(wait_seconds)
+        elapsed += wait_seconds
+
+
+def _execute_after_upload_observation(
+    *,
+    client: GuestAgentClient,
+    case_id: str,
+    sample_id: str,
+    expected_sha256: str,
+    upload_state: str,
+    dry_run: bool,
+    poll_interval_seconds: float,
+    poll_timeout_seconds: float,
+    sleep: SleepFunc,
+) -> dict[str, str]:
+    normalized_upload_state = upload_state.casefold()
+    if normalized_upload_state != "stable":
+        execution_state = f"skipped_{normalized_upload_state or 'unknown'}"
+        reason = (
+            "execution skipped because post-upload state is "
+            f"{normalized_upload_state or 'unknown'}"
+        )
+        LOGGER.info("%s", reason)
+        return {
+            "status": "skipped",
+            "execution_state": execution_state,
+            "reason": reason,
+        }
+
+    try:
+        execute_response = client.execute_uploaded_sample(
+            case_id=case_id,
+            sample_id=sample_id,
+            expected_sha256=expected_sha256,
+            dry_run=dry_run,
+        )
+    except GuestAgentError as exc:
+        execution_state = _nonfatal_remote_execution_state(exc)
+        if execution_state:
+            reason = f"execution action did not start: {exc}"
+            LOGGER.warning("%s", reason)
+            return {
+                "status": "not_started",
+                "execution_state": execution_state,
+                "reason": reason,
+            }
+        raise
+
+    execution_state = str(_extract_execution_state(execute_response.data) or "unknown")
+    if dry_run:
+        LOGGER.info("execution dry-run completed: %s", execution_state)
+        return {
+            "status": "dry_run",
+            "execution_state": execution_state,
+            "reason": "dry-run execution metadata check completed",
+        }
+    if execution_state not in {"running", "execution_started"}:
+        reason = f"execution action returned {execution_state}; polling skipped"
+        LOGGER.warning("%s", reason)
+        return {
+            "status": "not_started",
+            "execution_state": execution_state,
+            "reason": reason,
+        }
+
+    final_response = _poll_execution_status(
+        client,
+        case_id,
+        poll_interval_seconds=poll_interval_seconds,
+        timeout_seconds=poll_timeout_seconds,
+        sleep=sleep,
+    )
+    final_state = str(_extract_execution_state(final_response.data) or execution_state)
+    return {
+        "status": "observed",
+        "execution_state": final_state,
+        "reason": "execution was started and observed",
+    }
+
+
+def _nonfatal_remote_execution_state(error: GuestAgentError) -> str:
+    if error.source != "remote" or error.status_code not in {400, 404, 409}:
+        return ""
+    text = str(error).casefold()
+    for marker, execution_state in NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS.items():
+        if marker in text:
+            return execution_state
+    return ""
+
+
+def _poll_execution_status(
+    client: GuestAgentClient,
+    case_id: str,
+    *,
+    poll_interval_seconds: float,
+    timeout_seconds: float,
+    sleep: SleepFunc,
+) -> GuestAgentResponse:
+    elapsed = 0.0
+    last_response: GuestAgentResponse | None = None
+    while True:
+        last_response = client.execution_status(case_id)
+        execution_state = str(_extract_execution_state(last_response.data) or "unknown")
+        children_count = _children_count(last_response.data)
+        LOGGER.info(
+            "execution polling (%.0fs/%.0fs): state=%s children=%d",
+            elapsed,
+            timeout_seconds,
+            execution_state,
+            children_count,
+        )
+        if execution_state in TERMINAL_EXECUTION_STATES:
+            return last_response
+        if elapsed >= timeout_seconds:
+            if execution_state == "running":
+                return client.execution_status(
+                    case_id,
+                    mark_timeout=True,
+                    timeout_seconds=timeout_seconds,
+                )
+            return last_response
+        wait_seconds = min(poll_interval_seconds, timeout_seconds - elapsed)
+        if wait_seconds <= 0:
+            return last_response
+        sleep(wait_seconds)
+        elapsed += wait_seconds
+
+
+def _write_summary_outputs(run_dir: Path, summary: dict[str, Any]) -> Path:
+    summary_json = run_dir / "case_summary.json"
+    summary_json.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (run_dir / "case_summary.md").write_text(
+        render_summary_markdown(summary),
+        encoding="utf-8",
+    )
+    return summary_json
+
+
+def _hash_file(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            size += len(chunk)
+            digest.update(chunk)
+    return digest.hexdigest(), size
+
+
+def _render_generated_config(
+    *,
+    options: SingleRunOptions,
+    sample_id: str,
+    product_id: str,
+    sha256: str,
+) -> str:
+    product = _product_profile(product_id)
+    mode = "mock" if options.dry_run else "real"
+    dry_run = "true" if options.dry_run else "false"
+    execution_enabled = "false" if options.dry_run else "true"
+    return f"""# Generated by cloud-av-agent-lab single-run.
+# Non-sensitive control-plane config. Do not add tokens or cloud secrets here.
+
+[lab]
+name = "cloud-av-agent-lab-single-run"
+artifact_dir = "reports"
+local_sample_storage = "forbidden"
+require_cloud_isolation = true
+max_case_seconds = 900
+
+[cloud]
+provider = "tencent-cloud-lighthouse"
+mode = {_toml_string(mode)}
+dry_run = {dry_run}
+region = {_toml_string(options.region)}
+credential_profile_env = "TENCENTCLOUD_PROFILE"
+secret_id = ""
+secret_key = ""
+artifact_bucket = "cos://single-run-artifacts-placeholder"
+network_profile = "isolated-egress-deny-by-default"
+api_endpoint = "https://lighthouse.tencentcloudapi.com"
+api_version = "2020-03-24"
+
+[network.proxy]
+enabled = false
+type = "socks5"
+host = "127.0.0.1"
+port = 7890
+
+[guest_agent]
+enabled = true
+base_url = {_toml_string(options.guest_agent_url)}
+token_env = "CLOUD_AV_GUEST_AGENT_TOKEN"
+timeout_seconds = 10
+
+[guest_agent.execution]
+enabled = {execution_enabled}
+token_env = "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
+timeout_seconds = 30
+
+[[products]]
+id = {_toml_string(product_id)}
+display_name = {_toml_string(product["display_name"])}
+vendor = {_toml_string(product["vendor"])}
+log_paths = {_toml_array(product["log_paths"])}
+ui_window_titles = {_toml_array(product["ui_window_titles"])}
+detection_keywords = {_toml_array(product["detection_keywords"])}
+
+[[vms]]
+id = "single-run-vm"
+provider = "tencent-cloud-lighthouse"
+region = {_toml_string(options.region)}
+image = "img-av-baseline-win"
+baseline_snapshot = {_toml_string(options.snapshot_id)}
+product_id = {_toml_string(product_id)}
+network_profile = "isolated-egress-deny-by-default"
+instance_id = {_toml_string(options.instance_id)}
+
+[[samples]]
+id = {_toml_string(sample_id)}
+sha256 = {_toml_string(sha256)}
+category = "harmless-test"
+cloud_object_uri = {_toml_string(f"cos://single-run-placeholder/{sample_id}")}
+expected_behaviors = ["upload_observation"]
+notes = "Generated single-run EICAR or harmless placeholder reference."
+"""
+
+
+def _product_profile(product_id: str) -> dict[str, Any]:
+    if product_id != "huorong":
+        raise SingleRunError("single-run MVP currently supports product=huorong")
+    return {
+        "display_name": "Huorong Internet Security",
+        "vendor": "Huorong",
+        "log_paths": [
+            r"C:\ProgramData\Huorong\Sysdiag",
+            r"C:\Program Files\Huorong\Sysdiag\log",
+        ],
+        "ui_window_titles": ["Huorong", "火绒"],
+        "detection_keywords": [
+            "blocked",
+            "quarantine",
+            "virus",
+            "trojan",
+            "malware",
+            "拦截",
+            "隔离",
+        ],
+    }
+
+
+def _instance_state(response: Any) -> str:
+    data = getattr(response, "data", {})
+    if not isinstance(data, dict):
+        return ""
+    for key in ("FinalInstanceStatus", "InstanceStatus"):
+        value = data.get(key)
+        if isinstance(value, dict):
+            return str(value.get("state", "")).upper()
+    return ""
+
+
+def _extract_upload_state(data: dict[str, object]) -> object:
+    state = data.get("state")
+    if isinstance(state, dict):
+        return state.get("upload_state")
+    return data.get("upload_state")
+
+
+def _extract_execution_state(data: dict[str, object]) -> object:
+    execution = data.get("execution")
+    if isinstance(execution, dict):
+        return execution.get("state") or data.get("execution_state")
+    return data.get("execution_state")
+
+
+def _children_count(data: dict[str, object]) -> int:
+    execution = data.get("execution")
+    children = (
+        execution.get("children", [])
+        if isinstance(execution, dict)
+        else data.get("children", [])
+    )
+    return len(children) if isinstance(children, list) else 0
+
+
+def _final_status(case_error: BaseException | None, cleanup_failed: bool) -> str:
+    if case_error is None and not cleanup_failed:
+        return "completed"
+    if case_error is None and cleanup_failed:
+        return "completed_with_cleanup_warning"
+    if cleanup_failed:
+        return "failed_cleanup_failed"
+    return "failed"
+
+
+def _safe_identifier(value: str) -> str:
+    cleaned = "".join(
+        ch if (ch.isascii() and ch.isalnum()) or ch in {"-", "_", "."} else "-"
+        for ch in value.strip()
+    )
+    cleaned = cleaned.strip(".-_")
+    return cleaned or "sample"
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _toml_array(values: list[str]) -> str:
+    return "[" + ", ".join(_toml_string(value) for value in values) + "]"

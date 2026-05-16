@@ -53,3 +53,6 @@ token.txt
 
 #built resources
 scripts/pack/
+
+# Ignore running results
+runs/*

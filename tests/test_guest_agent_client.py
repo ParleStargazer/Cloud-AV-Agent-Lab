@@ -268,7 +268,11 @@ class GuestAgentClientTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             output_path = Path(tmp) / "bundle.zip"
-            response = client.export_evidence_bundle("case-001__huorong", output_path)
+            response = client.export_evidence_bundle(
+                "case-001__huorong",
+                output_path,
+                timeout_seconds=120,
+            )
 
             self.assertEqual(output_path.read_bytes(), b"fake zip bytes")
 
@@ -281,6 +285,7 @@ class GuestAgentClientTests(TestCase):
             call["url"],
             "http://guest-agent.local:8080/cases/case-001__huorong/evidence-bundle",
         )
+        self.assertEqual(call["timeout_seconds"], 120)
         headers = call["headers"]
         self.assertIsInstance(headers, dict)
         self.assertEqual(headers["Authorization"], "Bearer secret")

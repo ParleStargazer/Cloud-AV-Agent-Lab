@@ -62,6 +62,52 @@ cloud-av-agent-lab report-template --config configs/lab.example.toml --out repor
 
 如果不安装包，也可以临时设置 `PYTHONPATH=src` 后使用 `py -m cloud_av_agent_lab ...`。
 
+## Single-Run 单轮测试入口
+
+`single-run` 是面向普通用户的第一版简化入口。它不要求提前手写完整 TOML，而是通过参数或交互输入收集 Lighthouse instance id、baseline snapshot id、region、样本名称、显式本地 EICAR/无害文件路径、产品 ID 和 Guest Agent URL，然后自动生成一次运行所需的非敏感配置和产物目录。
+
+最小交互入口：
+
+```powershell
+python -m cloud_av_agent_lab single-run
+```
+
+也可以用参数运行：
+
+```powershell
+python -m cloud_av_agent_lab single-run `
+  --instance-id lhins-xxxxxxxx `
+  --snapshot-id lhsnap-xxxxxxxx `
+  --region ap-singapore `
+  --sample-name eicar-001 `
+  --sample-path C:\Temp\eicar.txt `
+  --product huorong `
+  --guest-agent-url http://x.x.x.x:8080
+```
+
+默认会按真实单轮流程生成 `mode = "real"`、`dry_run = false` 的 `lab.generated.toml`，并在启动前提示用户确认：
+
+```text
+此操作会进行实例真实操作，请务必检查实例id和快照id是否正确，并了解此操作的风险，是否确认？
+```
+
+确认后，single-run 会完全按用户输入的 instance id 和 snapshot id 进行生命周期操作，并把这两个值作为内部适配器确认值，不再要求用户重复输入 `--confirm-instance` / `--confirm-snapshot`。如果只是演练流程，请显式加 `--dry-run`；此时生成配置会回到 `mock + dry_run`，云写操作和受控 action 都不会真实执行。真实触发仍然只允许云端 Guest Agent 执行当前 case 已登记上传文件，且必须满足云端 execution 开关和 token 校验；本地控制面仍不执行样本。single-run 会根据上传轮询结果决定是否触发：只有 `stable` 才请求执行接口；`removed_after_save`、`locked_or_busy` 或未知状态会记录为执行跳过，并继续 collection、summary 和 evidence 导出。若执行接口返回样本已不存在或启动失败这类业务状态，也会作为本轮观察结果继续收集证据，而不是直接中断整个流程。
+
+每次运行会创建：
+
+```text
+runs/
+  20260516-153012_eicar-001__huorong/
+    lab.generated.toml
+    run_state.json
+    run.log
+    case_summary.json
+    case_summary.md
+    case_evidence_<case_id>.zip
+```
+
+`run_state.json` 会记录每一步状态、样本 SHA-256、证据导出状态、清理状态和错误；`run.log` 每行带 `[instance_id][run_id]` 上下文。`runs/.locks/<instance_id>.lock` 防止同一 Lighthouse 实例被并发操作，过期或心跳陈旧的锁会被归档，必要时可使用 `--force-unlock`。证据导出发生在结尾快照回滚之前；如果流程异常，会尝试短超时 fast-fail 证据打捞，随后再进行清理回滚。若回滚失败，会尝试 emergency stop，并在最终输出中提示人工介入。
+
 ## 工作流
 
 1. 在云端创建 Windows 基线镜像，安装目标杀软和日志采集组件。
@@ -283,6 +329,8 @@ python -m cloud_av_agent_lab guest-execute-sample `
 上传接口只负责写盘并立即返回，耗时等待放在本地 CLI：`guest-upload-sample` 会在上传成功后先等待 10 秒，然后每 2 秒轮询一次状态，最多观察到 30 秒；一旦出现 `removed_after_save` 会立即报告拦截成功。需要继续观察时，可以手动重复运行 `guest-case-status`。
 
 每个 case 会维护 `case_state.json`、`events.jsonl` 和 `case_report.json`。`guest-case-report` 汇总投送阶段 metadata 和 execution 区域，但不读取 Defender 或其他杀软日志，不读取样本内容。
+
+日志收集、简易评测和证据导出阶段已经形成 MVP：杀毒软件日志收集框架定义 collector 插件和统一证据 schema；火绒 collector 是首个产品实现；Guest Agent 暴露日志收集接口、简易结论报告接口和证据包导出接口；本地 CLI 对应提供 `guest-collect-logs`、`guest-case-summary` 和 `guest-export-evidence`。
 
 收集阶段新增 `guest-collect-logs --product huorong`，通过云端 Guest Agent 读取火绒日志副本并输出 `case_collection.json`。火绒 collector 会先把 `C:\ProgramData\Huorong\sysdiag\log.db`、`log.db-shm`、`log.db-wal` 复制到当前 case 的 `collection\huorong\` artifact 目录，再只读打开 SQLite 并自动发现最新的 `HrLogV3_*` 表。JSON payload 列会优先按常见列名识别，包含真实火绒表里的 DB 列 `detail`；该列 JSON 内部还有嵌套 `detail` 对象。识别不到时按火绒导出脚本的约定读取第 5 列。输出包含统一时间线、时间窗口、normalized product-log events 和保守 verdict：只有产品日志证据匹配当前 case 的 hash、sample path、root/child PID 或时间窗口时才判定 `intercepted`；单独的文件消失或进程不可观察不会被直接判定为杀软拦截。设计见 [COLLECTION_MODEL.md](docs/COLLECTION_MODEL.md)。
 

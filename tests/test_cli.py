@@ -22,6 +22,7 @@ from cloud_av_agent_lab.adapters.guest_agent_client import (
     GuestAgentError,
     GuestAgentResponse,
 )
+from cloud_av_agent_lab.orchestration import SingleRunResult
 
 
 class CloudLifecycleCliGuardTests(TestCase):
@@ -442,6 +443,128 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertTrue(output_path.is_file())
             self.assertEqual(fake_client.export_calls, 1)
             self.assertIn("Evidence bundle saved to:", stdout.getvalue())
+
+    def test_single_run_invokes_orchestration_and_prints_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.txt"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            result = SingleRunResult(
+                run_id="run-001",
+                case_id="eicar__huorong__run-001",
+                run_dir=root / "runs" / "run-001",
+                run_state_path=root / "runs" / "run-001" / "run_state.json",
+                generated_config_path=root / "runs" / "run-001" / "lab.generated.toml",
+                summary_path=root / "runs" / "run-001" / "case_summary.json",
+                evidence_bundle_path=root / "runs" / "run-001" / "case_evidence.zip",
+                verdict="detected_or_blocked",
+                confidence="high",
+                final_status="completed",
+                cleanup_status="dry_run",
+                emergency_poweroff_status="not_needed",
+            )
+            stdout = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli.run_single_case", return_value=result
+                ) as run_single,
+                patch(
+                    "cloud_av_agent_lab.cli._confirm_single_run_real_operation"
+                ) as confirm_real,
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "single-run",
+                        "--instance-id",
+                        "lhins-example",
+                        "--snapshot-id",
+                        "lhsnap-example",
+                        "--region",
+                        "ap-singapore",
+                        "--sample-name",
+                        "eicar",
+                        "--sample-path",
+                        str(sample_path),
+                        "--guest-agent-url",
+                        "http://127.0.0.1:8080",
+                        "--runs-dir",
+                        str(root / "runs"),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        run_single.assert_called_once()
+        confirm_real.assert_called_once()
+        options = run_single.call_args.args[0]
+        self.assertEqual(options.instance_id, "lhins-example")
+        self.assertFalse(options.dry_run)
+        output = stdout.getvalue()
+        self.assertIn("Single-run finished: completed", output)
+        self.assertIn("Verdict: detected_or_blocked", output)
+
+    def test_single_run_dry_run_skips_real_operation_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.txt"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            result = SingleRunResult(
+                run_id="run-001",
+                case_id="eicar__huorong__run-001",
+                run_dir=root / "runs" / "run-001",
+                run_state_path=root / "runs" / "run-001" / "run_state.json",
+                generated_config_path=root / "runs" / "run-001" / "lab.generated.toml",
+                summary_path=root / "runs" / "run-001" / "case_summary.json",
+                evidence_bundle_path=root / "runs" / "run-001" / "case_evidence.zip",
+                verdict="",
+                confidence="",
+                final_status="completed",
+                cleanup_status="dry_run",
+                emergency_poweroff_status="not_needed",
+            )
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli.run_single_case", return_value=result
+                ) as run_single,
+                patch(
+                    "cloud_av_agent_lab.cli._confirm_single_run_real_operation"
+                ) as confirm_real,
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "single-run",
+                        "--dry-run",
+                        "--instance-id",
+                        "lhins-example",
+                        "--snapshot-id",
+                        "lhsnap-example",
+                        "--region",
+                        "ap-singapore",
+                        "--sample-name",
+                        "eicar",
+                        "--sample-path",
+                        str(sample_path),
+                        "--guest-agent-url",
+                        "http://127.0.0.1:8080",
+                        "--runs-dir",
+                        str(root / "runs"),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        confirm_real.assert_not_called()
+        self.assertTrue(run_single.call_args.args[0].dry_run)
+
+    def test_single_run_missing_input_exits_clearly(self) -> None:
+        stderr = StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+            main(["single-run"])
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("[Local Check]", stderr.getvalue())
 
     def test_guest_collect_logs_404_suggests_prepare_case(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

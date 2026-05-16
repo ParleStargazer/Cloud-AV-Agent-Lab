@@ -20,6 +20,11 @@ from cloud_av_agent_lab.core.contracts import LabConfig, TestCase
 from cloud_av_agent_lab.core.pipeline import TestPipeline
 from cloud_av_agent_lab.core.safety import SafetyError, assert_safe_config
 from cloud_av_agent_lab.network.client import NetworkClient
+from cloud_av_agent_lab.orchestration import SingleRunOptions, run_single_case
+from cloud_av_agent_lab.orchestration.locks import InstanceLockedError
+from cloud_av_agent_lab.orchestration.prompts import prompt_default
+from cloud_av_agent_lab.orchestration.single_run import SingleRunError
+from cloud_av_agent_lab.orchestration.timeout import NetworkTimeoutProfile
 from cloud_av_agent_lab.reporting.markdown import render_markdown_report
 
 LIFECYCLE_COMMANDS = {
@@ -255,6 +260,90 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--config", required=True, help="path to TOML config")
     report.add_argument("--out", required=True, help="output Markdown path")
 
+    single_run = subparsers.add_parser(
+        "single-run",
+        help="run one complete Lighthouse + Guest Agent test with generated config",
+    )
+    single_run.add_argument("--instance-id", default="", help="Lighthouse instance id")
+    single_run.add_argument("--snapshot-id", default="", help="baseline snapshot id")
+    single_run.add_argument("--region", default="", help="Tencent Cloud region")
+    single_run.add_argument("--sample-name", default="", help="sample display/id name")
+    single_run.add_argument(
+        "--sample-path",
+        default="",
+        help="explicit local EICAR or harmless placeholder file path",
+    )
+    single_run.add_argument(
+        "--product",
+        default="huorong",
+        choices=["huorong"],
+        help="security product profile; MVP supports huorong",
+    )
+    single_run.add_argument(
+        "--guest-agent-url",
+        default="",
+        help="Guest Agent base URL, for example http://x.x.x.x:8080",
+    )
+    single_run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="plan the single-run locally without real cloud writes or real action",
+    )
+    single_run.add_argument(
+        "--force-unlock",
+        action="store_true",
+        help="archive an existing single-run lock before starting",
+    )
+    single_run.add_argument("--runs-dir", default="runs", help="run output root")
+    single_run.add_argument(
+        "--guest-ready-timeout-seconds",
+        type=float,
+        default=120.0,
+        help="maximum seconds to wait for Guest Agent health",
+    )
+    single_run.add_argument(
+        "--guest-ready-interval-seconds",
+        type=float,
+        default=5.0,
+        help="Guest Agent health retry interval",
+    )
+    single_run.add_argument(
+        "--guest-ready-successes",
+        type=int,
+        default=2,
+        help="consecutive successful health checks required",
+    )
+    single_run.add_argument(
+        "--settling-cooldown-seconds",
+        type=float,
+        default=15.0,
+        help="cooldown after Guest Agent is ready",
+    )
+    single_run.add_argument(
+        "--execution-poll-timeout-seconds",
+        type=float,
+        default=GUEST_EXECUTION_POLL_TIMEOUT_SECONDS,
+        help="maximum execution observation seconds after real action request",
+    )
+    single_run.add_argument(
+        "--execution-poll-interval-seconds",
+        type=float,
+        default=GUEST_EXECUTION_POLL_INTERVAL_SECONDS,
+        help="execution-status poll interval after real action request",
+    )
+    single_run.add_argument(
+        "--salvage-connect-timeout-seconds",
+        type=float,
+        default=2.0,
+        help="reserved connect timeout for fast-fail salvage profile",
+    )
+    single_run.add_argument(
+        "--salvage-read-timeout-seconds",
+        type=float,
+        default=5.0,
+        help="read timeout used for fast-fail evidence salvage",
+    )
+
     return parser
 
 
@@ -297,6 +386,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command in LIFECYCLE_COMMANDS or args.command == RESTORE_SNAPSHOT_COMMAND:
         _configure_lifecycle_logging()
+
+    if args.command == "single-run":
+        return _handle_single_run(parser, args)
 
     try:
         config = load_config(args.config)
@@ -623,6 +715,130 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser.error(f"unknown command {args.command!r}")
     return 2
+
+
+def _handle_single_run(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> int:
+    try:
+        options = _single_run_options_from_args(parser, args)
+        if not options.dry_run:
+            _confirm_single_run_real_operation(parser, options)
+        result = run_single_case(options)
+    except InstanceLockedError as exc:
+        parser.exit(
+            2,
+            "error: [Local Check] instance is already locked; "
+            f"lock={exc.lock_path}. Use --force-unlock only after confirming "
+            "the previous run is stale.\n",
+        )
+    except (
+        SingleRunError,
+        GuestAgentError,
+        CloudProviderError,
+        ConfigError,
+        OSError,
+    ) as exc:
+        parser.exit(2, f"error: [Local Check] {exc}\n")
+
+    print(f"Single-run finished: {result.final_status}")
+    print(f"Case: {result.case_id}")
+    if result.verdict:
+        print(f"Verdict: {result.verdict}")
+    if result.confidence:
+        print(f"Confidence: {result.confidence}")
+    print(f"Run dir: {result.run_dir}")
+    print(f"Run state: {result.run_state_path}")
+    if result.summary_path:
+        print(f"Summary: {result.summary_path}")
+    if result.evidence_bundle_path:
+        print(f"Evidence bundle: {result.evidence_bundle_path}")
+    print(f"Cleanup: {result.cleanup_status}")
+    print(f"Emergency poweroff: {result.emergency_poweroff_status}")
+    if result.final_status.endswith("cleanup_failed"):
+        print(
+            "CRITICAL: cleanup restore failed and emergency stop failed. "
+            f"Manual intervention required: {options.instance_id}"
+        )
+    return 0 if not result.final_status.startswith("failed") else 1
+
+
+def _single_run_options_from_args(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> SingleRunOptions:
+    instance_id = _value_or_prompt(parser, "Lighthouse instance id", args.instance_id)
+    snapshot_id = _value_or_prompt(parser, "Baseline snapshot id", args.snapshot_id)
+    region = _value_or_prompt(parser, "Region", args.region, default="ap-singapore")
+    sample_name = _value_or_prompt(parser, "Sample name", args.sample_name)
+    sample_path = _value_or_prompt(parser, "Sample file path", args.sample_path)
+    guest_agent_url = _value_or_prompt(
+        parser,
+        "Guest Agent base URL",
+        args.guest_agent_url,
+        default="http://127.0.0.1:8080",
+    )
+    return SingleRunOptions(
+        instance_id=instance_id,
+        snapshot_id=snapshot_id,
+        region=region,
+        sample_name=sample_name,
+        sample_path=Path(sample_path),
+        guest_agent_url=guest_agent_url,
+        product_id=args.product,
+        dry_run=args.dry_run,
+        force_unlock=args.force_unlock,
+        runs_dir=Path(args.runs_dir),
+        guest_ready_timeout_seconds=args.guest_ready_timeout_seconds,
+        guest_ready_interval_seconds=args.guest_ready_interval_seconds,
+        guest_ready_successes=args.guest_ready_successes,
+        settling_cooldown_seconds=args.settling_cooldown_seconds,
+        execution_poll_timeout_seconds=args.execution_poll_timeout_seconds,
+        execution_poll_interval_seconds=args.execution_poll_interval_seconds,
+        salvage_timeout=NetworkTimeoutProfile(
+            connect_seconds=args.salvage_connect_timeout_seconds,
+            read_seconds=args.salvage_read_timeout_seconds,
+        ),
+    )
+
+
+def _confirm_single_run_real_operation(
+    parser: argparse.ArgumentParser,
+    options: SingleRunOptions,
+) -> None:
+    print(f"Instance ID: {options.instance_id}")
+    print(f"Snapshot ID: {options.snapshot_id}")
+    print(f"Region: {options.region}")
+    print(f"Guest Agent: {options.guest_agent_url}")
+    if not sys.stdin.isatty():
+        parser.exit(
+            2,
+            "error: [Local Check] single-run 默认会进行实例真实操作；"
+            "当前终端不可交互，无法完成风险确认。需要演练请使用 --dry-run。\n",
+        )
+    answer = input(
+        "此操作会进行实例真实操作，请务必检查实例id和快照id是否正确，"
+        "并了解此操作的风险，是否确认？[yes/no]: "
+    ).strip()
+    if answer.casefold() not in {"y", "yes"}:
+        parser.exit(1, "aborted: user declined single-run real operation\n")
+
+
+def _value_or_prompt(
+    parser: argparse.ArgumentParser,
+    label: str,
+    value: str,
+    default: str = "",
+) -> str:
+    if value:
+        return value
+    if sys.stdin.isatty():
+        prompted = prompt_default(label, default=default)
+        if prompted:
+            return prompted
+    parser.exit(2, f"error: [Local Check] missing required input: {label}\n")
+    raise AssertionError("parser.exit should terminate")
 
 
 def _validate_lifecycle_polling_args(

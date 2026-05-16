@@ -99,6 +99,32 @@ which delegates outbound requests to `NetworkClient`.
 
 The default adapters are plan-only and never execute a sample.
 
+## Single-Run Orchestration
+
+`single-run` is the first user-facing orchestration layer. It does not replace
+the adapter contracts; it composes them for one case:
+
+1. create a run id, case id, run directory, contextual logger, and instance lock;
+2. generate a non-sensitive `lab.generated.toml`;
+3. restore the Lighthouse baseline and wait for a stable running guest;
+4. wait for Guest Agent health twice, then apply a settling cooldown;
+5. prepare the case, upload the explicit EICAR/harmless file, observe upload
+   state, optionally request the controlled action, collect logs, summarize, and
+   export evidence;
+6. export evidence before cleanup, then restore the baseline again;
+7. if cleanup restore fails, attempt the same guarded `stop_vm` path as
+   emergency poweroff and record the result in `run_state.json`.
+
+The lock is local and keyed by resolved `instance_id`, preventing two runs from
+restoring or testing the same Lighthouse instance at the same time. The generated
+config never contains tokens or cloud secrets; credentials and Guest Agent tokens
+remain environment-variable only. Because `single-run` is the ordinary-user
+entrypoint, it defaults to a real run and asks for one runtime risk
+confirmation before touching the instance. The user-entered instance id and
+snapshot id are then used as the internal adapter confirmations. Passing
+`--dry-run` switches the generated cloud profile back to `mock`/`dry_run` and
+keeps the controlled action in dry-run mode.
+
 The Guest Agent MVP is documented in `docs/GUEST_AGENT.md`. It currently covers
 only `/health`, `/system-info`, `/prepare-case`, an EICAR/harmless-file upload
 endpoint, metadata-only case status/report endpoints, and a default-disabled

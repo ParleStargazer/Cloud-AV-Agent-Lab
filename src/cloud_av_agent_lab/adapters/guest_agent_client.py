@@ -57,23 +57,33 @@ class GuestAgentClient:
         self.env = env if env is not None else os.environ
         self.token = self._load_token()
 
-    def health(self) -> GuestAgentResponse:
-        return self._request("health", method="GET")
+    def health(self, timeout_seconds: float | None = None) -> GuestAgentResponse:
+        return self._request("health", method="GET", timeout_seconds=timeout_seconds)
 
     def system_info(self) -> GuestAgentResponse:
         return self._request("system-info", method="GET")
 
-    def prepare_case(self, case: TestCase) -> GuestAgentResponse:
+    def prepare_case(
+        self,
+        case: TestCase,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
         return self._request(
             "prepare-case",
             method="POST",
             payload=_prepare_case_payload(case),
+            timeout_seconds=timeout_seconds,
         )
 
-    def case_status(self, case_id: str) -> GuestAgentResponse:
+    def case_status(
+        self,
+        case_id: str,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
         return self._request(
             f"cases/{quote(case_id, safe='')}/status",
             method="GET",
+            timeout_seconds=timeout_seconds,
         )
 
     def case_report(self, case_id: str) -> GuestAgentResponse:
@@ -82,16 +92,22 @@ class GuestAgentClient:
             method="GET",
         )
 
-    def case_summary(self, case_id: str) -> GuestAgentResponse:
+    def case_summary(
+        self,
+        case_id: str,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
         return self._request(
             f"cases/{quote(case_id, safe='')}/summary",
             method="GET",
+            timeout_seconds=timeout_seconds,
         )
 
     def export_evidence_bundle(
         self,
         case_id: str,
         output_path: str | Path,
+        timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
         if not self.config.enabled:
             raise GuestAgentError("Guest Agent is disabled in config", source="local")
@@ -104,7 +120,11 @@ class GuestAgentClient:
                 method="GET",
                 url=url,
                 headers={"Authorization": f"Bearer {self.token}"},
-                timeout_seconds=self.config.timeout_seconds,
+                timeout_seconds=(
+                    self.config.timeout_seconds
+                    if timeout_seconds is None
+                    else timeout_seconds
+                ),
             )
         except Exception as exc:
             raise GuestAgentError(
@@ -136,10 +156,16 @@ class GuestAgentClient:
             },
         )
 
-    def collect_logs(self, case_id: str, product_id: str) -> GuestAgentResponse:
+    def collect_logs(
+        self,
+        case_id: str,
+        product_id: str,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
         return self._request(
             f"cases/{quote(case_id, safe='')}/collection/{quote(product_id, safe='')}",
             method="POST",
+            timeout_seconds=timeout_seconds,
         )
 
     def collection_status(self, case_id: str) -> GuestAgentResponse:
@@ -215,6 +241,7 @@ class GuestAgentClient:
         file_path: str | Path,
         sha256: str = "",
         upload_token_env: str = UPLOAD_TOKEN_ENV,
+        timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
         if not self.config.enabled:
             raise GuestAgentError("Guest Agent is disabled in config", source="local")
@@ -251,7 +278,11 @@ class GuestAgentClient:
                     "X-Sample-Sha256": sha256,
                     "X-Original-Filename": path.name,
                 },
-                timeout_seconds=self.config.timeout_seconds,
+                timeout_seconds=(
+                    self.config.timeout_seconds
+                    if timeout_seconds is None
+                    else timeout_seconds
+                ),
             )
         except HTTPError as exc:
             raise _guest_agent_error_from_http_error("upload-sample", exc) from exc

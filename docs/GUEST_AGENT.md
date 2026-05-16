@@ -251,6 +251,42 @@ the registered sample when execution is explicitly enabled for the manual test.
 
 The full future trigger model is documented in `docs/EXECUTION_MODEL.md`.
 
+## Single-Run Integration
+
+`single-run` wraps the Guest Agent CLI sequence into one controlled run. It
+generates a temporary non-sensitive config under `runs/<run_id>/`, waits for
+Lighthouse lifecycle readiness, then requires Guest Agent `/health` to succeed
+twice before applying a settling cooldown. Only after that does it call
+`prepare-case`, upload the explicit EICAR or harmless file, poll case status,
+request the controlled action, collect Huorong logs, fetch the summary, and
+download the metadata-only evidence bundle. The command defaults to a real run
+after one runtime risk confirmation; use `--dry-run` to keep cloud lifecycle and
+controlled action requests in dry-run mode.
+
+The controlled action is conditional on the post-upload observation. If the
+polling window ends with `stable`, single-run may request execution. If it sees
+`removed_after_save`, `locked_or_busy`, or another non-stable state, it records
+the action as skipped and continues to collection and evidence export. A remote
+business failure during execution, such as the uploaded file disappearing
+between the status poll and the action request, is also recorded as observation
+data instead of being treated as an infrastructure failure.
+
+The normal output files are:
+
+- `lab.generated.toml`
+- `run_state.json`
+- `run.log`
+- `case_summary.json`
+- `case_summary.md`
+- `case_evidence_<case_id>.zip`
+
+The generated config does not contain Guest Agent tokens, upload tokens,
+execution tokens, cloud secrets, or sample bytes. Tokens are still loaded from
+environment variables by `GuestAgentClient`. Evidence export happens before the
+cleanup snapshot restore; if the main flow fails after the case starts,
+single-run tries a short-timeout evidence salvage and records the result without
+blocking cleanup.
+
 ## Collection Stage
 
 The collection stage reads only security product logs and case metadata inside

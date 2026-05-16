@@ -244,6 +244,8 @@ python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml 
 
 `guest-case-report` 会生成并读取云端 case 工作目录下的 `case_report.json`，汇总投送阶段 metadata、execution 观测摘要和最近事件：case/sample/vm/product 标识、上传状态、saved/removed/locked/stable 标记、文件名、哈希、大小、root PID、退出码、子进程摘要和时间戳。它不读取样本内容，不读取 Defender 或其他杀软日志；杀软日志采集和检测判定属于后续评测阶段。
 
+2026-05-16 阶段完成了日志收集、简易评测和证据导出的 MVP：杀毒软件日志收集框架负责 product collector 插件与统一证据 schema；火绒 collector 作为首个实现负责读取和归一化火绒拦截日志；Guest Agent 提供 collection、summary 和 evidence-bundle 接口；本地 CLI 对应提供 `guest-collect-logs`、`guest-case-summary` 和 `guest-export-evidence`。
+
 收集阶段已新增 `docs/COLLECTION_MODEL.md` 和 Guest Agent collector 插件模型。统一 schema 位于 `src/cloud_av_agent_lab/guest_agent_server/collectors/base.py`，首个产品实现位于 `collectors/huorong/`。`guest-collect-logs --product huorong` 会调用云端 `POST /cases/{case_id}/collection/huorong`，在 Guest Agent 内复制火绒 `C:\ProgramData\Huorong\sysdiag\log.db*` 到当前 case 的 `collection/huorong/` artifact 目录，再只读打开 SQLite 并自动发现最新的 `HrLogV3_*` 表。JSON payload 列会优先按 `detail`、`raw_json`、`payload`、`data`、`event_json` 等名称识别；真实火绒表中通常是 DB 列 `detail`，且该列 JSON 里还有嵌套 `detail` 对象。识别不到列名时按火绒导出脚本的约定读取第 5 列。输出写入 `case_collection.json`，包含 normalized product events、统一时间线、时间窗口、collection_state 和保守 verdict。只有产品日志中的 hash/path/pid/time-window 证据才会产生 `intercepted`；单独的 `removed_after_save` 或进程消失不会被直接判定为拦截。SQLite 读取失败会返回安全诊断信息，例如可用表名，不返回样本内容或 token。
 
 Evaluation / Evidence Export MVP 新增两条 Guest Agent CLI：`guest-case-summary` 和 `guest-export-evidence`。`guest-case-summary` 调用 `GET /cases/{case_id}/summary`，由 `cloud_av_agent_lab.evaluation` 汇总投送、执行和 collection 证据，生成 `case_summary.json` / `case_summary.md`。CLI 默认输出简洁结论，显式加 `--json` 时才打印完整结构；summary timeline 会折叠重复轮询事件，只保留关键状态变化、collection 边界和产品日志证据，完整审计仍在 `events.jsonl`。结论采用保守 verdict：产品日志证据优先给出 `detected_or_blocked`；只有文件消失但缺少日志证据时给出 `suspiciously_removed`；执行未发生或不可观察时不会武断判定未检出。`guest-export-evidence` 调用 `GET /cases/{case_id}/evidence-bundle`，保存 `case_evidence_<case_id>.zip`。证据包包含 manifest、case metadata、summary、events 和 normalized evidence，不包含 `sample/`、上传样本本体、token、环境变量、云密钥、真实云配置文件或 raw copied log DB。manifest 会记录 bundle 内每个文件的 SHA-256，便于后续归档核验。
@@ -277,6 +279,38 @@ Guest Agent 的职责应限制在云端隔离 VM 内：
 不要把样本下载到本地主机。
 
 协议和单实例串行锁设计见 `docs/GUEST_AGENT.md`。Windows 免 Python 打包和 Lighthouse 手动部署流程见 `docs/GUEST_AGENT_DEPLOYMENT.md`。
+
+## Single-Run Orchestration
+
+`single-run` 是第一版面向普通用户的单轮编排入口，核心实现位于 `src/cloud_av_agent_lab/orchestration/`：
+
+- `single_run.py`：串联 cloud lifecycle、Guest Agent ready/cooldown、prepare、upload、execute/dry-run、collection、summary、evidence、cleanup；
+- `run_state.py`：每一步即时写入 `run_state.json`，便于崩溃后判断进度；
+- `locks.py`：按 `instance_id` 写 `runs/.locks/<instance_id>.lock`，支持过期锁、心跳陈旧锁和 `--force-unlock`；
+- `logging_context.py`：使用 `contextvars + logging Filter` 给 `cloud_av_agent_lab` 日志自动加 `[instance_id][run_id]`；
+- `timeout.py`：定义 health、普通请求、evidence 下载和 fast-fail salvage 的 timeout profile；
+- `prompts.py`：CLI 缺少参数时的交互式输入。
+
+默认运行：
+
+```powershell
+python -m cloud_av_agent_lab single-run `
+  --instance-id lhins-xxxxxxxx `
+  --snapshot-id lhsnap-xxxxxxxx `
+  --region ap-singapore `
+  --sample-name eicar-001 `
+  --sample-path C:\Temp\eicar.txt `
+  --product huorong `
+  --guest-agent-url http://x.x.x.x:8080
+```
+
+single-run 会自动计算样本 SHA-256、生成 `case_id` 和 `run_id`，并在 `runs/<run_id>/lab.generated.toml` 写入非敏感临时配置。腾讯云密钥、Guest Agent token、upload token 和 execution token 仍然只从环境变量读取，不写进生成配置、日志或证据包。生成配置中的 sample 仍是云对象占位 URI，真实本地文件路径只作为用户显式上传输入保存在 `run_state.json`。
+
+single-run 面向普通用户，默认就是完整真实流程：生成配置为 `mode = "real"`、`dry_run = false`，并把用户输入的 `--instance-id` 和 `--snapshot-id` 作为内部适配器确认值，不再要求重复输入 `--confirm-instance` / `--confirm-snapshot`。启动前 CLI 会打印 instance、snapshot、region 和 Guest Agent URL，并要求用户确认“此操作会进行实例真实操作，请务必检查实例id和快照id是否正确，并了解此操作的风险，是否确认？”。只有用户确认后才继续。需要演练时显式传 `--dry-run`，此时生成配置为 `mock + dry_run`，云写操作和受控 action 都不会真实执行。
+
+上传后执行不再无条件触发。single-run 会读取上传状态轮询的最终结果：`stable` 才调用 `execute_uploaded_sample` 或 dry-run action；`removed_after_save` 表示文件已被安全产品处理，`locked_or_busy` 表示文件可能正在被安全产品占用，二者都会记录 `execution_action_status = "skipped"` 并继续进入日志收集、summary 和 evidence 导出。若状态查询返回其他未知状态，也按保守策略跳过执行。即使执行接口返回“样本已不存在”或“启动失败”这类业务失败，也会记录为 `not_started` / `launch_failed` 等观察结果，并继续收集证据；只有网络、鉴权、本地配置和云生命周期等基础设施错误才会让 single-run 进入失败分支。
+
+推荐单轮流程已经串联：运行锁、生成配置、实例状态查询、快照回滚/启动、Guest Agent 连续 health OK、settling cooldown、prepare-case、upload-sample 与动态状态轮询、受控 action、execution-status 轮询、Huorong collection、case summary、evidence bundle、结尾回滚和 emergency stop 兜底。证据导出在清理前执行；异常分支会短超时尝试 evidence salvage，失败只记录，不阻塞清理。
 
 ## 结构拆分记录
 
