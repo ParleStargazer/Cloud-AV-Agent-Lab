@@ -75,6 +75,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--vm-id", required=True, help="VM profile id from config"
     )
 
+    guest_worker_status = subparsers.add_parser(
+        "guest-worker-status",
+        help="query Control Agent proxy status for the localhost Desktop Worker",
+    )
+    guest_worker_status.add_argument(
+        "--config", required=True, help="path to TOML config"
+    )
+    guest_worker_status.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+
     guest_prepare = subparsers.add_parser(
         "guest-prepare-case",
         help="ask cloud-side Guest Agent to prepare a harmless case workspace",
@@ -285,6 +296,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Guest Agent base URL, for example http://x.x.x.x:8080",
     )
     single_run.add_argument(
+        "--desktop-worker-url",
+        default="http://127.0.0.1:8001",
+        help="Control Agent localhost URL for Desktop Worker inside the VM",
+    )
+    single_run.add_argument(
+        "--disable-desktop-worker-gate",
+        action="store_true",
+        help="skip Desktop Worker readiness gate for diagnostics",
+    )
+    single_run.add_argument(
         "--dry-run",
         action="store_true",
         help="plan the single-run locally without real cloud writes or real action",
@@ -432,6 +453,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         _ensure_guest_agent_enabled(parser, config)
         try:
             response = _create_guest_agent_client(config).health()
+        except GuestAgentError as exc:
+            parser.exit(2, _format_guest_error(exc))
+        _print_guest_response(response)
+        return 0
+
+    if args.command == "guest-worker-status":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        _ensure_guest_agent_enabled(parser, config)
+        _ensure_desktop_worker_enabled(parser, config)
+        try:
+            response = _create_guest_agent_client(config).worker_status()
         except GuestAgentError as exc:
             parser.exit(2, _format_guest_error(exc))
         _print_guest_response(response)
@@ -787,6 +821,8 @@ def _single_run_options_from_args(
         sample_path=Path(sample_path),
         guest_agent_url=guest_agent_url,
         product_id=args.product,
+        desktop_worker_url=args.desktop_worker_url,
+        require_desktop_worker=not args.disable_desktop_worker_gate,
         dry_run=args.dry_run,
         force_unlock=args.force_unlock,
         runs_dir=Path(args.runs_dir),
@@ -811,6 +847,10 @@ def _confirm_single_run_real_operation(
     print(f"Snapshot ID: {options.snapshot_id}")
     print(f"Region: {options.region}")
     print(f"Guest Agent: {options.guest_agent_url}")
+    print(
+        "Desktop Worker gate: "
+        + ("enabled" if options.require_desktop_worker else "disabled")
+    )
     if not sys.stdin.isatty():
         parser.exit(
             2,
@@ -928,6 +968,19 @@ def _ensure_guest_agent_enabled(
             "error: [Local Check] 本地 Guest Agent 配置未启用；请设置 "
             "[guest_agent].enabled=true，并提供 token 环境变量后再使用 "
             "Guest Agent 命令。\n",
+        )
+
+
+def _ensure_desktop_worker_enabled(
+    parser: argparse.ArgumentParser,
+    config: LabConfig,
+) -> None:
+    if not config.guest_agent.desktop_worker.enabled:
+        parser.exit(
+            2,
+            "error: [Local Check] Desktop Worker 配置未启用；请设置 "
+            "[guest_agent.desktop_worker].enabled=true，并确认云端 Control "
+            "Agent 启动时已启用 Desktop Worker 状态代理。\n",
         )
 
 

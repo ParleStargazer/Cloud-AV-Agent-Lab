@@ -62,12 +62,16 @@ class SingleRunTests(TestCase):
             self.assertIn("dry_run = false", generated_config)
             self.assertIn("[guest_agent.execution]", generated_config)
             self.assertIn("enabled = true", generated_config)
+            self.assertIn("[guest_agent.desktop_worker]", generated_config)
+            self.assertIn('base_url = "http://127.0.0.1:8001"', generated_config)
             self.assertNotIn("agent-secret", generated_config)
 
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
             self.assertEqual(run_state["final_status"], "completed")
             self.assertEqual(run_state["evidence_export_status"], "saved")
             self.assertEqual(run_state["cleanup_status"], "dry_run")
+            self.assertTrue(run_state["desktop_worker_ready"])
+            self.assertEqual(run_state["desktop_session_state"], "active")
 
     def test_single_run_dry_run_generates_mock_config_and_dry_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -88,6 +92,34 @@ class SingleRunTests(TestCase):
             self.assertIn("dry_run = true", generated_config)
             self.assertIn("enabled = false", generated_config)
             self.assertEqual(client.execute_dry_runs, [True])
+
+    def test_single_run_fails_before_delivery_when_worker_not_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.bin"
+            sample_path.write_bytes(b"harmless")
+            client = FakeGuestClient(
+                worker_ready=False,
+                worker_reason="desktop session state is not active",
+            )
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    guest_ready_timeout_seconds=0.01,
+                    guest_ready_successes=1,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "failed")
+            self.assertEqual(client.execute_dry_runs, [])
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertFalse(run_state.get("case_started", False))
+            self.assertIn("desktop session", run_state["errors"][0]["message"])
 
     def test_fast_fail_salvage_runs_after_case_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -289,17 +321,37 @@ class FakeGuestClient:
         fail_collect: bool = False,
         status_upload_state: str = "stable",
         execute_error: GuestAgentError | None = None,
+        worker_ready: bool = True,
+        worker_reason: str = "",
     ) -> None:
         self.fail_collect = fail_collect
         self.status_upload_state = status_upload_state
         self.execute_error = execute_error
+        self.worker_ready = worker_ready
+        self.worker_reason = worker_reason
         self.health_calls = 0
+        self.worker_status_calls = 0
         self.export_timeouts: list[float | None] = []
         self.execute_dry_runs: list[bool] = []
 
     def health(self, timeout_seconds: float | None = None) -> GuestAgentResponse:
         self.health_calls += 1
         return GuestAgentResponse(status="ok", message="healthy", data={})
+
+    def worker_status(self, timeout_seconds: float | None = None) -> GuestAgentResponse:
+        self.worker_status_calls += 1
+        return GuestAgentResponse(
+            status="ok",
+            message="worker",
+            data={
+                "desktop_worker_ready": self.worker_ready,
+                "desktop_session_ready": self.worker_ready,
+                "worker_session_id": 1 if self.worker_ready else 0,
+                "desktop_session_state": "active" if self.worker_ready else "unknown",
+                "username": "avtest",
+                "reason": self.worker_reason,
+            },
+        )
 
     def prepare_case(
         self,
@@ -339,6 +391,7 @@ class FakeGuestClient:
         sample_id: str,
         expected_sha256: str = "",
         dry_run: bool = True,
+        run_id: str = "",
     ) -> GuestAgentResponse:
         if self.execute_error is not None:
             raise self.execute_error
@@ -422,6 +475,8 @@ def _options(
     *,
     dry_run: bool = False,
     salvage_timeout: NetworkTimeoutProfile | None = None,
+    guest_ready_timeout_seconds: float = 120.0,
+    guest_ready_successes: int = 2,
 ) -> SingleRunOptions:
     return SingleRunOptions(
         instance_id="lhins-example",
@@ -432,7 +487,9 @@ def _options(
         guest_agent_url="http://127.0.0.1:8080",
         dry_run=dry_run,
         runs_dir=root / "runs",
+        guest_ready_timeout_seconds=guest_ready_timeout_seconds,
         guest_ready_interval_seconds=0.1,
+        guest_ready_successes=guest_ready_successes,
         settling_cooldown_seconds=0,
         upload_initial_wait_seconds=0,
         upload_poll_interval_seconds=0.1,

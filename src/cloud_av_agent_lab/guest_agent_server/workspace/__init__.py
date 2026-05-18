@@ -4,7 +4,13 @@ from .actions import ALLOWED_CASE_ACTIONS, FORBIDDEN_ACTION_FIELDS, run_case_act
 from .case_workspace import prepare_case_workspace, save_uploaded_sample
 from .collection import collect_case_logs, read_case_collection_status
 from .errors import WorkspaceError, WorkspaceNotFoundError
-from .execution import ExecutionRegistry, read_case_execution_status
+from .execution import (
+    ExecutionRegistry,
+    prepare_worker_execute_request,
+    read_case_execution_status,
+    record_worker_execution_observed,
+    record_worker_execution_started,
+)
 from .paths import safe_case_id, safe_original_filename
 from .reports import read_case_report, write_case_report
 from .sample_status import FileProbe, read_case_status, refresh_sample_status
@@ -24,12 +30,15 @@ __all__ = [
     "collect_case_logs",
     "export_case_evidence_bundle",
     "prepare_case_workspace",
+    "prepare_worker_execute_request",
     "read_case_collection_status",
     "read_case_execution_status",
     "read_case_report",
     "read_case_summary",
     "read_case_status",
     "refresh_sample_status",
+    "record_worker_execution_observed",
+    "record_worker_execution_started",
     "run_case_action",
     "safe_case_id",
     "safe_original_filename",

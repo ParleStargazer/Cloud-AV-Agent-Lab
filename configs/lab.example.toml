@@ -86,6 +86,19 @@ enabled = false
 token_env = "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
 timeout_seconds = 30
 
+[guest_agent.desktop_worker]
+# Desktop Worker 运行在云端 Windows 交互式桌面 session 中，只监听
+# 127.0.0.1。Control Agent 通过本机 HTTP 查询 Worker ready 状态；后续真实
+# 执行会下放给 Worker，避免 Session 0 直接启动样本。默认关闭，直到云端
+# baseline snapshot 已固化自动登录和 Worker 自启动。
+enabled = false
+base_url = "http://127.0.0.1:8001"
+token_env = "CLOUD_AV_DESKTOP_WORKER_TOKEN"
+timeout_seconds = 5
+required_for_execution = true
+expected_user = "avtest"
+require_interactive_session = true
+
 # ---------------------------------------------------------------------------
 # 杀软产品配置
 # ---------------------------------------------------------------------------

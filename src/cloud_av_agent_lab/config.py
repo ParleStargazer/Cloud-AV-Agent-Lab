@@ -11,6 +11,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
 from .core.contracts import (
     CloudProfile,
     GuestAgentConfig,
+    GuestAgentDesktopWorkerConfig,
     GuestAgentExecutionConfig,
     LabConfig,
     LabPolicy,
@@ -77,6 +78,9 @@ def _load_guest_agent_config(data: dict[str, Any]) -> GuestAgentConfig:
     execution = guest_agent.get("execution", {})
     if not isinstance(execution, dict):
         raise ConfigError("[guest_agent.execution] must be a table")
+    desktop_worker = guest_agent.get("desktop_worker", {})
+    if not isinstance(desktop_worker, dict):
+        raise ConfigError("[guest_agent.desktop_worker] must be a table")
 
     execution_enabled = bool(execution.get("enabled", False))
     execution_token_env = str(
@@ -85,6 +89,16 @@ def _load_guest_agent_config(data: dict[str, Any]) -> GuestAgentConfig:
     if execution_enabled and not execution_token_env:
         raise ConfigError(
             "[guest_agent.execution].token_env is required when execution is enabled"
+        )
+
+    desktop_worker_enabled = bool(desktop_worker.get("enabled", False))
+    desktop_worker_token_env = str(
+        desktop_worker.get("token_env", "CLOUD_AV_DESKTOP_WORKER_TOKEN")
+    ).strip()
+    if desktop_worker_enabled and not desktop_worker_token_env:
+        raise ConfigError(
+            "[guest_agent.desktop_worker].token_env is required when desktop worker "
+            "is enabled"
         )
 
     return GuestAgentConfig(
@@ -96,6 +110,19 @@ def _load_guest_agent_config(data: dict[str, Any]) -> GuestAgentConfig:
             enabled=execution_enabled,
             token_env=execution_token_env or "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN",
             timeout_seconds=float(execution.get("timeout_seconds", 30)),
+        ),
+        desktop_worker=GuestAgentDesktopWorkerConfig(
+            enabled=desktop_worker_enabled,
+            base_url=str(desktop_worker.get("base_url", "http://127.0.0.1:8001")),
+            token_env=desktop_worker_token_env or "CLOUD_AV_DESKTOP_WORKER_TOKEN",
+            timeout_seconds=float(desktop_worker.get("timeout_seconds", 5)),
+            required_for_execution=bool(
+                desktop_worker.get("required_for_execution", True)
+            ),
+            expected_user=str(desktop_worker.get("expected_user", "")),
+            require_interactive_session=bool(
+                desktop_worker.get("require_interactive_session", True)
+            ),
         ),
     )
 

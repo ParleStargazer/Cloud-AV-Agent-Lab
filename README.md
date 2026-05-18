@@ -82,7 +82,8 @@ python -m cloud_av_agent_lab single-run `
   --sample-name eicar-001 `
   --sample-path C:\Temp\eicar.txt `
   --product huorong `
-  --guest-agent-url http://x.x.x.x:8080
+  --guest-agent-url http://x.x.x.x:8080 `
+  --desktop-worker-url http://127.0.0.1:8001
 ```
 
 默认会按真实单轮流程生成 `mode = "real"`、`dry_run = false` 的 `lab.generated.toml`，并在启动前提示用户确认：
@@ -91,7 +92,11 @@ python -m cloud_av_agent_lab single-run `
 此操作会进行实例真实操作，请务必检查实例id和快照id是否正确，并了解此操作的风险，是否确认？
 ```
 
-确认后，single-run 会完全按用户输入的 instance id 和 snapshot id 进行生命周期操作，并把这两个值作为内部适配器确认值，不再要求用户重复输入 `--confirm-instance` / `--confirm-snapshot`。如果只是演练流程，请显式加 `--dry-run`；此时生成配置会回到 `mock + dry_run`，云写操作和受控 action 都不会真实执行。真实触发仍然只允许云端 Guest Agent 执行当前 case 已登记上传文件，且必须满足云端 execution 开关和 token 校验；本地控制面仍不执行样本。single-run 会根据上传轮询结果决定是否触发：只有 `stable` 才请求执行接口；`removed_after_save`、`locked_or_busy` 或未知状态会记录为执行跳过，并继续 collection、summary 和 evidence 导出。若执行接口返回样本已不存在或启动失败这类业务状态，也会作为本轮观察结果继续收集证据，而不是直接中断整个流程。
+确认后，single-run 会完全按用户输入的 instance id 和 snapshot id 进行生命周期操作，并把这两个值作为内部适配器确认值，不再要求用户重复输入 `--confirm-instance` / `--confirm-snapshot`。如果只是演练流程，请显式加 `--dry-run`；此时生成配置会回到 `mock + dry_run`，云写操作、Desktop Worker gate 和受控 action 都不会真实执行。
+
+真实 single-run 现在会生成 `[guest_agent.desktop_worker]` 并默认要求云端 Control Agent 的 `/worker/status` 返回 ready 后才进入投送阶段。Desktop Worker 是为了解决 Windows Session 0 执行问题而引入的执行层：Control Agent 继续常驻 Session 0，真实 `execute_uploaded_sample` 会由 Control Agent 签发短期 execution lease 后转发给运行在交互式桌面 session 的 Worker；Worker 只执行当前 case 已登记的 `.exe`，并就近观测执行状态。需要诊断旧环境时可以临时使用 `--disable-desktop-worker-gate`，但这会回到不可判定的环境风险模型。详细见 [DESKTOP_WORKER.md](docs/DESKTOP_WORKER.md)。
+
+真实触发仍然只允许云端 Guest Agent 执行当前 case 已登记上传文件，且必须满足云端 execution 开关和 token 校验；本地控制面仍不执行样本。single-run 会根据上传轮询结果决定是否触发：只有 `stable` 才请求执行接口；`removed_after_save`、`locked_or_busy` 或未知状态会记录为执行跳过，并继续 collection、summary 和 evidence 导出。若执行接口返回样本已不存在或启动失败这类业务状态，也会作为本轮观察结果继续收集证据，而不是直接中断整个流程。
 
 每次运行会创建：
 
@@ -336,7 +341,7 @@ python -m cloud_av_agent_lab guest-execute-sample `
 
 Evaluation / Evidence Export MVP 在 collection 之后运行。collector 只负责产品日志收集和归一化；`evaluation` 模块汇总投送、执行和 collection 证据，生成保守的 `case_summary.json` / `case_summary.md`，CLI 命令为 `guest-case-summary`。CLI 默认输出类似 `case_summary.md` 的简洁结论；需要完整结构时显式加 `--json`。summary timeline 会剔除重复轮询事件，只保留 upload/execution 状态变化、collection 边界和产品日志证据；完整审计流水仍保留在 `events.jsonl`。`evidence` exporter 生成可归档的 `case_evidence_<case_id>.zip`，CLI 命令为 `guest-export-evidence`。证据包只包含 metadata：`manifest.json`、`case_state.json`、`case_report.json`、`case_collection.json`、`case_summary.json`、`events.jsonl` 和 normalized evidence；不包含 `sample/` 目录、上传样本本体、token、环境变量、云密钥或真实云配置文件。verdict 仍保持保守：产品日志有明确证据才给出 `detected_or_blocked`，单独的文件消失只会被汇总为 `suspiciously_removed`，进程消失不会单独解释为杀软拦截。
 
-受控触发能力默认关闭。`guest-execute-sample` 默认请求 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata 和路径归属，不启动样本进程；显式加 `--real-action` 时会请求 `execute_uploaded_sample`，只有云端 Guest Agent 启用 execution 且提供正确执行 token 时，才会直接启动当前 case 的已登记上传文件。该真实执行路径使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`，不接受任意路径、命令、shell/cmd/PowerShell 或参数。执行观测是低侵入式只读元信息快照，只观测当前 case 的 root PID 及子进程，不缓存进程对象，不阻碍 Defender 或其他安全软件终止进程。下一步验证可以使用 EICAR 或无害命令 exe；依旧不引入有害样本，本地也仍不执行任何样本。proof 文件只作为早期联调辅助，长期评测需要结合投送状态、执行观测和只读安全产品日志证据。详细协议和单实例串行锁设计见 [GUEST_AGENT.md](docs/GUEST_AGENT.md)，受控触发模型见 [EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md)，收集模型见 [COLLECTION_MODEL.md](docs/COLLECTION_MODEL.md)，Windows 免 Python 部署见 [GUEST_AGENT_DEPLOYMENT.md](docs/GUEST_AGENT_DEPLOYMENT.md)。
+受控触发能力默认关闭。`guest-execute-sample` 默认请求 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata 和路径归属，不启动样本进程；显式加 `--real-action` 时会请求 `execute_uploaded_sample`，只有云端 Guest Agent 启用 execution、提供正确执行 token、Desktop Worker ready，且 Worker 校验短期单次 execution lease 后，才会启动当前 case 的已登记 `.exe`。真实启动发生在 Desktop Worker 内，使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`、`DEVNULL` 标准流、`CREATE_NO_WINDOW`、`close_fds=True` 和最小化环境；不接受任意路径、命令、shell/cmd/PowerShell 或参数。执行观测是低侵入式只读元信息快照，只观测当前 case 的 root PID 及子进程，不缓存进程对象，不阻碍 Defender 或其他安全软件终止进程。下一步验证可以使用 EICAR 或无害命令 exe；依旧不引入有害样本，本地也仍不执行任何样本。proof 文件只作为早期联调辅助，长期评测需要结合投送状态、执行观测和只读安全产品日志证据。详细协议和单实例串行锁设计见 [GUEST_AGENT.md](docs/GUEST_AGENT.md)，受控触发模型见 [EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md)，收集模型见 [COLLECTION_MODEL.md](docs/COLLECTION_MODEL.md)，Windows 免 Python 部署见 [GUEST_AGENT_DEPLOYMENT.md](docs/GUEST_AGENT_DEPLOYMENT.md)。
 
 ## 后续接入点
 

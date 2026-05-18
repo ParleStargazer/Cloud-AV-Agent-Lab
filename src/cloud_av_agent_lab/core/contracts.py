@@ -58,6 +58,17 @@ class GuestAgentExecutionConfig:
 
 
 @dataclass(frozen=True)
+class GuestAgentDesktopWorkerConfig:
+    enabled: bool = False
+    base_url: str = "http://127.0.0.1:8001"
+    token_env: str = "CLOUD_AV_DESKTOP_WORKER_TOKEN"
+    timeout_seconds: float = 5.0
+    required_for_execution: bool = True
+    expected_user: str = ""
+    require_interactive_session: bool = True
+
+
+@dataclass(frozen=True)
 class GuestAgentConfig:
     enabled: bool = False
     base_url: str = "http://127.0.0.1:8080"
@@ -65,6 +76,9 @@ class GuestAgentConfig:
     timeout_seconds: float = 10.0
     execution: GuestAgentExecutionConfig = field(
         default_factory=GuestAgentExecutionConfig
+    )
+    desktop_worker: GuestAgentDesktopWorkerConfig = field(
+        default_factory=GuestAgentDesktopWorkerConfig
     )
 
 

@@ -1,0 +1,100 @@
+# Desktop Worker MVP
+
+Desktop Worker is the next execution-layer split for Cloud AV Agent Lab. The
+Control Agent / Guest Agent stays in Windows Session 0 and remains the stable
+HTTP control plane. Desktop Worker runs in the interactive desktop session and
+owns controlled sample launch and nearby process observation.
+
+The current MVP implements:
+
+- Desktop Worker server module with authenticated `GET /health`.
+- Authenticated `POST /execute` for the current case's registered uploaded
+  `.exe` only.
+- Authenticated `GET /execution-status/{case_id}` for low-intrusion process
+  observation.
+- Worker binds to `127.0.0.1` / `localhost` only.
+- Worker reports pid, session id, interactive-session flag, desktop session
+  state, username, version, bind host, and busy state.
+- Control Agent exposes authenticated `GET /worker/status`.
+- Local CLI can query `guest-worker-status`.
+- `single-run` can require the Desktop Worker readiness gate before delivery.
+- Control Agent signs a short-TTL execution lease before forwarding
+  `execute_uploaded_sample` to Worker.
+
+## Safety Boundary
+
+Desktop Worker must never expose arbitrary command execution. It must not accept
+shell, cmd, PowerShell, arguments, arbitrary paths, file browsing, sample
+download, or sample content return APIs.
+
+Worker token is a misuse-prevention control, not the final execution
+authorization. Real execution also requires a short-TTL, single-use execution
+lease bound to `case_id`, `sample_id`, `run_id`, and `expected_sha256`. Worker
+rejects expired, mismatched, reused, or concurrent leases fail-closed.
+
+Worker derives the sample path from shared case metadata; the caller never
+passes a path. The first implementation only supports `.exe` files. It verifies
+metadata and sha256, confirms the path is under
+`<workdir>\cases\<case_id>\sample\`, and starts the file with
+`subprocess.Popen([sample_path], shell=False, cwd=sample_dir)`. Standard streams
+are redirected to `DEVNULL`, Windows uses `CREATE_NO_WINDOW`, `close_fds=True`
+is set, and a minimal allowlisted environment is passed so tokens, cloud
+secrets, proxy variables, and real config paths are not inherited by the child
+process.
+
+The Worker must not be exposed to the network:
+
+```powershell
+python -m cloud_av_agent_lab.desktop_worker.main --host 127.0.0.1 --port 8001
+```
+
+`--host 0.0.0.0` is intentionally rejected.
+
+Use the same shared workdir as Control Agent:
+
+```powershell
+python -m cloud_av_agent_lab.desktop_worker.main `
+  --host 127.0.0.1 `
+  --port 8001 `
+  --workdir C:\CloudAvAgentLab
+```
+
+## Environment Variables
+
+```powershell
+$env:CLOUD_AV_DESKTOP_WORKER_TOKEN = "replace-with-worker-token"
+```
+
+Do not write this token to configs, logs, reports, events, summary, or evidence
+bundles.
+
+## Control Agent Startup
+
+Control Agent can proxy Worker readiness by enabling:
+
+```powershell
+python -m cloud_av_agent_lab.guest_agent_server.main `
+  --host 0.0.0.0 `
+  --port 8080 `
+  --workdir C:\CloudAvAgentLab `
+  --enable-desktop-worker `
+  --desktop-worker-url http://127.0.0.1:8001 `
+  --desktop-worker-expected-user avtest
+```
+
+`/worker/status` returns `desktop_worker_ready=false` when the Worker is
+disabled, unreachable, busy, running in Session 0, not in an active desktop
+session, or running under an unexpected user.
+
+## Baseline Snapshot
+
+The future baseline snapshot should contain:
+
+- a low-privilege test user;
+- automatic login for that user;
+- Desktop Worker startup on user login;
+- Control Agent startup as Session 0 service or scheduled task;
+- target security product initialized in the desktop session.
+
+Automatic-login credentials and baseline setup scripts are sensitive assets and
+must not enter the repository or evidence bundles.

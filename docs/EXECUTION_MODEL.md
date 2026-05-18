@@ -3,7 +3,9 @@
 This document defines the trigger-stage model for Cloud AV Agent Lab. Execution
 is default-off. The current implementation supports dry-run metadata checks and
 a tightly controlled `execute_uploaded_sample` action for cloud-side manual
-validation with EICAR or harmless test binaries only.
+validation with EICAR or harmless test binaries only. A Desktop Worker readiness
+and execution MVP has been added so real process launch is routed from Control
+Agent to Desktop Worker instead of being started from Windows Session 0.
 
 ## Scope
 
@@ -17,9 +19,9 @@ The project is intentionally split into four stages:
    current case and its child process metadata. This records process state,
    exit code, children, and timestamps, but it does not read sample contents or
    security product logs.
-4. Evaluation: a separate later phase may collect product logs and generate
-   detection reports. Defender or other AV log reading is not part of this
-   stage.
+4. Evaluation: collectors normalize product logs and the evaluator/exporter
+   generate conservative summaries and evidence bundles. Defender or vendor-log
+   reading stays out of delivery and trigger endpoints.
 
 ## Hard Prohibitions
 
@@ -29,8 +31,8 @@ client-supplied cloud-side file paths.
 
 The Guest Agent must not accept or run shell commands in any action payload.
 
-The client must not send an arbitrary path to execute. Future trigger requests
-must be based only on the current case metadata and the uploaded sample metadata
+The client must not send an arbitrary path to execute. Trigger requests are
+based only on the current case metadata and the uploaded sample metadata
 stored under:
 
 ```text
@@ -56,9 +58,27 @@ from `CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN` or the configured `token_env`. The
 normal agent bearer token and upload token are not sufficient for
 execution-stage actions.
 
+Desktop Worker readiness uses its own token:
+
+```toml
+[guest_agent.desktop_worker]
+enabled = false
+base_url = "http://127.0.0.1:8001"
+token_env = "CLOUD_AV_DESKTOP_WORKER_TOKEN"
+required_for_execution = true
+require_interactive_session = true
+```
+
+This token only protects the local Worker status channel. It is not sufficient
+for real execution authorization. Real Worker execution also requires a
+short-TTL, single-use execution lease bound to `case_id`, `sample_id`, `run_id`,
+and `expected_sha256`. Control Agent signs the lease immediately before
+forwarding the action; Worker verifies the HMAC payload, expiry, request
+binding, nonce, and busy state before launching anything.
+
 ## Required Validation
 
-Future execution-stage requests must validate all of the following before doing
+Execution-stage requests validate all of the following before doing
 anything state-changing:
 
 - `case_id` is path-safe and maps to an existing prepared case.
@@ -69,8 +89,14 @@ anything state-changing:
   are accepted.
 - The action is recorded in `events.jsonl` and summarized in case metadata.
 - Failures are explicit and do not fall back to arbitrary command execution.
+- The Desktop Worker receives only `case_id`, `sample_id`, `run_id`,
+  `expected_sha256`, and `execution_lease`.
+- Worker accepts only `.exe` files in the first implementation.
+- Worker uses a minimal allowlisted environment and strips project tokens,
+  cloud secrets, proxy variables, and real config paths before launching the
+  child process.
 
-## Current Action Skeleton
+## Current Actions
 
 The current `POST /cases/{case_id}/actions` endpoint is intentionally narrow.
 Allowed action names are:
@@ -81,35 +107,39 @@ Allowed action names are:
   it does not start a process.
 - `execute_uploaded_sample`: returns `execution_disabled` in the default
   configuration. When execution is explicitly enabled and the execution token is
-  valid, it starts only the current case's registered uploaded file.
+  valid, Control Agent signs a short-lived execution lease and forwards the
+  action to Desktop Worker.
 
 `dry_run_execute_uploaded_sample` records `execution_dry_run_checked` and
 returns whether metadata checks passed. It does not open, parse, scan, unpack,
 or execute the sample.
 
-`execute_uploaded_sample` performs the same metadata checks, verifies that the
-registered file still exists with `os.path.exists`, confirms the file is below
-`<workdir>\cases\<case_id>\sample\`, and starts it with `subprocess.Popen`
-using `shell=False` and `cwd` set to that sample directory. Standard input,
+`execute_uploaded_sample` still performs Control Agent metadata checks and
+records `execution_requested`, but the actual `subprocess.Popen` happens inside
+Desktop Worker. Worker derives the registered sample path from shared case
+metadata, verifies the file still exists, confirms sha256, ensures the file is
+below `<workdir>\cases\<case_id>\sample\`, and starts it with
+`subprocess.Popen([sample_path], shell=False, cwd=sample_dir)`. Standard input,
 standard output, and standard error are redirected to `subprocess.DEVNULL`; on
 Windows the process is started with `CREATE_NO_WINDOW`, and file descriptors are
-closed to avoid inheriting Guest Agent server handles. It records
-`execution_started` with root PID and start time in `events.jsonl`, and stores
-the same PID metadata in `case_state.json`.
+closed. Worker writes `worker-state/worker_execution_state.json`; Control Agent
+syncs the returned status into `case_state.json`, `events.jsonl`, and reports.
 
 After a real trigger, `guest-execute-sample --real-action` polls
 `GET /cases/{case_id}/execution-status` every 2 seconds by default for up to 60
-seconds. The status endpoint observes only the recorded `root_pid` for the
-current case and its descendants. It does not accept paths, commands, shell
+seconds. The Control Agent endpoint forwards observation to Desktop Worker when
+Worker integration is enabled. Worker observes only the recorded `root_pid` for
+the current case and its descendants. It does not accept paths, commands, shell
 arguments, or arbitrary PIDs from the client.
 
-Process observation is deliberately low-intrusion. The Guest Agent takes short
+Process observation is deliberately low-intrusion. The Worker takes short
 read-only metadata snapshots with `psutil` when available, records only fields
 such as PID, parent PID, name, status, and creation time, and does not keep
 `psutil.Process` objects beyond a single request. Once the root process reaches
 a terminal state, the in-memory `Popen` handle is removed from the registry so
-the Agent does not hold process handles longer than needed. Observation must not
-block Windows Defender or another security product from terminating a process.
+the Worker does not hold process handles longer than needed. Observation must
+not block Windows Defender or another security product from terminating a
+process.
 
 Observation states are facts, not verdicts:
 
@@ -134,9 +164,9 @@ durable model is process-tree observation plus later evaluation evidence. This
 does not relax the harmful-sample boundary: no harmful samples are introduced,
 and the local control plane must never execute uploaded files.
 
-## Future State Machine
+## Execution State Names
 
-The future controlled trigger stage should use explicit states:
+The controlled trigger stage uses explicit state names:
 
 - `execution_disabled`
 - `execution_requested`
@@ -149,6 +179,6 @@ The future controlled trigger stage should use explicit states:
 - `execution_timeout_still_running`
 - `execution_recorded`
 
-After any future execution-stage action, orchestration should move to the
+After any execution-stage action, orchestration should move to the
 evaluation stage and then restore the Lighthouse snapshot. Snapshot rollback and
 single-instance serial locking remain mandatory for reusable AV baselines.

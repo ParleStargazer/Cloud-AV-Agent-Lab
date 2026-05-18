@@ -142,6 +142,61 @@ python -m cloud_av_agent_lab guest-health --config configs/lab.local.toml --vm-i
 
 Do not put the token in TOML, logs, screenshots, or test fixtures.
 
+## Desktop Worker Execution MVP
+
+Desktop Worker is packaged separately and must run in the interactive desktop
+user session. It only binds to loopback. Control Agent uses it as both a
+readiness gate and the real execution layer for `execute_uploaded_sample` after
+signing a short-lived single-use execution lease.
+
+Build locally:
+
+```powershell
+conda activate cloud-av-agent-lab
+.\scripts\build-desktop-worker.ps1
+```
+
+On the cloud instance, set a separate worker token:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "CLOUD_AV_DESKTOP_WORKER_TOKEN",
+  "replace-with-a-worker-token",
+  "Machine"
+)
+```
+
+Start Desktop Worker from the interactive test user session:
+
+```powershell
+cd C:\CloudAvAgentLab\desktop-worker
+.\desktop-worker.exe --host 127.0.0.1 --port 8001 --workdir C:\CloudAvAgentLab
+```
+
+Then start Control Agent with Worker status proxy enabled:
+
+```powershell
+cd C:\CloudAvAgentLab\guest-agent
+.\guest-agent.exe `
+  --host 0.0.0.0 `
+  --port 8080 `
+  --workdir C:\CloudAvAgentLab `
+  --enable-desktop-worker `
+  --desktop-worker-url http://127.0.0.1:8001 `
+  --desktop-worker-expected-user avtest
+```
+
+From the local control plane, enable `[guest_agent.desktop_worker]` and query:
+
+```powershell
+python -m cloud_av_agent_lab guest-worker-status `
+  --config configs/lab.local.toml `
+  --vm-id sg-win10
+```
+
+Desktop Worker must not be started with `--host 0.0.0.0`, and the worker token
+must not enter config files, logs, reports, or evidence bundles.
+
 ## Controlled Execution Verification
 
 The local control plane never executes samples. It can only ask the cloud-side
@@ -199,15 +254,21 @@ python -m cloud_av_agent_lab guest-execute-sample `
   --real-action
 ```
 
-The server resolves the target file from `sample.json`, verifies it is under
-`<workdir>\cases\<case_id>\sample\`, checks that it still exists, and starts it
-with `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`. Standard
-input, output, and error are redirected to `DEVNULL`; Windows runs with
-`CREATE_NO_WINDOW`; inherited handles are closed. The response and case state
-record the root PID, `execution_started` time, expected hash metadata, and path
-ownership result. After a real trigger, the local CLI polls
-`/cases/{case_id}/execution-status` to observe root and child process metadata;
-it does not check proof files as the long-term success signal.
+The Control Agent resolves the target metadata, signs a short-lived execution
+lease, and forwards only `case_id`, `sample_id`, `run_id`, `expected_sha256`,
+and `execution_lease` to Desktop Worker over localhost. Desktop Worker derives
+the target file from `sample.json`, verifies it is under
+`<workdir>\cases\<case_id>\sample\`, checks that it still exists and matches
+the expected hash, and starts it with
+`subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`. Standard input,
+output, and error are redirected to `DEVNULL`; Windows runs with
+`CREATE_NO_WINDOW`; inherited handles are closed. Worker writes
+`worker_execution_state.json`; Control Agent syncs the returned root PID,
+`execution_started` time, expected hash metadata, run id, and path ownership
+result into case state. After a real trigger, the local CLI polls
+`/cases/{case_id}/execution-status`, which is forwarded to Worker for root and
+child process metadata observation; it does not check proof files as the
+long-term success signal.
 
 ## Later Service Work
 
@@ -225,8 +286,13 @@ The MVP server only exposes:
 - `POST /cases/{case_id}/sample`
 - `GET /cases/{case_id}/status`
 - `GET /cases/{case_id}/report`
+- `POST /cases/{case_id}/collection/{product_id}`
+- `GET /cases/{case_id}/collection/status`
+- `GET /cases/{case_id}/summary`
+- `GET /cases/{case_id}/evidence-bundle`
 - `GET /cases/{case_id}/execution-status`
 - `POST /cases/{case_id}/actions`
+- `GET /worker/status`
 
 It does not download real malware, expose arbitrary command execution, accept
 client-supplied guest paths, or start shells such as `cmd` or PowerShell.

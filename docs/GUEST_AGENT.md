@@ -38,16 +38,17 @@ chain for EICAR or harmless test files:
   that excludes sample bytes and secrets.
 - `GET /cases/{case_id}/execution-status`: observe only the current case root
   PID and child process metadata.
-- `POST /cases/{case_id}/actions`: controlled action skeleton. It is not a
-  command execution interface; real execution is disabled in this stage.
+- `POST /cases/{case_id}/actions`: controlled case action endpoint. It is not a
+  command execution interface; real execution is default-off and, when enabled,
+  is forwarded to Desktop Worker with a short-lived execution lease.
 
 The server implementation lives in `src/cloud_av_agent_lab/guest_agent_server/`.
 Windows packaging and Lighthouse deployment notes live in
 `docs/GUEST_AGENT_DEPLOYMENT.md`.
 
 Future phases may add guest-side sample staging from cloud object storage,
-bounded test execution, AV log collection, screenshot/artifact upload, and
-structured result reporting. Those future operations must remain inside the
+screenshot/artifact upload, richer product readiness probes, and structured
+multi-run reporting. Those future operations must remain inside the
 cloud-isolated guest and must never download samples to the local host.
 
 ## Required Security Rules
@@ -165,8 +166,8 @@ python -m cloud_av_agent_lab guest-case-report --config configs/lab.local.toml -
 The report is stored as `case_report.json` under the case workspace and contains
 only metadata fields such as `case_id`, `sample_id`, `vm_id`, `product_id`,
 `upload_state`, saved/removed/locked/stable flags, original filename, hash,
-size, timestamps, and recent events. It does not read Defender logs or any other
-AV product logs; evaluation-stage evidence collection remains a later phase.
+size, timestamps, and recent events. Product log collection remains a separate
+collector stage and is exposed through the collection endpoints.
 
 Execution observation can be queried separately after a real controlled trigger:
 
@@ -196,11 +197,15 @@ the registered sample metadata, expected sha256, and case-owned sample path, the
 records `execution_dry_run_checked`. It does not start a process.
 
 Passing `--real-action` requests `execute_uploaded_sample`. Real execution only
-starts when the cloud-side Guest Agent was launched with execution enabled and
-the request includes the correct execution token from
-`CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN`. The server then re-validates the current
-case metadata, verifies that the uploaded file still exists with `os.path.exists`,
-and starts only that registered file with:
+starts when the cloud-side Guest Agent was launched with execution enabled, the
+request includes the correct execution token from
+`CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN`, Desktop Worker is enabled and ready, and
+Control Agent can sign a short-lived execution lease for the current case. The
+Control Agent re-validates the current case metadata, then forwards only
+`case_id`, `sample_id`, `run_id`, `expected_sha256`, and `execution_lease` to
+Desktop Worker. Worker derives the sample path from shared case metadata,
+verifies that the uploaded file still exists, and starts only that registered
+`.exe` with:
 
 ```python
 subprocess.Popen(
@@ -216,9 +221,10 @@ subprocess.Popen(
 ```
 
 The working directory is the case-owned `sample` directory, so harmless test
-programs that write relative files write inside the case workspace. The process
-PID and start time are recorded in `case_state.json` and `events.jsonl` as
-`execution_started`.
+programs that write relative files write inside the case workspace. The Worker
+records its local `worker_execution_state.json`; Control Agent syncs the process
+PID, start time, `run_id`, and observation state into `case_state.json`,
+`events.jsonl`, and reports.
 
 After `--real-action`, the CLI no longer checks proof files. It polls
 `execution-status` every 2 seconds for up to 60 seconds and reports states such
@@ -249,19 +255,30 @@ state. This still does not permit harmful samples. The local control plane must
 not execute the uploaded file; only the cloud-isolated Guest Agent may trigger
 the registered sample when execution is explicitly enabled for the manual test.
 
-The full future trigger model is documented in `docs/EXECUTION_MODEL.md`.
+The full trigger model is documented in `docs/EXECUTION_MODEL.md`.
 
 ## Single-Run Integration
 
 `single-run` wraps the Guest Agent CLI sequence into one controlled run. It
 generates a temporary non-sensitive config under `runs/<run_id>/`, waits for
 Lighthouse lifecycle readiness, then requires Guest Agent `/health` to succeed
-twice before applying a settling cooldown. Only after that does it call
-`prepare-case`, upload the explicit EICAR or harmless file, poll case status,
-request the controlled action, collect Huorong logs, fetch the summary, and
-download the metadata-only evidence bundle. The command defaults to a real run
-after one runtime risk confirmation; use `--dry-run` to keep cloud lifecycle and
-controlled action requests in dry-run mode.
+twice. For real runs, the generated config also enables the Desktop Worker
+gate, so Control Agent `/worker/status` must report an interactive desktop
+Worker ready before delivery continues. Only after that does it apply the
+settling cooldown, call `prepare-case`, upload the explicit EICAR or harmless
+file, poll case status, request the controlled action, collect Huorong logs,
+fetch the summary, and download the metadata-only evidence bundle. The command
+defaults to a real run after one runtime risk confirmation; use `--dry-run` to
+keep cloud lifecycle, Desktop Worker gate, and controlled action requests in
+dry-run mode.
+
+Desktop Worker is now the real execution layer when enabled. Control Agent keeps
+the stable HTTP control plane in Session 0, signs a short-TTL single-use
+execution lease, and forwards `execute_uploaded_sample` to Worker over
+localhost. Worker derives the sample path from case metadata, accepts only the
+current case's registered `.exe`, verifies sha256, launches it with
+`shell=False` and a minimal environment, then reports execution status back to
+Control Agent. See `docs/DESKTOP_WORKER.md`.
 
 The controlled action is conditional on the post-upload observation. If the
 polling window ends with `stable`, single-run may request execution. If it sees
@@ -296,6 +313,7 @@ AV verdict from upload or process observations alone.
 Current CLI:
 
 ```powershell
+python -m cloud_av_agent_lab guest-worker-status --config configs/lab.local.toml --vm-id sg-win10
 python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__huorong --product huorong
 python -m cloud_av_agent_lab guest-case-summary --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__huorong
 python -m cloud_av_agent_lab guest-export-evidence --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__huorong --output .\artifacts\case_evidence_case-001__huorong.zip

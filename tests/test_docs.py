@@ -32,3 +32,15 @@ class DocsTests(TestCase):
         self.assertIn("evaluator", text)
         self.assertIn("exporter", text)
         self.assertIn("uploaded sample body", text)
+
+    def test_desktop_worker_model_documents_loopback_and_no_arbitrary_exec(
+        self,
+    ) -> None:
+        path = ROOT / "docs" / "DESKTOP_WORKER.md"
+
+        self.assertTrue(path.is_file())
+        text = path.read_text(encoding="utf-8").casefold()
+        self.assertIn("127.0.0.1", text)
+        self.assertIn("must never expose arbitrary command execution", text)
+        self.assertIn("execution lease", text)
+        self.assertIn("session 0", text)

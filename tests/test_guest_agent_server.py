@@ -22,12 +22,20 @@ try:
     from cloud_av_agent_lab.guest_agent_server.collectors.huorong import (
         HuorongLogCollector,
     )
+    from cloud_av_agent_lab.guest_agent_server.desktop_worker_client import (
+        DesktopWorkerClientError,
+        DesktopWorkerResponse,
+        DesktopWorkerStatus,
+    )
     from cloud_av_agent_lab.guest_agent_server.workspace import FileProbe
 except ModuleNotFoundError:  # pragma: no cover - optional dependency absent
     TestClient = None
     create_app = None
     FileProbe = None
     HuorongLogCollector = None
+    DesktopWorkerClientError = None
+    DesktopWorkerResponse = None
+    DesktopWorkerStatus = None
 
 
 TOKEN = "unit-test-token"
@@ -78,6 +86,7 @@ class GuestAgentServerTests(unittest.TestCase):
                 upload_token=UPLOAD_TOKEN,
                 execution_enabled=True,
                 execution_token=EXECUTION_TOKEN,
+                desktop_worker_required_for_execution=False,
                 app_version="test-version",
             )
         )
@@ -105,6 +114,76 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertIn("python_version", payload["data"])
         self.assertEqual(payload["data"]["workdir"], str(self.workdir))
         self.assertNotIn(TOKEN, payload_text)
+
+    def test_worker_status_disabled_is_clear(self) -> None:
+        response = self.client.get("/worker/status", headers=self._headers())
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["data"]["desktop_worker_enabled"])
+        self.assertFalse(payload["data"]["desktop_worker_ready"])
+        self.assertIn("disabled", payload["data"]["reason"])
+        self.assertNotIn(TOKEN, response.text)
+
+    def test_worker_status_enabled_reports_ready(self) -> None:
+        client = TestClient(
+            create_app(
+                workdir=self.workdir,
+                token=TOKEN,
+                upload_token=UPLOAD_TOKEN,
+                desktop_worker_enabled=True,
+                desktop_worker_token="worker-token",
+                desktop_worker_expected_user="avtest",
+                app_version="test-version",
+            )
+        )
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.health",
+            return_value=DesktopWorkerStatus(
+                ready=True,
+                data={
+                    "worker_pid": 4321,
+                    "worker_session_id": 1,
+                    "interactive_session": True,
+                    "desktop_session_state": "active",
+                    "username": "avtest",
+                    "bind_host": "127.0.0.1",
+                    "version": "test-version",
+                    "busy": False,
+                },
+            ),
+        ):
+            response = client.get("/worker/status", headers=self._headers())
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["data"]["desktop_worker_ready"])
+        self.assertTrue(payload["data"]["desktop_session_ready"])
+        self.assertEqual(payload["data"]["worker_session_id"], 1)
+        self.assertNotIn("worker-token", response.text)
+
+    def test_worker_status_enabled_reports_not_ready_on_worker_error(self) -> None:
+        client = TestClient(
+            create_app(
+                workdir=self.workdir,
+                token=TOKEN,
+                upload_token=UPLOAD_TOKEN,
+                desktop_worker_enabled=True,
+                desktop_worker_token="worker-token",
+                app_version="test-version",
+            )
+        )
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.health",
+            side_effect=DesktopWorkerClientError("Desktop Worker returned HTTP 401"),
+        ):
+            response = client.get("/worker/status", headers=self._headers())
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["data"]["desktop_worker_ready"])
+        self.assertEqual(payload["data"]["worker_error_source"], "network")
+        self.assertNotIn("worker-token", response.text)
 
     def test_prepare_case_creates_workspace_and_case_json(self) -> None:
         response = self.client.post(
@@ -713,6 +792,127 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertNotIn(EXECUTION_TOKEN, missing.text)
         self.assertNotIn(EXECUTION_TOKEN, wrong.text)
 
+    def test_action_execution_requires_ready_desktop_worker_by_default(self) -> None:
+        client = TestClient(
+            create_app(
+                workdir=self.workdir,
+                token=TOKEN,
+                upload_token=UPLOAD_TOKEN,
+                execution_enabled=True,
+                execution_token=EXECUTION_TOKEN,
+                app_version="test-version",
+            )
+        )
+        client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+
+        response = client.post(
+            "/cases/case-001__tencent-pc-manager/actions",
+            headers=self._execution_headers(),
+            json={
+                "action": "execute_uploaded_sample",
+                "sample_id": "case-001",
+                "expected_sha256": "0" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("desktop worker", response.json()["detail"])
+
+    def test_action_execute_uploaded_sample_forwards_to_desktop_worker(self) -> None:
+        client = TestClient(
+            create_app(
+                workdir=self.workdir,
+                token=TOKEN,
+                upload_token=UPLOAD_TOKEN,
+                execution_enabled=True,
+                execution_token=EXECUTION_TOKEN,
+                desktop_worker_enabled=True,
+                desktop_worker_token="worker-token",
+                desktop_worker_expected_user="avtest",
+                app_version="test-version",
+            )
+        )
+        upload_headers = self._upload_headers()
+        upload_headers["X-Original-Filename"] = "proof.exe"
+        client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=upload_headers,
+            content=b"MZ harmless placeholder",
+        )
+
+        with (
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.health",
+                return_value=DesktopWorkerStatus(
+                    ready=True,
+                    data={
+                        "worker_pid": 111,
+                        "worker_session_id": 1,
+                        "interactive_session": True,
+                        "desktop_session_state": "active",
+                        "username": "avtest",
+                        "busy": False,
+                    },
+                ),
+            ),
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.execute",
+                return_value=DesktopWorkerResponse(
+                    status="ok",
+                    message="started",
+                    data={
+                        "action": "execute_uploaded_sample",
+                        "execution_state": "running",
+                        "message": "uploaded sample process started by Desktop Worker",
+                        "root_pid": 4321,
+                        "pid": 4321,
+                        "sample_id": "case-001",
+                        "run_id": "run-1",
+                        "expected_sha256": "0" * 64,
+                        "started_at_utc": "2026-05-18T00:00:00Z",
+                        "sample_path_under_case": True,
+                        "execution_via": "desktop_worker",
+                        "worker_pid": 111,
+                        "worker_session_id": 1,
+                    },
+                ),
+            ) as execute,
+        ):
+            response = client.post(
+                "/cases/case-001__tencent-pc-manager/actions",
+                headers=self._execution_headers(),
+                json={
+                    "action": "execute_uploaded_sample",
+                    "sample_id": "case-001",
+                    "expected_sha256": "0" * 64,
+                    "run_id": "run-1",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["execution_state"], "running")
+        self.assertEqual(data["execution_via"], "desktop_worker")
+        forwarded = execute.call_args.args[0]
+        self.assertEqual(forwarded["case_id"], "case-001__tencent-pc-manager")
+        self.assertEqual(forwarded["sample_id"], "case-001")
+        self.assertEqual(forwarded["run_id"], "run-1")
+        self.assertIn("execution_lease", forwarded)
+        self.assertNotIn("worker-token", response.text)
+        workspace = self.workdir / "cases" / "case-001__tencent-pc-manager"
+        state = json.loads((workspace / "case_state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["execution"]["execution_via"], "desktop_worker")
+        self.assertEqual(state["execution"]["run_id"], "run-1")
+
     def test_action_execute_uploaded_sample_starts_registered_file(self) -> None:
         client = self._execution_client()
         upload_headers = self._upload_headers()
@@ -863,6 +1063,65 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(report["execution"]["state"], "exited_cleanly")
         self.assertEqual(report["execution"]["root_pid"], 4321)
         self.assertEqual(report["execution"]["exit_code"], 0)
+
+    def test_execution_status_forwards_desktop_worker_observation(self) -> None:
+        client = TestClient(
+            create_app(
+                workdir=self.workdir,
+                token=TOKEN,
+                upload_token=UPLOAD_TOKEN,
+                execution_enabled=True,
+                execution_token=EXECUTION_TOKEN,
+                desktop_worker_enabled=True,
+                desktop_worker_token="worker-token",
+                app_version="test-version",
+            )
+        )
+        client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.execution_status",
+            return_value=DesktopWorkerResponse(
+                status="ok",
+                message="observed",
+                data={
+                    "case_id": "case-001__tencent-pc-manager",
+                    "sample_id": "case-001",
+                    "run_id": "run-1",
+                    "execution_state": "exited_cleanly",
+                    "root_pid": 4321,
+                    "exit_code": 0,
+                    "children": [],
+                    "observed_at_utc": "2026-05-18T00:00:02Z",
+                    "worker_execution": {
+                        "state": "exited_cleanly",
+                        "root_pid": 4321,
+                        "exit_code": 0,
+                        "sample_id": "case-001",
+                        "run_id": "run-1",
+                        "children": [],
+                        "last_observed_at_utc": "2026-05-18T00:00:02Z",
+                        "execution_via": "desktop_worker",
+                    },
+                },
+            ),
+        ):
+            status_response = client.get(
+                "/cases/case-001__tencent-pc-manager/execution-status",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(status_response.status_code, 200)
+        data = status_response.json()["data"]
+        self.assertEqual(data["execution_state"], "exited_cleanly")
+        workspace = self.workdir / "cases" / "case-001__tencent-pc-manager"
+        state = json.loads((workspace / "case_state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["execution"]["execution_via"], "desktop_worker")
+        self.assertEqual(state["execution"]["state"], "exited_cleanly")
 
     def test_execution_status_records_launch_failed(self) -> None:
         client = self._execution_client()

@@ -63,6 +63,25 @@ class GuestAgentClient:
     def system_info(self) -> GuestAgentResponse:
         return self._request("system-info", method="GET")
 
+    def worker_status(
+        self,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
+        if not self.config.desktop_worker.enabled:
+            raise GuestAgentError(
+                "Guest Agent desktop worker integration is disabled in config",
+                source="local",
+            )
+        return self._request(
+            "worker/status",
+            method="GET",
+            timeout_seconds=(
+                self.config.desktop_worker.timeout_seconds
+                if timeout_seconds is None
+                else timeout_seconds
+            ),
+        )
+
     def prepare_case(
         self,
         case: TestCase,
@@ -221,17 +240,21 @@ class GuestAgentClient:
         sample_id: str,
         expected_sha256: str = "",
         dry_run: bool = True,
+        run_id: str = "",
     ) -> GuestAgentResponse:
         action = (
             "dry_run_execute_uploaded_sample" if dry_run else "execute_uploaded_sample"
         )
+        payload = {
+            "sample_id": sample_id,
+            "expected_sha256": expected_sha256,
+        }
+        if run_id:
+            payload["run_id"] = run_id
         return self.case_action(
             case_id=case_id,
             action=action,
-            payload={
-                "sample_id": sample_id,
-                "expected_sha256": expected_sha256,
-            },
+            payload=payload,
         )
 
     def upload_sample(

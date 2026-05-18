@@ -31,6 +31,17 @@ class ConfigTests(TestCase):
             "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN",
         )
         self.assertEqual(config.guest_agent.execution.timeout_seconds, 30)
+        self.assertFalse(config.guest_agent.desktop_worker.enabled)
+        self.assertEqual(
+            config.guest_agent.desktop_worker.token_env,
+            "CLOUD_AV_DESKTOP_WORKER_TOKEN",
+        )
+        self.assertEqual(
+            config.guest_agent.desktop_worker.base_url,
+            "http://127.0.0.1:8001",
+        )
+        self.assertTrue(config.guest_agent.desktop_worker.required_for_execution)
+        self.assertTrue(config.guest_agent.desktop_worker.require_interactive_session)
 
     def test_enabled_proxy_config_parses(self) -> None:
         config_text = (ROOT / "configs" / "lab.example.toml").read_text(
@@ -108,6 +119,39 @@ class ConfigTests(TestCase):
         config_path.write_text(enabled_config, encoding="utf-8")
         try:
             with self.assertRaisesRegex(ConfigError, "token_env"):
+                load_config(config_path)
+        finally:
+            config_path.unlink(missing_ok=True)
+
+    def test_enabled_desktop_worker_requires_token_env(self) -> None:
+        config_text = (ROOT / "configs" / "lab.example.toml").read_text(
+            encoding="utf-8"
+        )
+        enabled_config = config_text.replace(
+            "[guest_agent.desktop_worker]\n"
+            "# Desktop Worker 运行在云端 Windows 交互式桌面 session 中，只监听\n"
+            "# 127.0.0.1。Control Agent 通过本机 HTTP 查询 Worker ready 状态；后续真实\n"
+            "# 执行会下放给 Worker，避免 Session 0 直接启动样本。默认关闭，直到云端\n"
+            "# baseline snapshot 已固化自动登录和 Worker 自启动。\n"
+            "enabled = false\n"
+            'base_url = "http://127.0.0.1:8001"\n'
+            'token_env = "CLOUD_AV_DESKTOP_WORKER_TOKEN"',
+            "[guest_agent.desktop_worker]\n"
+            "# Desktop Worker 运行在云端 Windows 交互式桌面 session 中，只监听\n"
+            "# 127.0.0.1。Control Agent 通过本机 HTTP 查询 Worker ready 状态；后续真实\n"
+            "# 执行会下放给 Worker，避免 Session 0 直接启动样本。默认关闭，直到云端\n"
+            "# baseline snapshot 已固化自动登录和 Worker 自启动。\n"
+            "enabled = true\n"
+            'base_url = "http://127.0.0.1:8001"\n'
+            'token_env = ""',
+        )
+
+        tmp_dir = ROOT / "state" / "tests"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        config_path = tmp_dir / "lab.desktop-worker-token-missing.toml"
+        config_path.write_text(enabled_config, encoding="utf-8")
+        try:
+            with self.assertRaisesRegex(ConfigError, "desktop_worker"):
                 load_config(config_path)
         finally:
             config_path.unlink(missing_ok=True)

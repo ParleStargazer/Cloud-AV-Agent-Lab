@@ -32,6 +32,27 @@ TERMINAL_EXECUTION_STATES = {
     "launch_failed",
     "terminated_or_disappeared",
 }
+FORBIDDEN_WORKER_ACTION_FIELDS = {
+    "args",
+    "arguments",
+    "cmd",
+    "command",
+    "exec",
+    "executable",
+    "file",
+    "file_path",
+    "path",
+    "powershell",
+    "run_command",
+    "sample_path",
+    "shell",
+}
+ALLOWED_WORKER_ACTION_FIELDS = {
+    "action",
+    "expected_sha256",
+    "run_id",
+    "sample_id",
+}
 
 
 @dataclass
@@ -102,6 +123,114 @@ def read_case_execution_status(
         "recent_events": events,
         "execution": observed,
     }
+
+
+def prepare_worker_execute_request(
+    workdir: str | Path,
+    case_id: str,
+    payload: Mapping[str, Any],
+) -> dict[str, str]:
+    forbidden_fields = sorted(_find_forbidden_worker_action_fields(payload))
+    if forbidden_fields:
+        raise WorkspaceError(
+            "case action payload contains forbidden execution fields: "
+            + ", ".join(forbidden_fields)
+        )
+    unsupported_fields = sorted(
+        str(key) for key in set(payload) - ALLOWED_WORKER_ACTION_FIELDS
+    )
+    if unsupported_fields:
+        raise WorkspaceError(
+            "case action payload contains unsupported execution fields: "
+            + ", ".join(unsupported_fields)
+        )
+    safe_id = safe_case_id(case_id)
+    workspace = _case_workspace(workdir, safe_id)
+    if not workspace.is_dir():
+        raise WorkspaceNotFoundError(
+            "case workspace does not exist; run guest-prepare-case first"
+        )
+    context = _uploaded_sample_execution_context(workspace, payload)
+    sample_path = context["sample_path"]
+    if not os.path.exists(sample_path):
+        append_event(
+            workspace,
+            event_type="sample_missing_before_execution",
+            case_id=safe_id,
+            sample_id=context["sample_id"],
+            message="uploaded sample was missing before execution",
+            data={"sample_path_under_case": True, "execution_via": "desktop_worker"},
+        )
+        write_case_report(workspace)
+        raise WorkspaceError("uploaded sample is missing before execution")
+
+    expected_sha256 = str(payload.get("expected_sha256", "")).strip()
+    if not expected_sha256:
+        expected_sha256 = str(context["sample_metadata"].get("sha256", "")).strip()
+    run_id = str(payload.get("run_id") or safe_id).strip()
+    append_event(
+        workspace,
+        event_type="execution_requested",
+        case_id=safe_id,
+        sample_id=context["sample_id"],
+        message="controlled execution requested for Desktop Worker",
+        data={
+            "run_id": run_id,
+            "sample_path_under_case": True,
+            "expected_sha256_match": context["expected_sha256_match"],
+            "execution_via": "desktop_worker",
+        },
+    )
+    return {
+        "case_id": safe_id,
+        "sample_id": str(context["sample_id"]),
+        "run_id": run_id,
+        "expected_sha256": expected_sha256,
+    }
+
+
+def _find_forbidden_worker_action_fields(value: object) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            normalized = str(key).casefold().replace("-", "_")
+            if normalized in FORBIDDEN_WORKER_ACTION_FIELDS:
+                found.add(str(key))
+            found.update(_find_forbidden_worker_action_fields(child))
+    elif isinstance(value, list):
+        for item in value:
+            found.update(_find_forbidden_worker_action_fields(item))
+    return found
+
+
+def record_worker_execution_started(
+    workdir: str | Path,
+    case_id: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _record_worker_execution(
+        workdir=workdir,
+        case_id=case_id,
+        payload=payload,
+        event_type="execution_started",
+        phase="execution_started",
+        message="uploaded sample process started by Desktop Worker",
+    )
+
+
+def record_worker_execution_observed(
+    workdir: str | Path,
+    case_id: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _record_worker_execution(
+        workdir=workdir,
+        case_id=case_id,
+        payload=payload,
+        event_type="execution_observed",
+        phase="execution_observed",
+        message="Desktop Worker execution status observed",
+    )
 
 
 def _execute_uploaded_sample(
@@ -410,6 +539,175 @@ def _observe_execution(
         or execution_state == "timeout_still_running"
     ) and execution_registry is not None:
         execution_registry.remove(case_id)
+    write_case_report(workspace)
+    return execution
+
+
+def _record_worker_execution(
+    *,
+    workdir: str | Path,
+    case_id: str,
+    payload: Mapping[str, Any],
+    event_type: str,
+    phase: str,
+    message: str,
+) -> dict[str, Any]:
+    safe_id = safe_case_id(case_id)
+    workspace = _case_workspace(workdir, safe_id)
+    if not workspace.is_dir():
+        raise WorkspaceNotFoundError(
+            "case workspace does not exist; run guest-prepare-case first"
+        )
+    state = _read_json_file(workspace / "case_state.json")
+    worker_execution = payload.get("worker_execution")
+    worker_execution = (
+        dict(worker_execution) if isinstance(worker_execution, Mapping) else {}
+    )
+    execution_state = str(
+        payload.get("execution_state")
+        or worker_execution.get("state")
+        or worker_execution.get("status")
+        or "unknown"
+    )
+    observed_at = str(
+        payload.get("observed_at_utc")
+        or worker_execution.get("last_observed_at_utc")
+        or _utc_now()
+    )
+    sample_id = str(
+        payload.get("sample_id")
+        or worker_execution.get("sample_id")
+        or _case_sample_id(workspace)
+    )
+    previous_execution = state.get("execution")
+    execution = (
+        dict(previous_execution) if isinstance(previous_execution, Mapping) else {}
+    )
+    execution.update(worker_execution)
+    children = (
+        list(payload.get("children", []))
+        if isinstance(payload.get("children"), list)
+        else list(worker_execution.get("children", []))
+        if isinstance(worker_execution.get("children"), list)
+        else []
+    )
+    execution.update(
+        {
+            "enabled": True,
+            "requested": True,
+            "state": execution_state,
+            "root_pid": _coerce_int(
+                payload.get("root_pid") or worker_execution.get("root_pid")
+            ),
+            "pid": _coerce_int(payload.get("pid") or worker_execution.get("pid")),
+            "sample_id": sample_id,
+            "expected_sha256": str(
+                payload.get("expected_sha256")
+                or worker_execution.get("expected_sha256")
+                or execution.get("expected_sha256", "")
+            ),
+            "run_id": str(
+                payload.get("run_id")
+                or worker_execution.get("run_id")
+                or execution.get("run_id", "")
+            ),
+            "sample_path_under_case": bool(
+                payload.get("sample_path_under_case")
+                or worker_execution.get("sample_path_under_case")
+            ),
+            "execution_via": "desktop_worker",
+            "last_observed_at_utc": observed_at,
+            "exit_code": _coerce_int(
+                payload.get("exit_code") or worker_execution.get("exit_code")
+            ),
+            "children": children,
+        }
+    )
+    if payload.get("started_at_utc") or worker_execution.get("started_at_utc"):
+        execution["started_at_utc"] = str(
+            payload.get("started_at_utc") or worker_execution.get("started_at_utc")
+        )
+    updated_state = dict(state)
+    updated_state["phase"] = phase
+    updated_state["execution"] = execution
+    updated_state["updated_at_utc"] = observed_at
+    write_case_state(workspace, updated_state)
+
+    event_data = {
+        "root_pid": execution.get("root_pid"),
+        "run_id": execution.get("run_id", ""),
+        "execution_state": execution_state,
+        "exit_code": execution.get("exit_code"),
+        "children_count": len(children),
+        "execution_via": "desktop_worker",
+        "worker_pid": payload.get("worker_pid") or worker_execution.get("worker_pid"),
+        "worker_session_id": payload.get("worker_session_id")
+        or worker_execution.get("worker_session_id"),
+        "low_intrusion_observation": True,
+    }
+    append_event(
+        workspace,
+        event_type=event_type,
+        case_id=safe_id,
+        sample_id=sample_id,
+        message=message,
+        data=event_data,
+    )
+    if event_type == "execution_observed":
+        if children:
+            append_event(
+                workspace,
+                event_type="execution_child_observed",
+                case_id=safe_id,
+                sample_id=sample_id,
+                message="child processes observed by Desktop Worker",
+                data={
+                    "root_pid": execution.get("root_pid"),
+                    "children_count": len(children),
+                    "execution_via": "desktop_worker",
+                },
+            )
+        if execution_state in {"exited_cleanly", "exited_with_error"}:
+            append_event(
+                workspace,
+                event_type="execution_exited",
+                case_id=safe_id,
+                sample_id=sample_id,
+                message="root process exited; no AV verdict is inferred",
+                data={
+                    "root_pid": execution.get("root_pid"),
+                    "exit_code": execution.get("exit_code"),
+                    "execution_via": "desktop_worker",
+                },
+            )
+        elif execution_state == "timeout_still_running":
+            append_event(
+                workspace,
+                event_type="execution_timeout_still_running",
+                case_id=safe_id,
+                sample_id=sample_id,
+                message="polling window ended while process tree was still running",
+                data={
+                    "root_pid": execution.get("root_pid"),
+                    "children_count": len(children),
+                    "execution_via": "desktop_worker",
+                },
+            )
+        elif execution_state == "terminated_or_disappeared":
+            append_event(
+                workspace,
+                event_type="execution_recorded",
+                case_id=safe_id,
+                sample_id=sample_id,
+                message=(
+                    "process is no longer observable; no AV verdict is inferred "
+                    "from this observation alone"
+                ),
+                data={
+                    "root_pid": execution.get("root_pid"),
+                    "execution_via": "desktop_worker",
+                },
+            )
     write_case_report(workspace)
     return execution
 

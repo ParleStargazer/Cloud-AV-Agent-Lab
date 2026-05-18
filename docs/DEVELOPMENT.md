@@ -261,9 +261,9 @@ token_env = "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
 timeout_seconds = 30
 ```
 
-`POST /cases/{case_id}/actions` 只接受白名单 action，不接受任意路径、命令、shell/cmd/PowerShell 或参数。`guest-execute-sample` 默认发送 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata、路径归属和可选 sha256，不启动进程；显式传入 `--real-action` 时请求 `execute_uploaded_sample`。真实启动只有在云端 Guest Agent 启用 execution 且请求携带正确 `CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN` 时才会发生，服务端会再次 `os.path.exists` 确认文件仍存在，并使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)` 直接启动当前 case 已登记文件。标准输入/输出/错误会重定向到 `DEVNULL`，Windows 下使用 `CREATE_NO_WINDOW` 并关闭继承句柄。root PID、启动时间和路径归属校验结果会写入 `case_state.json`，并记录 `execution_started` 事件。
+`POST /cases/{case_id}/actions` 只接受白名单 action，不接受任意路径、命令、shell/cmd/PowerShell 或参数。`guest-execute-sample` 默认发送 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata、路径归属和可选 sha256，不启动进程；显式传入 `--real-action` 时请求 `execute_uploaded_sample`。真实启动只有在云端 Guest Agent 启用 execution、请求携带正确 `CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN`、Desktop Worker ready，且 Worker 校验短期单次 execution lease 后才会发生。Control Agent 不再直接 `Popen`；它签发绑定 `case_id` / `sample_id` / `run_id` / `expected_sha256` 的 lease 并转发给 Worker。Worker 只执行当前 case 已登记 `.exe`，使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`、`DEVNULL` 标准流、`CREATE_NO_WINDOW`、`close_fds=True` 和最小化环境启动。root PID、启动时间、Worker session 和路径归属校验结果会写入状态文件，并记录 `execution_started` 事件。
 
-`guest-execute-sample --real-action` 启动成功后会改为执行状态轮询，不再检查 proof 文件。CLI 默认每 2 秒查询一次 `GET /cases/{case_id}/execution-status`，最多 60 秒；每次输出 root PID、状态和子进程数量。Guest Agent 只做低侵入式只读元信息快照：只观测当前 case 记录的 `root_pid` 及其子进程，不接受任意 PID，不缓存 `psutil.Process` 对象，不读取样本内容或杀软日志，也不能阻碍 Defender 或其他安全软件终止进程。`terminated_or_disappeared` 只表示进程已退出或不可观察，不能单独当作杀软拦截结论。完整设计见 `docs/EXECUTION_MODEL.md`。
+`guest-execute-sample --real-action` 启动成功后会改为执行状态轮询，不再检查 proof 文件。CLI 默认每 2 秒查询一次 `GET /cases/{case_id}/execution-status`，最多 60 秒；每次输出 root PID、状态和子进程数量。Control Agent 会把状态查询转发给 Desktop Worker；Worker 只做低侵入式只读元信息快照：只观测当前 case 记录的 `root_pid` 及其子进程，不接受任意 PID，不缓存 `psutil.Process` 对象，不读取样本内容或杀软日志，也不能阻碍 Defender 或其他安全软件终止进程。`terminated_or_disappeared` 只表示进程已退出或不可观察，不能单独当作杀软拦截结论。完整设计见 `docs/EXECUTION_MODEL.md`。
 
 Guest Agent CLI 报错按来源归因：`[Local Check]` 表示本地配置或环境变量问题，`[Network]` 表示无法连接云端 Guest Agent，`[Remote Agent]` 表示云端鉴权或业务拒绝，例如 execution 未启用。
 
@@ -301,16 +301,19 @@ python -m cloud_av_agent_lab single-run `
   --sample-name eicar-001 `
   --sample-path C:\Temp\eicar.txt `
   --product huorong `
-  --guest-agent-url http://x.x.x.x:8080
+  --guest-agent-url http://x.x.x.x:8080 `
+  --desktop-worker-url http://127.0.0.1:8001
 ```
 
 single-run 会自动计算样本 SHA-256、生成 `case_id` 和 `run_id`，并在 `runs/<run_id>/lab.generated.toml` 写入非敏感临时配置。腾讯云密钥、Guest Agent token、upload token 和 execution token 仍然只从环境变量读取，不写进生成配置、日志或证据包。生成配置中的 sample 仍是云对象占位 URI，真实本地文件路径只作为用户显式上传输入保存在 `run_state.json`。
 
-single-run 面向普通用户，默认就是完整真实流程：生成配置为 `mode = "real"`、`dry_run = false`，并把用户输入的 `--instance-id` 和 `--snapshot-id` 作为内部适配器确认值，不再要求重复输入 `--confirm-instance` / `--confirm-snapshot`。启动前 CLI 会打印 instance、snapshot、region 和 Guest Agent URL，并要求用户确认“此操作会进行实例真实操作，请务必检查实例id和快照id是否正确，并了解此操作的风险，是否确认？”。只有用户确认后才继续。需要演练时显式传 `--dry-run`，此时生成配置为 `mock + dry_run`，云写操作和受控 action 都不会真实执行。
+single-run 面向普通用户，默认就是完整真实流程：生成配置为 `mode = "real"`、`dry_run = false`，并把用户输入的 `--instance-id` 和 `--snapshot-id` 作为内部适配器确认值，不再要求重复输入 `--confirm-instance` / `--confirm-snapshot`。启动前 CLI 会打印 instance、snapshot、region、Guest Agent URL 和 Desktop Worker gate 状态，并要求用户确认“此操作会进行实例真实操作，请务必检查实例id和快照id是否正确，并了解此操作的风险，是否确认？”。只有用户确认后才继续。需要演练时显式传 `--dry-run`，此时生成配置为 `mock + dry_run`，云写操作、Desktop Worker gate 和受控 action 都不会真实执行。
+
+为解决 Windows Session 0 与交互式桌面 session 隔离问题，真实 single-run 现在会默认生成 `[guest_agent.desktop_worker] enabled = true`，并在 Guest Agent health 之后等待 Control Agent `/worker/status` 确认 Desktop Worker ready。真实执行已下放到 Worker：Control Agent 只负责签发 execution lease、转发请求和同步状态；Worker 负责在交互式桌面 session 中启动当前 case 已登记 `.exe` 并就近观测。若需要在旧环境诊断，可以加 `--disable-desktop-worker-gate` 临时跳过门禁，但这样不能作为可靠评测环境。Desktop Worker 的部署与安全边界见 `docs/DESKTOP_WORKER.md`。
 
 上传后执行不再无条件触发。single-run 会读取上传状态轮询的最终结果：`stable` 才调用 `execute_uploaded_sample` 或 dry-run action；`removed_after_save` 表示文件已被安全产品处理，`locked_or_busy` 表示文件可能正在被安全产品占用，二者都会记录 `execution_action_status = "skipped"` 并继续进入日志收集、summary 和 evidence 导出。若状态查询返回其他未知状态，也按保守策略跳过执行。即使执行接口返回“样本已不存在”或“启动失败”这类业务失败，也会记录为 `not_started` / `launch_failed` 等观察结果，并继续收集证据；只有网络、鉴权、本地配置和云生命周期等基础设施错误才会让 single-run 进入失败分支。
 
-推荐单轮流程已经串联：运行锁、生成配置、实例状态查询、快照回滚/启动、Guest Agent 连续 health OK、settling cooldown、prepare-case、upload-sample 与动态状态轮询、受控 action、execution-status 轮询、Huorong collection、case summary、evidence bundle、结尾回滚和 emergency stop 兜底。证据导出在清理前执行；异常分支会短超时尝试 evidence salvage，失败只记录，不阻塞清理。
+推荐单轮流程已经串联：运行锁、生成配置、实例状态查询、快照回滚/启动、Guest Agent 连续 health OK、Desktop Worker ready gate、settling cooldown、prepare-case、upload-sample 与动态状态轮询、受控 action、execution-status 轮询、Huorong collection、case summary、evidence bundle、结尾回滚和 emergency stop 兜底。证据导出在清理前执行；异常分支会短超时尝试 evidence salvage，失败只记录，不阻塞清理。
 
 ## 结构拆分记录
 

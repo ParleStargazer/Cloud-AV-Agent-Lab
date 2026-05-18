@@ -19,6 +19,7 @@ from cloud_av_agent_lab.adapters.guest_agent_client import (
 from cloud_av_agent_lab.config import load_config
 from cloud_av_agent_lab.core.contracts import (
     GuestAgentConfig,
+    GuestAgentDesktopWorkerConfig,
     GuestAgentExecutionConfig,
 )
 from cloud_av_agent_lab.core.pipeline import TestPipeline
@@ -181,6 +182,60 @@ class GuestAgentClientTests(TestCase):
         headers = call["headers"]
         self.assertIsInstance(headers, dict)
         self.assertEqual(headers["Authorization"], "Bearer secret")
+
+    def test_worker_status_uses_network_client_when_enabled(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            timeout_seconds=5,
+            desktop_worker=GuestAgentDesktopWorkerConfig(
+                enabled=True,
+                timeout_seconds=2,
+            ),
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=200,
+                headers={},
+                body=(
+                    b'{"status":"ok","message":"desktop worker status loaded",'
+                    b'"data":{"desktop_worker_ready":true,'
+                    b'"worker_session_id":1}}'
+                ),
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "secret"}
+        )
+
+        response = client.worker_status()
+
+        self.assertTrue(response.data["desktop_worker_ready"])
+        self.assertEqual(len(network.calls), 1)
+        call = network.calls[0]
+        self.assertEqual(call["method"], "GET")
+        self.assertEqual(call["url"], "http://guest-agent.local:8080/worker/status")
+        self.assertEqual(call["timeout_seconds"], 2)
+        headers = call["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+
+    def test_worker_status_requires_local_desktop_worker_config(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+        )
+        client = GuestAgentClient(
+            config, network=FakeNetworkClient(), env={"GUEST_TOKEN": "secret"}
+        )
+
+        with self.assertRaises(GuestAgentError) as error:
+            client.worker_status()
+
+        self.assertEqual(error.exception.source, "local")
+        self.assertIn("desktop worker", str(error.exception).casefold())
 
     def test_case_report_uses_network_client(self) -> None:
         config = GuestAgentConfig(

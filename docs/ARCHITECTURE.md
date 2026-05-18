@@ -40,13 +40,15 @@ stateDiagram-v2
     TriggerDryRun --> TriggerRealRequested: guest-execute-sample --real-action
     TriggerRealRequested --> ExecutionDisabled: remote execution disabled
     TriggerRealRequested --> SampleMissing: sample removed before execution
-    TriggerRealRequested --> ExecutionStarted: controlled Popen
+    TriggerRealRequested --> ExecutionStarted: Desktop Worker launch
 
     ExecutionStarted --> ExecutionObserved: guest-execution-status polling
-    ExecutionObserved --> EvaluationPending
-    ExecutionDisabled --> EvaluationPending
-    SampleMissing --> EvaluationPending
-    EvaluationPending --> SnapshotRestore: future AV log collection and verdicts
+    ExecutionObserved --> Collection: guest-collect-logs
+    ExecutionDisabled --> Collection
+    SampleMissing --> Collection
+    Collection --> Summary: conservative evaluator
+    Summary --> EvidenceBundle: metadata-only export
+    EvidenceBundle --> SnapshotRestore
     SnapshotRestore --> [*]
 ```
 
@@ -63,18 +65,21 @@ path ownership without launching a process. A real trigger requires local
 `[guest_agent.execution].enabled = true`, a matching execution token, and a
 cloud agent started with `--enable-execution-actions`. The server resolves the
 file from `sample.json`, rejects arbitrary paths or shell arguments, verifies
-that the file is still under `<workdir>\cases\<case_id>\sample\`, and starts it
-with `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`.
+that the file is still under `<workdir>\cases\<case_id>\sample\`, signs a
+short-lived execution lease, and forwards the action to Desktop Worker. Worker
+derives the sample path from shared metadata and starts it with
+`subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`.
 
 Execution observation is read-only and low-intrusion. The Agent observes only
 the root PID recorded for the current case and its descendants, takes short
 metadata snapshots, does not cache process objects, does not accept arbitrary
 PIDs, and does not infer AV blocking from process disappearance alone.
 
-Evaluation is intentionally separate. Future work should read AV logs,
-screenshots, and product-specific telemetry after the trigger phase, produce a
-verdict, then restore the Lighthouse baseline snapshot. Defender or vendor-log
-parsing should not be coupled into upload or trigger endpoints.
+Collection and evaluation are intentionally separate. Collectors read
+product-specific logs after the trigger phase, the evaluator produces a
+conservative verdict, and the exporter writes metadata-only evidence before the
+Lighthouse baseline snapshot is restored. Defender or vendor-log parsing should
+not be coupled into upload or trigger endpoints.
 
 ## Adapter Contracts
 
@@ -90,14 +95,15 @@ parsing should not be coupled into upload or trigger endpoints.
 `GuestAutomationAdapter` owns guest actions:
 
 - prepare per-case workspace inside the guest;
-- stage sample from cloud object storage to the guest;
-- execute the sample under time limits;
+- upload or stage the user-explicit EICAR/harmless sample into a guest case
+  workspace;
+- request only bounded case actions for registered uploads;
 - collect product logs and behavior observations.
 
-Future HTTP access to a cloud-side Guest Agent should use `GuestAgentClient`,
-which delegates outbound requests to `NetworkClient`.
+HTTP access to a cloud-side Guest Agent uses `GuestAgentClient`, which
+delegates outbound requests to `NetworkClient`.
 
-The default adapters are plan-only and never execute a sample.
+The null/default adapters are plan-only and never execute a sample.
 
 ## Single-Run Orchestration
 
@@ -107,7 +113,8 @@ the adapter contracts; it composes them for one case:
 1. create a run id, case id, run directory, contextual logger, and instance lock;
 2. generate a non-sensitive `lab.generated.toml`;
 3. restore the Lighthouse baseline and wait for a stable running guest;
-4. wait for Guest Agent health twice, then apply a settling cooldown;
+4. wait for Guest Agent health twice, then require Desktop Worker ready for
+   real runs before applying a settling cooldown;
 5. prepare the case, upload the explicit EICAR/harmless file, observe upload
    state, optionally request the controlled action, collect logs, summarize, and
    export evidence;
@@ -125,21 +132,31 @@ snapshot id are then used as the internal adapter confirmations. Passing
 `--dry-run` switches the generated cloud profile back to `mock`/`dry_run` and
 keeps the controlled action in dry-run mode.
 
+Desktop Worker is the execution-layer split for Windows desktop-session
+correctness. The Worker runs in the interactive desktop session and is queried
+through Control Agent `/worker/status`; it binds only to localhost and is
+authenticated with `CLOUD_AV_DESKTOP_WORKER_TOKEN`. Current real process launch
+and process-tree observation are routed through Worker with a short-lived
+single-use execution lease, run-bound metadata, `.exe`-only enforcement, and
+minimal child-process environment. See `docs/DESKTOP_WORKER.md`.
+
 The Guest Agent MVP is documented in `docs/GUEST_AGENT.md`. It currently covers
-only `/health`, `/system-info`, `/prepare-case`, an EICAR/harmless-file upload
-endpoint, metadata-only case status/report endpoints, and a default-disabled
+`/health`, `/system-info`, `/prepare-case`, an EICAR/harmless-file upload
+endpoint, metadata-only case status/report/summary/evidence endpoints, product
+log collection endpoints, Worker status proxy, and a default-disabled
 controlled action endpoint. The default workflow does not execute samples; the
-real trigger path is available only when execution is explicitly enabled and is
-restricted to the current case's registered uploaded EICAR or harmless file.
+real trigger path is available only when execution is explicitly enabled,
+Desktop Worker is ready, and the request is restricted to the current case's
+registered uploaded EICAR or harmless `.exe`.
 
 The trigger-stage design is documented in `docs/EXECUTION_MODEL.md`. It forbids
 arbitrary command execution, client-supplied guest paths, shell/cmd/PowerShell
 arguments, and direct Defender-log coupling in the trigger stage. Trigger
 actions must be based only on current case metadata and the registered uploaded
 sample. The current real trigger path is default-off and requires a separate
-execution token; when enabled for cloud-side manual validation, it starts only
-the registered uploaded file with `shell=False` and records the PID in case
-state.
+execution token plus Desktop Worker lease; when enabled for cloud-side manual
+validation, Worker starts only the registered uploaded file with `shell=False`
+and Control Agent records the PID and Worker observation in case state.
 
 `VmProfile` represents a recoverable test environment profile, not necessarily a unique cloud machine. Multiple profiles may share the same Lighthouse `instance_id` when each profile points to a different `baseline_snapshot` and `product_id`. This single-instance, multi-snapshot layout is supported as long as orchestration remains serial or future schedulers lock by `instance_id`.
 

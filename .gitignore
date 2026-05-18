@@ -37,6 +37,8 @@ malware/
 *.dll
 *.scr
 *.ps1
+!scripts/build-guest-agent.ps1
+!scripts/build-desktop-worker.ps1
 
 .vscode/
 

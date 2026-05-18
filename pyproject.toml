@@ -23,6 +23,15 @@ guest-agent = [
 guest-agent-build = [
   "pyinstaller",
 ]
+desktop-worker = [
+  "fastapi",
+  "psutil",
+  "uvicorn",
+  "pydantic",
+]
+desktop-worker-build = [
+  "pyinstaller",
+]
 
 [project.scripts]
 cloud-av-agent-lab = "cloud_av_agent_lab.cli:main"

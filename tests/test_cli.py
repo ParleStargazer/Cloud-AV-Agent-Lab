@@ -142,6 +142,56 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(exit_error.exception.code, 2)
         self.assertIn("[Local Check]", stderr.getvalue())
 
+    def test_guest_worker_status_exits_when_desktop_worker_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            stderr = StringIO()
+
+            with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+                main(
+                    [
+                        "guest-worker-status",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-huorong",
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("Desktop Worker", stderr.getvalue())
+
+    def test_guest_worker_status_prints_status_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.desktop-worker-enabled.toml"
+            config_path.write_text(
+                _guest_agent_desktop_worker_enabled_config(),
+                encoding="utf-8",
+            )
+            fake_client = _FakeGuestAgentClient()
+            stdout = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "guest-worker-status",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-huorong",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn('"desktop_worker_ready": true', stdout.getvalue())
+
     def test_guest_upload_exits_clearly_when_guest_agent_disabled(self) -> None:
         stderr = StringIO()
 
@@ -1288,6 +1338,19 @@ class _FakeGuestAgentClient:
             },
         )
 
+    def worker_status(self) -> GuestAgentResponse:
+        return GuestAgentResponse(
+            status="ok",
+            message="desktop worker status loaded",
+            data={
+                "desktop_worker_ready": True,
+                "desktop_session_ready": True,
+                "worker_session_id": 1,
+                "desktop_session_state": "active",
+                "username": "avtest",
+            },
+        )
+
     def execution_status(
         self,
         case_id: str,
@@ -1325,6 +1388,7 @@ class _FakeGuestAgentClient:
         sample_id: str,
         expected_sha256: str = "",
         dry_run: bool = True,
+        run_id: str = "",
     ) -> GuestAgentResponse:
         self.execute_calls.append(
             {
@@ -1332,6 +1396,7 @@ class _FakeGuestAgentClient:
                 "sample_id": sample_id,
                 "expected_sha256": expected_sha256,
                 "dry_run": dry_run,
+                "run_id": run_id,
             }
         )
         self.execute_called = not dry_run
@@ -1401,6 +1466,9 @@ class _FailingGuestAgentClient:
     def collection_status(self, case_id: str) -> GuestAgentResponse:
         raise self.error
 
+    def worker_status(self) -> GuestAgentResponse:
+        raise self.error
+
     def execution_status(
         self,
         case_id: str,
@@ -1415,6 +1483,7 @@ class _FailingGuestAgentClient:
         sample_id: str,
         expected_sha256: str = "",
         dry_run: bool = True,
+        run_id: str = "",
     ) -> GuestAgentResponse:
         raise self.error
 
@@ -1437,5 +1506,22 @@ def _guest_agent_execution_enabled_config() -> str:
         "# 受控触发能力默认关闭。本地配置和云端 Guest Agent 都显式开启，并提供\n"
         "# execution token 后，才允许触发当前 case 已登记上传文件。\n"
         "# 不接受任意命令、任意路径或 shell 参数；本地控制面仍不执行样本。\n"
+        "enabled = true",
+    )
+
+
+def _guest_agent_desktop_worker_enabled_config() -> str:
+    return _guest_agent_enabled_config().replace(
+        "[guest_agent.desktop_worker]\n"
+        "# Desktop Worker 运行在云端 Windows 交互式桌面 session 中，只监听\n"
+        "# 127.0.0.1。Control Agent 通过本机 HTTP 查询 Worker ready 状态；后续真实\n"
+        "# 执行会下放给 Worker，避免 Session 0 直接启动样本。默认关闭，直到云端\n"
+        "# baseline snapshot 已固化自动登录和 Worker 自启动。\n"
+        "enabled = false",
+        "[guest_agent.desktop_worker]\n"
+        "# Desktop Worker 运行在云端 Windows 交互式桌面 session 中，只监听\n"
+        "# 127.0.0.1。Control Agent 通过本机 HTTP 查询 Worker ready 状态；后续真实\n"
+        "# 执行会下放给 Worker，避免 Session 0 直接启动样本。默认关闭，直到云端\n"
+        "# baseline snapshot 已固化自动登录和 Worker 自启动。\n"
         "enabled = true",
     )

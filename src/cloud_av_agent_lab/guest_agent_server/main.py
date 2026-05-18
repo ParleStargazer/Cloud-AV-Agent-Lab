@@ -14,6 +14,13 @@ from cloud_av_agent_lab.guest_agent_server.auth import (
     load_required_upload_token,
     load_required_token,
 )
+from cloud_av_agent_lab.desktop_worker.auth import (
+    TOKEN_ENV as DESKTOP_WORKER_TOKEN_ENV,
+)
+from cloud_av_agent_lab.desktop_worker.auth import (
+    DesktopWorkerConfigError,
+    load_required_token as load_required_desktop_worker_token,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,6 +54,40 @@ def build_parser() -> argparse.ArgumentParser:
         default=30.0,
         help="reported timeout window for controlled execution actions",
     )
+    parser.add_argument(
+        "--enable-desktop-worker",
+        action="store_true",
+        help=(
+            "enable localhost Desktop Worker readiness checks; requires a worker "
+            "token and does not expose Worker to the network"
+        ),
+    )
+    parser.add_argument(
+        "--desktop-worker-url",
+        default="http://127.0.0.1:8001",
+        help="Control Agent localhost URL for Desktop Worker",
+    )
+    parser.add_argument(
+        "--desktop-worker-token-env",
+        default=DESKTOP_WORKER_TOKEN_ENV,
+        help="environment variable that stores the Desktop Worker token",
+    )
+    parser.add_argument(
+        "--desktop-worker-timeout-seconds",
+        type=float,
+        default=5.0,
+        help="timeout for Control Agent to query Desktop Worker health",
+    )
+    parser.add_argument(
+        "--desktop-worker-expected-user",
+        default="",
+        help="optional expected interactive Windows user for Desktop Worker",
+    )
+    parser.add_argument(
+        "--allow-worker-session-0",
+        action="store_true",
+        help="developer diagnostic escape hatch; real execution should require session != 0",
+    )
     return parser
 
 
@@ -62,7 +103,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.enable_execution_actions
             else None
         )
-    except GuestAgentServerConfigError as exc:
+        desktop_worker_token = (
+            load_required_desktop_worker_token(token_env=args.desktop_worker_token_env)
+            if args.enable_desktop_worker
+            else None
+        )
+    except (GuestAgentServerConfigError, DesktopWorkerConfigError) as exc:
         parser.exit(2, f"error: {exc}\n")
 
     logging.basicConfig(
@@ -86,6 +132,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         execution_enabled=args.enable_execution_actions,
         execution_token=execution_token,
         execution_timeout_seconds=args.execution_timeout_seconds,
+        desktop_worker_enabled=args.enable_desktop_worker,
+        desktop_worker_base_url=args.desktop_worker_url,
+        desktop_worker_token=desktop_worker_token,
+        desktop_worker_timeout_seconds=args.desktop_worker_timeout_seconds,
+        desktop_worker_expected_user=args.desktop_worker_expected_user,
+        desktop_worker_require_interactive_session=not args.allow_worker_session_0,
     )
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
