@@ -359,18 +359,28 @@ available in `events.jsonl` and in the evidence bundle. The CLI mirrors this:
 `guest-case-summary` prints concise text by default and prints the full JSON
 only when `--json` is provided. The evaluator prefers
 `detected_or_blocked` only when product-log evidence matches the current case.
-If the file was removed after save without product-log evidence, the verdict is
-`suspiciously_removed`; if execution did not happen or could not be observed,
-the verdict stays conservative rather than claiming a clean miss.
+If the file was removed after save and collection failed or was not run, the
+verdict is now `inconclusive`; if collection completed but still found no
+matching product evidence, the verdict is `suspiciously_removed`. If execution
+did not happen, was skipped, or failed as a controlled action state such as
+Worker busy, sample missing, sha256 mismatch, unsupported file type, or launch
+failure, the verdict stays conservative rather than claiming a clean miss.
+`no_detection_observed` is only allowed when delivery stayed stable, execution
+was actually observed, collection completed successfully in a window covering
+execution, and no matching product evidence or collector errors were present.
 
 `GET /cases/{case_id}/evidence-bundle` returns
 `case_evidence_<case_id>.zip`. The bundle contains `manifest.json`,
 `case_state.json`, `case_report.json`, `case_collection.json`,
-`case_summary.json`, `events.jsonl`, and normalized collector evidence. It does
-not include the `sample/` directory, uploaded sample bytes, token values,
-environment variables, cloud credentials, raw collector database copies, or real
-cloud configuration files. The manifest records SHA-256 hashes for every file
-included in the zip so the bundle can be archived and later verified.
+`case_summary.json`, `case_summary.md`, `events.jsonl`, `sample/sample.json`,
+Worker state, normalized collector evidence, and collector-produced artifacts
+under `collection/<product_id>/`. Huorong collection can therefore include the
+copied `collection/huorong/log.db` family for later review. It does not include
+uploaded sample bytes, token values, environment variables, cloud credentials,
+recursive evidence zips, real cloud configuration files, symlinks, junctions, or
+unknown workspace roots. The manifest records the v2 collection policy,
+included paths, excluded path details, categories, and SHA-256 hashes for every
+file included in the zip so the bundle can be archived and later verified.
 
 ## Status Observation Notes
 

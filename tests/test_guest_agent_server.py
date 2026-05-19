@@ -1556,22 +1556,26 @@ class GuestAgentServerTests(unittest.TestCase):
             self.assertIn("case_collection.json", names)
             self.assertIn("case_summary.json", names)
             self.assertIn("events.jsonl", names)
+            self.assertIn("sample/sample.json", names)
+            self.assertIn("collection/huorong/log.db", names)
             self.assertIn("collector/normalized_evidence.json", names)
-            self.assertFalse(any(name.startswith("sample/") for name in names))
+            self.assertNotIn("sample/eicar.txt", names)
             self.assertNotIn("configs/real.toml", names)
             manifest = json.loads(bundle.read("manifest.json").decode("utf-8"))
+            self.assertEqual(manifest["schema_version"], "evidence-bundle.v2")
+            self.assertIn("collection/huorong/log.db", manifest["included_paths"])
             for item in manifest["files"]:
                 content = bundle.read(item["path"])
                 self.assertEqual(item["sha256"], hashlib.sha256(content).hexdigest())
             bundle_text = "\n".join(
                 bundle.read(name).decode("utf-8", errors="ignore")
                 for name in names
-                if name.endswith((".json", ".jsonl", ".md"))
+                if name.endswith((".json", ".jsonl", ".md")) and name != "manifest.json"
             )
         self.assertNotIn("DO-NOT-READ-SAMPLE-CONTENT", bundle_text)
         self.assertNotIn(TOKEN, bundle_text)
         self.assertNotIn(UPLOAD_TOKEN, bundle_text)
-        self.assertNotIn("real.toml", bundle_text.casefold())
+        self.assertFalse(any(name.casefold().endswith("real.toml") for name in names))
 
     def test_evidence_bundle_missing_case_returns_404(self) -> None:
         response = self.client.get(

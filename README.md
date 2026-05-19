@@ -98,6 +98,13 @@ python -m cloud_av_agent_lab single-run `
 
 真实触发仍然只允许云端 Guest Agent 执行当前 case 已登记上传文件，且必须满足云端 execution 开关和 token 校验；本地控制面仍不执行样本。single-run 会根据上传轮询结果决定是否触发：只有 `stable` 才请求执行接口；`removed_after_save`、`locked_or_busy` 或未知状态会记录为执行跳过，并继续 collection、summary 和 evidence 导出。若执行接口返回样本已不存在或启动失败这类业务状态，也会作为本轮观察结果继续收集证据，而不是直接中断整个流程。
 
+summary 现在按保守原则生成：只有产品日志明确匹配当前 case 时才输出
+`detected_or_blocked`；collection 失败、未收集、partial、Worker busy、lease
+失败、样本缺失、sha256 不匹配、进程消失但没有产品日志证据等情况，不会被写成
+`no_detection_observed`，而是进入 `inconclusive` 或 `execution_not_observed`。
+CLI 默认只打印简洁结论，`guest-case-summary --json` 可查看完整
+`case_summary.json`、决策输入和关键时间线。
+
 每次运行会创建：
 
 ```text
@@ -111,7 +118,9 @@ runs/
     case_evidence_<case_id>.zip
 ```
 
-`run_state.json` 会记录每一步状态、样本 SHA-256、证据导出状态、清理状态和错误；`run.log` 每行带 `[instance_id][run_id]` 上下文。`runs/.locks/<instance_id>.lock` 防止同一 Lighthouse 实例被并发操作，过期或心跳陈旧的锁会被归档，必要时可使用 `--force-unlock`。证据导出发生在结尾快照回滚之前；如果流程异常，会尝试短超时 fast-fail 证据打捞，随后再进行清理回滚。若回滚失败，会尝试 emergency stop，并在最终输出中提示人工介入。
+`run_state.json` 会记录每一步状态、样本 SHA-256、证据导出状态、清理状态和错误，并额外维护 `stages.environment/delivery/execution/collection/summary/evidence/cleanup` 结构，方便后续 multi-run 聚合。`run.log` 每行带 `[instance_id][run_id]` 上下文。`runs/.locks/<instance_id>.lock` 防止同一 Lighthouse 实例被并发操作，过期或心跳陈旧的锁会被归档，必要时可使用 `--force-unlock`。证据导出发生在结尾快照回滚之前；如果流程异常，会尝试短超时 fast-fail 证据打捞，随后再进行清理回滚。若回滚失败，会尝试 emergency stop，并在最终输出中提示人工介入。
+
+证据包采用 `evidence-bundle.v2` 策略：包含 case 元数据、`sample/sample.json`、summary、events、Worker 状态、normalized evidence，以及各 collector 复制到 `collection/<product_id>/` 的证据文件；不包含上传样本本体、token、云密钥、`configs/real.toml`、递归 zip、symlink/junction 或未知根目录。
 
 ## 工作流
 

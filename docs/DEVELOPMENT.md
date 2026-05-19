@@ -315,6 +315,22 @@ single-run 面向普通用户，默认就是完整真实流程：生成配置为
 
 推荐单轮流程已经串联：运行锁、生成配置、实例状态查询、快照回滚/启动、Guest Agent 连续 health OK、Desktop Worker ready gate、settling cooldown、prepare-case、upload-sample 与动态状态轮询、受控 action、execution-status 轮询、Huorong collection、case summary、evidence bundle、结尾回滚和 emergency stop 兜底。证据导出在清理前执行；异常分支会短超时尝试 evidence salvage，失败只记录，不阻塞清理。
 
+`run_state.json` 现在同时保留旧的扁平字段和新的结构化 `stages`：
+`environment`、`delivery`、`execution`、`collection`、`summary`、`evidence`
+和 `cleanup`。可预期的测试对象状态，例如 `removed_after_save`、
+`locked_or_busy`、`worker_busy`、`sample_missing_before_execution`、
+`sha256_mismatch` 或 collector 远端失败，会写入 `warnings` 与对应 stage，
+并继续 summary/evidence；网络不可达、鉴权、本地配置和云生命周期错误仍会
+进入失败路径。`status` 表示流程完成情况，`test_verdict` 表示评测结论，
+后续 multi-run 可以直接聚合这两个字段。
+
+证据包已升级为 `evidence-bundle.v2`。Exporter 只打包明确允许的 case
+workspace 根：case 元数据、`sample/sample.json`、`collection/`、`worker-state/`
+以及派生的 `collector/normalized_evidence.json`。上传样本本体、旧 evidence
+zip、真实云配置、token/credential/key 命名文件、symlink/junction 和未知根
+都会被排除并写入 manifest。安全产品原始日志副本必须由对应 collector 先复制到
+`collection/<product_id>/`，single-run 和 exporter 都不写死产品安装目录。
+
 ## 结构拆分记录
 
 2026-05-15 已完成两个 facade 包拆分，用于降低大文件维护成本，同时保持外部 import 兼容：

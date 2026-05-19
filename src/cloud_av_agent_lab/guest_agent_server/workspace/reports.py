@@ -118,6 +118,9 @@ def _build_case_report(workspace: Path, max_events: int) -> dict[str, Any]:
             "reason": str(collection_data.get("reason", "")),
             "evidence_count": _coerce_int(collection_data.get("evidence_count")) or 0,
             "collected_at_utc": str(collection_data.get("collected_at_utc", "")),
+            "window": dict(collection_data.get("window", {}))
+            if isinstance(collection_data.get("window"), Mapping)
+            else {},
             "errors": list(collection_data.get("errors", []))
             if isinstance(collection_data.get("errors"), list)
             else [],

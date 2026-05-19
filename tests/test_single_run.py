@@ -68,10 +68,23 @@ class SingleRunTests(TestCase):
 
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
             self.assertEqual(run_state["final_status"], "completed")
+            self.assertEqual(run_state["status"], "completed")
+            self.assertEqual(run_state["test_verdict"], "detected_or_blocked")
             self.assertEqual(run_state["evidence_export_status"], "saved")
             self.assertEqual(run_state["cleanup_status"], "dry_run")
             self.assertTrue(run_state["desktop_worker_ready"])
             self.assertEqual(run_state["desktop_session_state"], "active")
+            self.assertEqual(
+                run_state["stages"]["environment"]["desktop_session_state"],
+                "active",
+            )
+            self.assertEqual(run_state["stages"]["delivery"]["upload_state"], "stable")
+            self.assertEqual(
+                run_state["stages"]["execution"]["action_status"],
+                "observed",
+            )
+            self.assertEqual(run_state["stages"]["evidence"]["status"], "saved")
+            self.assertIn("evidence_bundle", run_state["artifacts"])
 
     def test_single_run_dry_run_generates_mock_config_and_dry_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -121,7 +134,7 @@ class SingleRunTests(TestCase):
             self.assertFalse(run_state.get("case_started", False))
             self.assertIn("desktop session", run_state["errors"][0]["message"])
 
-    def test_fast_fail_salvage_runs_after_case_error(self) -> None:
+    def test_collection_remote_failure_continues_to_summary_and_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             sample_path = root / "sample.bin"
@@ -142,13 +155,15 @@ class SingleRunTests(TestCase):
                 sleep=lambda seconds: None,
             )
 
-            self.assertEqual(result.final_status, "failed")
+            self.assertEqual(result.final_status, "completed_with_warnings")
             self.assertTrue(result.evidence_bundle_path)
             self.assertTrue(result.evidence_bundle_path.is_file())
-            self.assertEqual(client.export_timeouts[-1], 5)
+            self.assertEqual(client.export_timeouts[-1], 120)
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
             self.assertEqual(run_state["evidence_export_status"], "saved")
             self.assertTrue(run_state["case_started"])
+            self.assertEqual(run_state["stages"]["collection"]["state"], "failed")
+            self.assertTrue(run_state["warnings"])
 
     def test_removed_after_save_skips_execution_but_continues_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -164,7 +179,7 @@ class SingleRunTests(TestCase):
                 sleep=lambda seconds: None,
             )
 
-            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(result.final_status, "completed_with_warnings")
             self.assertEqual(client.execute_dry_runs, [])
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
             self.assertEqual(run_state["post_upload_state"], "removed_after_save")
@@ -174,6 +189,10 @@ class SingleRunTests(TestCase):
                 "skipped_removed_after_save",
             )
             self.assertEqual(run_state["evidence_export_status"], "saved")
+            self.assertEqual(
+                run_state["stages"]["execution"]["state"],
+                "skipped_removed_after_save",
+            )
 
     def test_locked_or_busy_skips_execution_but_continues_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -189,7 +208,7 @@ class SingleRunTests(TestCase):
                 sleep=lambda seconds: None,
             )
 
-            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(result.final_status, "completed_with_warnings")
             self.assertEqual(client.execute_dry_runs, [])
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
             self.assertEqual(run_state["post_upload_state"], "locked_or_busy")
@@ -219,7 +238,7 @@ class SingleRunTests(TestCase):
                 sleep=lambda seconds: None,
             )
 
-            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(result.final_status, "completed_with_warnings")
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
             self.assertEqual(run_state["post_upload_state"], "stable")
             self.assertEqual(run_state["execution_action_status"], "not_started")
@@ -227,6 +246,33 @@ class SingleRunTests(TestCase):
                 run_state["execution_action_state"],
                 "sample_missing_before_execution",
             )
+            self.assertEqual(run_state["stages"]["execution"]["error_source"], "remote")
+            self.assertEqual(run_state["stages"]["execution"]["error_status_code"], 400)
+            self.assertEqual(run_state["evidence_export_status"], "saved")
+
+    def test_worker_busy_execute_error_is_nonfatal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.bin"
+            sample_path.write_bytes(b"harmless")
+            client = FakeGuestClient(
+                execute_error=GuestAgentError(
+                    "desktop worker is busy",
+                    status_code=409,
+                    source="remote",
+                )
+            )
+
+            result = run_single_case(
+                _options(root, sample_path),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_state["execution_action_state"], "worker_busy")
             self.assertEqual(run_state["evidence_export_status"], "saved")
 
 

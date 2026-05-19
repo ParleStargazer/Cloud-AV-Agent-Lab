@@ -18,6 +18,9 @@ class EvaluationSummary:
     delivery: Mapping[str, Any] = field(default_factory=dict)
     execution: Mapping[str, Any] = field(default_factory=dict)
     collection: Mapping[str, Any] = field(default_factory=dict)
+    decision_inputs: Mapping[str, Any] = field(default_factory=dict)
+    blocking_conditions: Sequence[str] = field(default_factory=tuple)
+    nonfatal_failures: Sequence[str] = field(default_factory=tuple)
     timeline: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     generated_at_utc: str = ""
 
@@ -34,6 +37,9 @@ class EvaluationSummary:
             "delivery": dict(self.delivery),
             "execution": dict(self.execution),
             "collection": dict(self.collection),
+            "decision_inputs": dict(self.decision_inputs),
+            "blocking_conditions": list(self.blocking_conditions),
+            "nonfatal_failures": list(self.nonfatal_failures),
             "timeline": [dict(item) for item in self.timeline],
             "generated_at_utc": self.generated_at_utc,
         }

@@ -1015,19 +1015,6 @@ def _print_case_summary(data: dict[str, object]) -> None:
         print("Key Reasons:")
         for reason in reasons:
             print(f"- {reason}")
-    timeline = data.get("timeline", [])
-    if isinstance(timeline, list) and timeline:
-        print("")
-        print("Timeline:")
-        for item in timeline:
-            if not isinstance(item, dict):
-                continue
-            print(
-                "- "
-                f"{item.get('timestamp_utc', '')} "
-                f"[{item.get('source', '')}] "
-                f"{item.get('event_type', '')}: {item.get('message', '')}"
-            )
 
 
 def _print_guest_upload_response(response: GuestAgentResponse) -> None:

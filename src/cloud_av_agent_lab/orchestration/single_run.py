@@ -53,7 +53,16 @@ TERMINAL_EXECUTION_STATES = {
     "terminated_or_disappeared",
 }
 NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS = {
+    "desktop worker is required for real execution but is not ready": (
+        "desktop_worker_not_ready"
+    ),
+    "desktop worker is busy": "worker_busy",
+    "execution lease has expired": "lease_expired",
+    "execution lease has already been consumed": "lease_reused",
+    "execution lease": "lease_invalid",
     "uploaded sample is missing before execution": "sample_missing_before_execution",
+    "expected_sha256 does not match": "sha256_mismatch",
+    "desktop worker only executes registered .exe files": "unsupported_file_type",
     "uploaded sample failed to start": "launch_failed",
     "execute_uploaded_sample requires a previously uploaded sample": "not_uploaded",
 }
@@ -295,6 +304,7 @@ def _run_single_case_locked(
     case_started = False
     evidence_saved = False
     case_error: BaseException | None = None
+    warning_count = 0
 
     LOGGER.info("single-run started")
 
@@ -302,6 +312,8 @@ def _run_single_case_locked(
         with state.step("hash_sample"):
             sha256, size = _hash_file(Path(options.sample_path))
             state.set_sample_hash(sha256, size)
+            state.mark_stage("delivery", "sample_sha256", sha256)
+            state.mark_stage("delivery", "sample_size", size)
             LOGGER.info("sample metadata calculated: name=%s size=%d", sample_id, size)
 
         with state.step("write_generated_config"):
@@ -349,6 +361,7 @@ def _run_single_case_locked(
                 required_successes=options.guest_ready_successes,
                 sleep=sleep,
             )
+            state.mark_stage("environment", "guest_agent_ready", True)
 
         if config.guest_agent.desktop_worker.enabled:
             with state.step("wait_desktop_worker_ready"):
@@ -360,7 +373,13 @@ def _run_single_case_locked(
                     sleep=sleep,
                 )
                 state.mark("desktop_worker_ready", True)
+                state.mark_stage("environment", "desktop_worker_ready", True)
                 state.mark(
+                    "desktop_session_state",
+                    str(worker_status.data.get("desktop_session_state", "")),
+                )
+                state.mark_stage(
+                    "environment",
                     "desktop_session_state",
                     str(worker_status.data.get("desktop_session_state", "")),
                 )
@@ -368,13 +387,27 @@ def _run_single_case_locked(
                     "desktop_worker_session_id",
                     worker_status.data.get("worker_session_id"),
                 )
+                state.mark_stage(
+                    "environment",
+                    "desktop_worker_session_id",
+                    worker_status.data.get("worker_session_id"),
+                )
                 state.mark(
                     "desktop_worker_user",
                     str(worker_status.data.get("username", "")),
                 )
+                state.mark_stage(
+                    "environment",
+                    "desktop_worker_user",
+                    str(worker_status.data.get("username", "")),
+                )
+                state.mark_stage("environment", "product_readiness_checked", False)
+                state.mark_stage("environment", "product_environment_ready", None)
         else:
             state.mark("desktop_worker_ready", False)
             state.mark("desktop_worker_gate", "disabled")
+            state.mark_stage("environment", "desktop_worker_ready", False)
+            state.mark_stage("environment", "desktop_worker_gate", "disabled")
 
         with state.step("settling_cooldown"):
             LOGGER.info(
@@ -392,6 +425,7 @@ def _run_single_case_locked(
             )
             case_started = True
             state.mark("case_started", True)
+            state.mark_stage("delivery", "case_started", True)
 
         with state.step("upload_sample"):
             lock.heartbeat()
@@ -412,6 +446,8 @@ def _run_single_case_locked(
             )
             upload_state = str(_extract_upload_state(upload_response.data) or "unknown")
             state.mark("post_upload_state", upload_state)
+            state.mark_stage("delivery", "upload_state", upload_state)
+            state.mark_stage("delivery", "post_upload_state", upload_state)
 
         with state.step("execute_action"):
             lock.heartbeat()
@@ -430,14 +466,57 @@ def _run_single_case_locked(
             state.mark("execution_action_status", execution_result["status"])
             state.mark("execution_action_state", execution_result["execution_state"])
             state.mark("execution_action_reason", execution_result["reason"])
+            state.mark_stage("execution", "action_status", execution_result["status"])
+            state.mark_stage("execution", "state", execution_result["execution_state"])
+            state.mark_stage("execution", "reason", execution_result["reason"])
+            state.mark_stage(
+                "execution",
+                "error_source",
+                execution_result.get("error_source", "none"),
+            )
+            state.mark_stage(
+                "execution",
+                "error_status_code",
+                execution_result.get("error_status_code"),
+            )
+            state.mark_stage("execution", "via", execution_result.get("via", ""))
+            if execution_result["status"] in {"skipped", "not_started"}:
+                state.add_warning("execution", execution_result["reason"])
+                warning_count += 1
 
         with state.step("collect_logs"):
             lock.heartbeat()
-            client.collect_logs(
-                case_id,
-                product_id,
-                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
-            )
+            try:
+                collection_response = client.collect_logs(
+                    case_id,
+                    product_id,
+                    timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+                )
+            except GuestAgentError as exc:
+                if exc.source != "remote" or exc.status_code in {401, 403}:
+                    raise
+                state.add_warning("collection", str(exc))
+                warning_count += 1
+                state.mark_stage("collection", "state", "failed")
+                state.mark_stage("collection", "error_source", exc.source)
+                state.mark_stage("collection", "error_status_code", exc.status_code)
+                LOGGER.warning("collection failed nonfatally: %s", exc)
+            else:
+                state.mark_stage(
+                    "collection",
+                    "state",
+                    str(collection_response.data.get("collection_state", "")),
+                )
+                state.mark_stage(
+                    "collection",
+                    "verdict",
+                    str(collection_response.data.get("verdict", "")),
+                )
+                state.mark_stage(
+                    "collection",
+                    "evidence_count",
+                    collection_response.data.get("evidence_count", 0),
+                )
 
         with state.step("case_summary"):
             lock.heartbeat()
@@ -448,6 +527,12 @@ def _run_single_case_locked(
             summary_path = _write_summary_outputs(run_dir, summary_response.data)
             verdict = str(summary_response.data.get("verdict", ""))
             confidence = str(summary_response.data.get("confidence", ""))
+            state.mark("test_verdict", verdict)
+            state.mark_stage("summary", "verdict", verdict)
+            state.mark_stage("summary", "confidence", confidence)
+            state.mark_stage("summary", "path", str(summary_path))
+            state.mark_artifact("summary_json", str(summary_path))
+            state.mark_artifact("summary_markdown", str(run_dir / "case_summary.md"))
 
         with state.step("export_evidence"):
             lock.heartbeat()
@@ -460,10 +545,20 @@ def _run_single_case_locked(
             evidence_saved = True
             state.mark("evidence_export_status", "saved")
             state.mark("evidence_bundle_path", str(evidence_path))
+            state.mark_stage("evidence", "status", "saved")
+            state.mark_stage("evidence", "path", str(evidence_path))
+            state.mark_stage(
+                "evidence",
+                "sha256",
+                str(evidence_response.data.get("sha256", "")),
+            )
+            state.mark_stage("evidence", "size", evidence_response.data.get("size"))
+            state.mark_artifact("evidence_bundle", str(evidence_path))
 
     except Exception as exc:
         case_error = exc
         state.add_error("single_run", exc)
+        state.add_fatal_error("single_run", exc)
         if isinstance(exc, GuestAgentError) and exc.source == "network":
             state.mark("agent_dead", True)
         LOGGER.error("single-run case flow failed: %s", exc)
@@ -483,7 +578,14 @@ def _run_single_case_locked(
             adapter=locals().get("adapter"), vm=locals().get("vm"), state=state
         )
 
-    final_status = _final_status(case_error, cleanup_failed)
+    warning_count = max(
+        warning_count,
+        len(state.data.get("warnings", []))
+        if isinstance(state.data.get("warnings"), list)
+        else 0,
+    )
+    final_status = _final_status(case_error, cleanup_failed, warning_count > 0)
+    state.mark("status", final_status)
     state.mark("final_status", final_status)
     if case_error is not None and cleanup_failed:
         LOGGER.critical(
@@ -541,6 +643,8 @@ def _cleanup_instance(adapter: object, vm: object, state: RunState) -> bool:
     if adapter is None or vm is None:
         state.mark("cleanup_status", "skipped")
         state.mark("emergency_poweroff_status", "skipped")
+        state.mark_stage("cleanup", "status", "skipped")
+        state.mark_stage("cleanup", "emergency_poweroff_status", "skipped")
         return False
     try:
         with state.step("cleanup_check_instance_status"):
@@ -553,12 +657,20 @@ def _cleanup_instance(adapter: object, vm: object, state: RunState) -> bool:
         with state.step("cleanup_restore_snapshot"):
             response = adapter.restore_snapshot(vm)  # type: ignore[attr-defined]
             state.mark("cleanup_status", "dry_run" if response.dry_run else "restored")
+            state.mark_stage(
+                "cleanup",
+                "status",
+                "dry_run" if response.dry_run else "restored",
+            )
             LOGGER.info("cleanup restore finished: %s", response.status)
         state.mark("emergency_poweroff_status", "not_needed")
+        state.mark_stage("cleanup", "emergency_poweroff_status", "not_needed")
         return False
     except CloudProviderError as restore_error:
         state.mark("cleanup_status", "restore_failed")
+        state.mark_stage("cleanup", "status", "restore_failed")
         state.add_error("cleanup_restore", restore_error)
+        state.add_warning("cleanup", str(restore_error))
         LOGGER.error("cleanup restore failed: %s", restore_error)
         try:
             with state.step("emergency_poweroff"):
@@ -567,11 +679,18 @@ def _cleanup_instance(adapter: object, vm: object, state: RunState) -> bool:
                     "emergency_poweroff_status",
                     "dry_run" if response.dry_run else "stopped",
                 )
+                state.mark_stage(
+                    "cleanup",
+                    "emergency_poweroff_status",
+                    "dry_run" if response.dry_run else "stopped",
+                )
                 LOGGER.warning("emergency poweroff attempted: %s", response.status)
             return False
         except CloudProviderError as stop_error:
             state.mark("emergency_poweroff_status", "failed")
+            state.mark_stage("cleanup", "emergency_poweroff_status", "failed")
             state.add_error("emergency_poweroff", stop_error)
+            state.add_fatal_error("emergency_poweroff", stop_error)
             LOGGER.critical("emergency poweroff failed: %s", stop_error)
             return True
 
@@ -586,6 +705,7 @@ def _try_fast_fail_salvage(
 ) -> Path | None:
     if client is None:
         state.mark("evidence_export_status", "failed")
+        state.mark_stage("evidence", "status", "failed")
         return None
     try:
         with state.step("evidence_fast_fail_salvage"):
@@ -597,17 +717,26 @@ def _try_fast_fail_salvage(
             output_path = Path(str(response.data.get("output_path", "")))
             state.mark("evidence_export_status", "saved")
             state.mark("evidence_bundle_path", str(output_path))
+            state.mark_stage("evidence", "status", "saved")
+            state.mark_stage("evidence", "path", str(output_path))
+            state.mark_stage("evidence", "sha256", str(response.data.get("sha256", "")))
+            state.mark_stage("evidence", "size", response.data.get("size"))
+            state.mark_artifact("evidence_bundle", str(output_path))
             LOGGER.warning("fast-fail evidence salvage saved: %s", output_path)
             return output_path
     except GuestAgentError as exc:
         if exc.source == "network":
             state.mark("agent_dead", True)
         state.mark("evidence_export_status", "failed")
+        state.mark_stage("evidence", "status", "failed")
         state.add_error("evidence_salvage", exc)
+        state.add_warning("evidence_salvage", str(exc))
         LOGGER.warning("fast-fail evidence salvage failed: %s", exc)
     except Exception as exc:
         state.mark("evidence_export_status", "failed")
+        state.mark_stage("evidence", "status", "failed")
         state.add_error("evidence_salvage", exc)
+        state.add_warning("evidence_salvage", str(exc))
         LOGGER.warning("fast-fail evidence salvage failed: %s", exc)
     return None
 
@@ -677,6 +806,9 @@ def _execute_after_upload_observation(
             "status": "skipped",
             "execution_state": execution_state,
             "reason": reason,
+            "error_source": "none",
+            "error_status_code": None,
+            "via": "",
         }
 
     try:
@@ -696,6 +828,11 @@ def _execute_after_upload_observation(
                 "status": "not_started",
                 "execution_state": execution_state,
                 "reason": reason,
+                "error_source": exc.source,
+                "error_status_code": exc.status_code,
+                "via": "desktop_worker"
+                if "desktop worker" in str(exc).casefold()
+                else "",
             }
         raise
 
@@ -706,6 +843,9 @@ def _execute_after_upload_observation(
             "status": "dry_run",
             "execution_state": execution_state,
             "reason": "dry-run execution metadata check completed",
+            "error_source": "none",
+            "error_status_code": None,
+            "via": str(execute_response.data.get("execution_via", "")),
         }
     if execution_state not in {"running", "execution_started"}:
         reason = f"execution action returned {execution_state}; polling skipped"
@@ -714,6 +854,9 @@ def _execute_after_upload_observation(
             "status": "not_started",
             "execution_state": execution_state,
             "reason": reason,
+            "error_source": "remote",
+            "error_status_code": None,
+            "via": str(execute_response.data.get("execution_via", "")),
         }
 
     final_response = _poll_execution_status(
@@ -728,6 +871,12 @@ def _execute_after_upload_observation(
         "status": "observed",
         "execution_state": final_state,
         "reason": "execution was started and observed",
+        "error_source": "none",
+        "error_status_code": None,
+        "via": str(
+            final_response.data.get("execution_via")
+            or execute_response.data.get("execution_via", "")
+        ),
     }
 
 
@@ -736,7 +885,7 @@ def _nonfatal_remote_execution_state(error: GuestAgentError) -> str:
         return ""
     text = str(error).casefold()
     for marker, execution_state in NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS.items():
-        if marker in text:
+        if marker.casefold() in text:
             return execution_state
     return ""
 
@@ -951,7 +1100,13 @@ def _children_count(data: dict[str, object]) -> int:
     return len(children) if isinstance(children, list) else 0
 
 
-def _final_status(case_error: BaseException | None, cleanup_failed: bool) -> str:
+def _final_status(
+    case_error: BaseException | None,
+    cleanup_failed: bool,
+    has_warnings: bool = False,
+) -> str:
+    if case_error is None and not cleanup_failed and has_warnings:
+        return "completed_with_warnings"
     if case_error is None and not cleanup_failed:
         return "completed"
     if case_error is None and cleanup_failed:

@@ -424,7 +424,7 @@ class CloudLifecycleCliGuardTests(TestCase):
         output = stdout.getvalue()
         self.assertIn("Verdict: detected_or_blocked", output)
         self.assertIn("Huorong collector", output)
-        self.assertIn("Timeline:", output)
+        self.assertNotIn("Timeline:", output)
         self.assertNotIn('"status": "ok"', output)
 
     def test_guest_case_summary_json_outputs_full_response(self) -> None:

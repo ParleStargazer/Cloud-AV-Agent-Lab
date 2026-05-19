@@ -173,9 +173,20 @@ Its verdict vocabulary is broader than a collector verdict:
   no-detection claim would be too strong.
 - `inconclusive` / `unknown`: evidence is incomplete or contradictory.
 
-The exporter then creates a metadata-only evidence bundle. It includes
-`manifest.json`, case metadata, normalized product evidence, summaries, and
-events. It excludes the uploaded sample body, `sample/` directories, tokens,
-environment variables, cloud credentials, raw copied product databases, and real
-cloud configuration files. The manifest stores file-level SHA-256 hashes so the
-archive is easy to verify without needing to include unsafe artifacts.
+The exporter then creates an evidence bundle using the v2 workspace artifact
+policy. It includes `manifest.json`, case metadata, `sample/sample.json`,
+normalized product evidence, summaries, events, Worker state, and artifacts that
+collectors deliberately copied into `collection/<product_id>/`. This means a
+Huorong run can include `collection/huorong/log.db`, `log.db-shm`, and
+`log.db-wal` when the Huorong collector produced those files. The exporter does
+not know where Huorong or any future product stores logs on the live system; it
+only packages collector-produced artifacts already inside the case workspace.
+
+The bundle still excludes the uploaded sample body, uploaded sample bytes,
+everything under `sample/` except `sample/sample.json`, recursive evidence zip
+files, token-like files, cloud credentials, real cloud configs such as
+`configs/real.toml`, environment dumps, symlinks, junctions, and files outside
+the explicit allowlisted roots.
+The manifest records `included_paths`, concrete `excluded_path_details`, and
+file-level SHA-256 hashes so the archive is reviewable without including unsafe
+or secret material.

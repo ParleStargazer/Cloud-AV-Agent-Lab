@@ -158,6 +158,22 @@ execution token plus Desktop Worker lease; when enabled for cloud-side manual
 validation, Worker starts only the registered uploaded file with `shell=False`
 and Control Agent records the PID and Worker observation in case state.
 
+Evaluation and export are separate layers after collection. Collectors only copy
+and normalize product evidence into the case workspace. The evaluator combines
+delivery, execution, and collection evidence into a conservative
+`case_summary.json`; `no_detection_observed` is gated on stable delivery,
+observed execution, a successful collection window, and zero matching evidence.
+Missing or partial collection, Worker/lease/sha mismatch states, and process
+disappearance without product-log evidence remain `inconclusive` or
+`execution_not_observed`.
+
+Evidence export uses the v2 allowlisted workspace artifact model. It includes
+case metadata, `sample/sample.json`, Worker state, normalized evidence, and any
+collector-produced files under `collection/<product_id>/`, while excluding
+uploaded sample bytes, recursive zip files, real cloud configs, token-like files,
+symlinks, junctions, and unknown roots. The manifest records included and
+excluded paths plus SHA-256 hashes for audit.
+
 `VmProfile` represents a recoverable test environment profile, not necessarily a unique cloud machine. Multiple profiles may share the same Lighthouse `instance_id` when each profile points to a different `baseline_snapshot` and `product_id`. This single-instance, multi-snapshot layout is supported as long as orchestration remains serial or future schedulers lock by `instance_id`.
 
 ## Tencent Cloud Lighthouse Adapter

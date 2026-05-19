@@ -30,13 +30,31 @@ class EvaluationTests(TestCase):
         self.assertEqual(summary.verdict, "detected_or_blocked")
         self.assertEqual(summary.confidence, "high")
 
-    def test_removed_after_save_without_collection_is_suspicious(self) -> None:
+    def test_removed_after_save_without_collection_is_inconclusive(self) -> None:
         summary = evaluate_case(
             case_report=_case_report(
                 upload_state="removed_after_save",
                 removed_after_save=True,
             ),
             case_collection={"collection_state": "not_collected"},
+        )
+
+        self.assertEqual(summary.verdict, "inconclusive")
+        self.assertEqual(summary.confidence, "low")
+        self.assertIn("collection_state=not_collected", summary.blocking_conditions)
+
+    def test_removed_after_save_with_collection_success_is_suspicious(self) -> None:
+        summary = evaluate_case(
+            case_report=_case_report(
+                upload_state="removed_after_save",
+                removed_after_save=True,
+            ),
+            case_collection={
+                "collection_state": "collected",
+                "verdict": "not_intercepted",
+                "intercepted": False,
+                "evidence_count": 0,
+            },
         )
 
         self.assertEqual(summary.verdict, "suspiciously_removed")
@@ -46,7 +64,11 @@ class EvaluationTests(TestCase):
         self,
     ) -> None:
         report = _case_report(upload_state="stable", stable=True)
-        report["execution"] = {"state": "exited_cleanly", "exit_code": 0}
+        report["execution"] = {
+            "state": "exited_cleanly",
+            "exit_code": 0,
+            "started_at_utc": "2026-05-16T00:00:05Z",
+        }
 
         summary = evaluate_case(
             case_report=report,
@@ -55,10 +77,64 @@ class EvaluationTests(TestCase):
                 "verdict": "not_intercepted",
                 "intercepted": False,
                 "evidence_count": 0,
+                "window": {
+                    "execution_started_at_utc": "2026-05-16T00:00:05Z",
+                    "end_utc": "2026-05-16T00:01:00Z",
+                },
             },
         )
 
         self.assertEqual(summary.verdict, "no_detection_observed")
+
+    def test_collection_failed_never_yields_no_detection(self) -> None:
+        report = _case_report(upload_state="stable", stable=True)
+        report["execution"] = {
+            "state": "exited_cleanly",
+            "exit_code": 0,
+            "started_at_utc": "2026-05-16T00:00:05Z",
+        }
+
+        summary = evaluate_case(
+            case_report=report,
+            case_collection={
+                "collection_state": "failed",
+                "verdict": "unknown",
+                "evidence_count": 0,
+                "errors": ["collector failed"],
+                "window": {
+                    "execution_started_at_utc": "2026-05-16T00:00:05Z",
+                    "end_utc": "2026-05-16T00:01:00Z",
+                },
+            },
+        )
+
+        self.assertEqual(summary.verdict, "inconclusive")
+        self.assertIn("collection_state=failed", summary.blocking_conditions)
+
+    def test_collection_partial_never_yields_no_detection(self) -> None:
+        report = _case_report(upload_state="stable", stable=True)
+        report["execution"] = {
+            "state": "exited_cleanly",
+            "exit_code": 0,
+            "started_at_utc": "2026-05-16T00:00:05Z",
+        }
+
+        summary = evaluate_case(
+            case_report=report,
+            case_collection={
+                "collection_state": "partial",
+                "verdict": "not_intercepted",
+                "evidence_count": 0,
+                "errors": ["copied WAL failed"],
+                "window": {
+                    "execution_started_at_utc": "2026-05-16T00:00:05Z",
+                    "end_utc": "2026-05-16T00:01:00Z",
+                },
+            },
+        )
+
+        self.assertEqual(summary.verdict, "inconclusive")
+        self.assertIn("collection_partial_or_errors", summary.blocking_conditions)
 
     def test_stable_without_execution_is_not_overstated(self) -> None:
         summary = evaluate_case(
@@ -98,6 +174,9 @@ class EvaluationTests(TestCase):
             "delivery",
             "execution",
             "collection",
+            "decision_inputs",
+            "blocking_conditions",
+            "nonfatal_failures",
             "timeline",
             "generated_at_utc",
         ):
@@ -163,6 +242,26 @@ class EvidenceExportTests(TestCase):
             workspace = Path(tmp)
             (workspace / "sample").mkdir()
             (workspace / "sample" / "sample.bin").write_bytes(b"sample-content")
+            (workspace / "sample" / "sample.json").write_text(
+                json.dumps({"sample_id": "case-001", "sha256": "0" * 64}),
+                encoding="utf-8",
+            )
+            (workspace / "collection" / "huorong").mkdir(parents=True)
+            (workspace / "collection" / "huorong" / "log.db").write_bytes(
+                b"raw huorong db copy"
+            )
+            (workspace / "worker-state").mkdir()
+            (workspace / "worker-state" / "worker_execution_state.json").write_text(
+                json.dumps({"state": "exited_cleanly"}),
+                encoding="utf-8",
+            )
+            (workspace / ".env").write_text("TOKEN=secret", encoding="utf-8")
+            (workspace / "evidence").mkdir()
+            (workspace / "evidence" / "old.zip").write_bytes(b"old")
+            (workspace / "case.json").write_text(
+                json.dumps({"case": {"id": "case-001__huorong"}}),
+                encoding="utf-8",
+            )
             (workspace / "case_state.json").write_text(
                 json.dumps({"case_id": "case-001__huorong"}),
                 encoding="utf-8",
@@ -200,16 +299,31 @@ class EvidenceExportTests(TestCase):
             with zipfile.ZipFile(output) as bundle:
                 names = set(bundle.namelist())
                 self.assertIn("manifest.json", names)
+                self.assertIn("case.json", names)
                 self.assertIn("case_state.json", names)
                 self.assertIn("case_report.json", names)
                 self.assertIn("case_collection.json", names)
                 self.assertIn("case_summary.json", names)
                 self.assertIn("events.jsonl", names)
+                self.assertIn("sample/sample.json", names)
+                self.assertIn("collection/huorong/log.db", names)
+                self.assertIn("worker-state/worker_execution_state.json", names)
                 self.assertIn("collector/normalized_evidence.json", names)
-                self.assertFalse(any(name.startswith("sample/") for name in names))
+                self.assertNotIn("sample/sample.bin", names)
+                self.assertNotIn(".env", names)
+                self.assertNotIn("evidence/old.zip", names)
                 manifest = json.loads(bundle.read("manifest.json").decode("utf-8"))
+                self.assertEqual(manifest["schema_version"], "evidence-bundle.v2")
+                self.assertIn("collection/huorong/log.db", manifest["included_paths"])
                 self.assertIn("sample/", manifest["excluded_paths"])
-                self.assertIn("configs/*.toml", manifest["excluded_paths"])
+                self.assertIn("configs/real.toml", manifest["excluded_paths"])
+                self.assertTrue(
+                    any(
+                        item["path"] == "sample/sample.bin"
+                        and item["reason"] == "uploaded_sample_bytes"
+                        for item in manifest["excluded_path_details"]
+                    )
+                )
                 for item in manifest["files"]:
                     content = bundle.read(item["path"])
                     self.assertEqual(len(content), item["size"])

@@ -41,6 +41,17 @@ class RunState:
                 "size": None,
             },
             "steps": [],
+            "status": "pending",
+            "test_verdict": "",
+            "stages": {
+                "environment": {},
+                "delivery": {},
+                "execution": {},
+                "collection": {},
+                "summary": {},
+                "evidence": {},
+                "cleanup": {},
+            },
             "case_started": False,
             "evidence_export_status": "skipped",
             "evidence_bundle_path": "",
@@ -48,6 +59,9 @@ class RunState:
             "cleanup_status": "skipped",
             "emergency_poweroff_status": "not_needed",
             "final_status": "pending",
+            "warnings": [],
+            "fatal_errors": [],
+            "artifacts": {},
             "errors": [],
             "created_at_utc": utc_now(),
             "updated_at_utc": utc_now(),
@@ -63,6 +77,50 @@ class RunState:
 
     def mark(self, key: str, value: Any) -> None:
         self.data[key] = value
+        self.write()
+
+    def mark_stage(self, stage: str, key: str, value: Any) -> None:
+        stages = self.data.setdefault("stages", {})
+        if not isinstance(stages, dict):
+            stages = {}
+            self.data["stages"] = stages
+        stage_payload = stages.setdefault(stage, {})
+        if not isinstance(stage_payload, dict):
+            stage_payload = {}
+            stages[stage] = stage_payload
+        stage_payload[key] = value
+        self.write()
+
+    def mark_artifact(self, name: str, value: Any) -> None:
+        artifacts = self.data.setdefault("artifacts", {})
+        if not isinstance(artifacts, dict):
+            artifacts = {}
+            self.data["artifacts"] = artifacts
+        artifacts[name] = value
+        self.write()
+
+    def add_warning(self, stage: str, message: str) -> None:
+        warnings = self.data.setdefault("warnings", [])
+        if isinstance(warnings, list):
+            warnings.append(
+                {
+                    "stage": stage,
+                    "message": message,
+                    "recorded_at_utc": utc_now(),
+                }
+            )
+        self.write()
+
+    def add_fatal_error(self, stage: str, error: BaseException | str) -> None:
+        fatal_errors = self.data.setdefault("fatal_errors", [])
+        if isinstance(fatal_errors, list):
+            fatal_errors.append(
+                {
+                    "stage": stage,
+                    "message": str(error),
+                    "recorded_at_utc": utc_now(),
+                }
+            )
         self.write()
 
     def add_error(self, stage: str, error: BaseException | str) -> None:
