@@ -9,7 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .manifest import build_manifest, sha256_bytes
+from .manifest import (
+    MAX_BUNDLE_FILES,
+    MAX_BUNDLE_UNCOMPRESSED_BYTES,
+    MAX_ENTRY_BYTES,
+    build_manifest,
+    sha256_bytes,
+)
 from .redaction import RedactionContext, RedactionError, redact_text_artifact
 
 EVIDENCE_BUNDLE_PREFIX = "case_evidence_"
@@ -37,9 +43,6 @@ SENSITIVE_NAME_MARKERS = (
     ".worker_secret",
 )
 SENSITIVE_SUFFIXES = (".local.toml", ".secret.toml", ".secrets.toml")
-MAX_BUNDLE_FILES = 200
-MAX_ENTRY_BYTES = 10 * 1024 * 1024
-MAX_BUNDLE_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 SOURCE_HASH_MAX_BYTES = 10 * 1024 * 1024
 
 
@@ -228,7 +231,10 @@ def _workspace_entries(
                 )
             )
             continue
-        entries[rel] = entry
+        if _archive_path_conflicts(entries, entry.path):
+            excluded.append(_excluded_detail(rel, "zip_entry_conflict", artifact))
+            continue
+        entries[entry.path] = entry
         total_bytes += len(entry.content)
         if entry.redacted:
             redacted_files.append(
@@ -288,7 +294,16 @@ def _add_normalized_evidence(
             )
         )
         return
-    entries[VIRTUAL_NORMALIZED_EVIDENCE] = entry
+    if _archive_path_conflicts(entries, entry.path):
+        excluded.append(
+            _excluded_detail(
+                VIRTUAL_NORMALIZED_EVIDENCE,
+                "zip_entry_conflict",
+                artifact,
+            )
+        )
+        return
+    entries[entry.path] = entry
     if entry.redacted:
         redacted_files.append(
             {
@@ -529,6 +544,11 @@ def _is_safe_zip_name(name: str) -> bool:
     if len(normalized) >= 2 and normalized[1] == ":":
         return False
     return not normalized.startswith("//")
+
+
+def _archive_path_conflicts(entries: Mapping[str, BundleEntry], name: str) -> bool:
+    key = name.replace("\\", "/").casefold()
+    return any(existing.replace("\\", "/").casefold() == key for existing in entries)
 
 
 def _is_junction(path: Path) -> bool:

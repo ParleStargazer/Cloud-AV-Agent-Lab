@@ -47,7 +47,7 @@ stateDiagram-v2
     ExecutionDisabled --> Collection
     SampleMissing --> Collection
     Collection --> Summary: conservative evaluator
-    Summary --> EvidenceBundle: metadata-only export
+    Summary --> EvidenceBundle: redacted guest-reported export
     EvidenceBundle --> SnapshotRestore
     SnapshotRestore --> [*]
 ```
@@ -77,9 +77,9 @@ PIDs, and does not infer AV blocking from process disappearance alone.
 
 Collection and evaluation are intentionally separate. Collectors read
 product-specific logs after the trigger phase, the evaluator produces a
-conservative verdict, and the exporter writes metadata-only evidence before the
-Lighthouse baseline snapshot is restored. Defender or vendor-log parsing should
-not be coupled into upload or trigger endpoints.
+conservative verdict, and the exporter writes a redacted guest-reported evidence
+bundle before the Lighthouse baseline snapshot is restored. Defender or
+vendor-log parsing should not be coupled into upload or trigger endpoints.
 
 ## Adapter Contracts
 
@@ -142,8 +142,9 @@ minimal child-process environment. See `docs/DESKTOP_WORKER.md`.
 
 The Guest Agent MVP is documented in `docs/GUEST_AGENT.md`. It currently covers
 `/health`, `/system-info`, `/prepare-case`, an EICAR/harmless-file upload
-endpoint, metadata-only case status/report/summary/evidence endpoints, product
-log collection endpoints, Worker status proxy, and a default-disabled
+endpoint, metadata-derived case status/report/summary endpoints, a redacted
+guest-reported evidence endpoint, product log collection endpoints, Worker
+status proxy, and a default-disabled
 controlled action endpoint. The default workflow does not execute samples; the
 real trigger path is available only when execution is explicitly enabled,
 Desktop Worker is ready, and the request is restricted to the current case's

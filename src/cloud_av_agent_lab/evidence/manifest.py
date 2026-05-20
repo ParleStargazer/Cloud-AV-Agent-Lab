@@ -4,11 +4,26 @@ import hashlib
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .redaction import DEFAULT_MAX_TEXT_REDACTION_BYTES
+
 SCHEMA_VERSION = "evidence-bundle.v2"
 COLLECTION_POLICY = "redacted-text-artifacts-only-excluding-raw-binary"
+MAX_BUNDLE_FILES = 200
+MAX_ENTRY_BYTES = 10 * 1024 * 1024
+MAX_BUNDLE_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 REDACTION_POLICY = {
     "schema_version": "evidence-redaction.v1",
+    "enabled": True,
     "mode": "guest-reported-redacted-text",
+    "text_files_redacted": True,
+    "binary_files_redacted": False,
+    "preserve_hashes": True,
+    "max_bundle_files": MAX_BUNDLE_FILES,
+    "max_entry_bytes": MAX_ENTRY_BYTES,
+    "max_bundle_uncompressed_bytes": MAX_BUNDLE_UNCOMPRESSED_BYTES,
+    "max_text_redaction_bytes": DEFAULT_MAX_TEXT_REDACTION_BYTES,
+    "product_semantic_redaction_owner": "collector",
+    "global_redaction_owner": "evidence_exporter",
     "text_formats": ["json", "jsonl", "md", "txt"],
     "global_redaction": [
         "case workspace paths",

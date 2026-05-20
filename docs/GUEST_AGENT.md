@@ -34,8 +34,8 @@ chain for EICAR or harmless test files:
   `case_collection.json` summary without reading sample bytes.
 - `GET /cases/{case_id}/summary`: generate the conservative
   `case_summary.json` evaluator result.
-- `GET /cases/{case_id}/evidence-bundle`: return a metadata-only evidence zip
-  that excludes sample bytes and secrets.
+- `GET /cases/{case_id}/evidence-bundle`: return a redacted guest-reported
+  evidence zip that excludes sample bytes and secrets.
 - `GET /cases/{case_id}/execution-status`: observe only the current case root
   PID and child process metadata.
 - `POST /cases/{case_id}/actions`: controlled case action endpoint. It is not a
@@ -267,7 +267,7 @@ gate, so Control Agent `/worker/status` must report an interactive desktop
 Worker ready before delivery continues. Only after that does it apply the
 settling cooldown, call `prepare-case`, upload the explicit EICAR or harmless
 file, poll case status, request the controlled action, collect Huorong logs,
-fetch the summary, and download the metadata-only evidence bundle. The command
+fetch the summary, and download the redacted guest-reported evidence bundle. The command
 defaults to a real run after one runtime risk confirmation; use `--dry-run` to
 keep cloud lifecycle, Desktop Worker gate, and controlled action requests in
 dry-run mode.
@@ -351,7 +351,8 @@ After collection, the project keeps three responsibilities separate:
 - collector: product-specific log copy, parse, and normalization;
 - evaluator: conservative verdict generation from delivery, execution, and
   collection evidence;
-- exporter: metadata-only archive creation for review and long-term storage.
+- exporter: redacted guest-reported archive creation for review and long-term
+  storage.
 
 `GET /cases/{case_id}/summary` generates and returns `case_summary.json`.
 The summary is intentionally compact: product, sample, verdict, confidence,
@@ -394,6 +395,13 @@ false`, `raw_binary_included = false`, redaction policy, redacted files,
 redaction warnings, included paths, excluded path details, categories, and
 SHA-256 hashes for every file included in the zip so the bundle can be archived
 and later verified.
+
+The `redaction_policy` object is intentionally self-describing: it records that
+redaction is enabled, text files are redacted, binary files are not redacted,
+hash fields are preserved, and the active file count / size limits came from
+code constants. It also records the split of responsibility: collectors own
+product-semantic redaction metadata, while the evidence exporter owns the
+global fallback redaction and bundle safety veto.
 
 Once a sample has been delivered or triggered, files and tools inside the test
 instance are not treated as trusted. The Guest Agent and Desktop Worker provide

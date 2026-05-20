@@ -123,6 +123,8 @@ runs/
 
 证据包采用 `evidence-bundle.v2` + Redaction MVP 策略：默认只包含 guest-reported、已脱敏的 text-format artifacts，例如 case 元数据、`sample/sample.json`、summary、events、Worker 状态和 normalized evidence；不包含上传样本本体、token、云密钥、`configs/real.toml`、递归 zip、symlink/junction、未知根目录、raw SQLite/WAL/SHM 或其他未脱敏二进制产品日志。raw 证据如确需保留，应走停止实例、云快照/克隆盘、干净取证环境只读挂载、可信 collector/redactor 导出的离线取证链路。
 
+Manifest 的 `redaction_policy` 会自描述当前边界：redaction 已启用、text-format 文件会被脱敏、binary 文件不会尝试脱敏而是默认排除、hash 关联字段会保留，并记录 bundle 文件数和大小上限。产品语义级脱敏由 collector 声明，evidence exporter 只做全局兜底脱敏与打包安全裁决；当前不开放 `include_raw_binary` 或关闭 redaction 的配置项。
+
 ## 工作流
 
 1. 在云端创建 Windows 基线镜像，安装目标杀软和日志采集组件。
@@ -257,7 +259,7 @@ Agent 不应直接操作本地样本，也不应生成规避检测建议。
 
 ## Guest Agent MVP
 
-Guest Agent 运行在云端隔离 Windows 主机内，本地只通过统一 `NetworkClient` 发起 HTTP 控制面调用。MVP 支持 `/health`、`/system-info`、`/prepare-case`、`/cases/{case_id}/sample`、`/cases/{case_id}/status`、`/cases/{case_id}/report`、`/cases/{case_id}/summary`、`/cases/{case_id}/evidence-bundle`、`/cases/{case_id}/execution-status`、受控 `/cases/{case_id}/actions`，以及 `/cases/{case_id}/collection/{product_id}` 日志收集接口，用于连通性、系统信息、无害工作目录准备、EICAR/无害测试文件上传、上传后状态观测、case 报告、保守评测摘要、metadata-only 证据包、默认关闭的受控触发、低侵入式执行观测和产品日志归一化。不接触真实病毒样本，不暴露任意命令执行接口；默认工作流不执行样本，真实触发必须显式启用 execution 并限定为当前 case 已登记的上传文件。
+Guest Agent 运行在云端隔离 Windows 主机内，本地只通过统一 `NetworkClient` 发起 HTTP 控制面调用。MVP 支持 `/health`、`/system-info`、`/prepare-case`、`/cases/{case_id}/sample`、`/cases/{case_id}/status`、`/cases/{case_id}/report`、`/cases/{case_id}/summary`、`/cases/{case_id}/evidence-bundle`、`/cases/{case_id}/execution-status`、受控 `/cases/{case_id}/actions`，以及 `/cases/{case_id}/collection/{product_id}` 日志收集接口，用于连通性、系统信息、无害工作目录准备、EICAR/无害测试文件上传、上传后状态观测、case 报告、保守评测摘要、脱敏后的 guest-reported 证据包、默认关闭的受控触发、低侵入式执行观测和产品日志归一化。不接触真实病毒样本，不暴露任意命令执行接口；默认工作流不执行样本，真实触发必须显式启用 execution 并限定为当前 case 已登记的上传文件。
 
 配置默认关闭：
 

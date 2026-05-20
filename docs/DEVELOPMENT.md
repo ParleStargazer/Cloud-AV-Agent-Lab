@@ -332,6 +332,8 @@ zip、真实云配置、token/credential/key 命名文件、symlink/junction、�
 
 新增安全原则：样本投送或触发后，测试实例内的静态文件、日志、工具、解释器、Guest Agent、Desktop Worker 和临时目录都视为不可信。Redaction MVP 只提供 `guest-reported` 的脱敏观察结果，适合开发、EICAR/无害样本验证和课程交付，不宣称 forensic-grade。若后续需要 raw 证据，应停止实例后通过云快照/克隆盘进入干净取证环境只读挂载，再用可信 collector/redactor 提取和脱敏，不应让脏实例自我打包 raw 日志后回传本地。
 
+Manifest 中的 `redaction_policy` 是结构化自描述对象：当前默认开启文本脱敏、关闭二进制脱敏、保留 hash 关联字段，并记录 bundle 文件数、单文件大小、总未压缩大小和文本脱敏大小上限。产品语义级脱敏由 collector 声明，exporter 只做全局兜底脱敏和打包安全裁决；这些值先保持代码常量，不开放绕过 redaction 或包含 raw binary 的配置开关。
+
 ## 结构拆分记录
 
 2026-05-15 已完成两个 facade 包拆分，用于降低大文件维护成本，同时保持外部 import 兼容：

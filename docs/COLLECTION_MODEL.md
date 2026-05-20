@@ -206,6 +206,12 @@ The manifest records `trust_model = dirty_instance_untrusted`,
 `raw_binary_included = false`, redaction policy, redacted files, redaction
 warnings, included paths, excluded path details, and archive SHA-256 hashes so
 the archive is reviewable without including unsafe or secret material.
+The `redaction_policy` object is structured and self-describing: it records
+that redaction is enabled, text files are redacted, binary files are not
+redacted, hash fields are preserved, and the active file count / size limits are
+enforced by the exporter. Collector plugins own product-semantic artifact
+metadata, while the exporter owns global fallback redaction and bundle safety
+vetoes.
 
 ## Dirty Instance Trust Boundary
 

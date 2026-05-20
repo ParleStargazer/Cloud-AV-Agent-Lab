@@ -135,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     guest_export = subparsers.add_parser(
         "guest-export-evidence",
-        help="download a metadata-only Guest Agent evidence bundle zip",
+        help="download a redacted guest-reported evidence bundle zip",
     )
     guest_export.add_argument("--config", required=True, help="path to TOML config")
     guest_export.add_argument(
