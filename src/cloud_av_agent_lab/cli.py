@@ -546,6 +546,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.exit(2, _format_guest_error(exc))
         _print_guest_response(response)
         print(f"Evidence bundle saved to: {response.data.get('output_path', '')}")
+        if "trust_model" in response.data:
+            print("Exported redacted guest-reported evidence bundle:")
+            print(f"  raw_binary_included: {response.data.get('raw_binary_included')}")
+            print(f"  trust_model: {response.data.get('trust_model')}")
+            print(f"  forensic_grade: {response.data.get('forensic_grade')}")
         return 0
 
     if args.command == "guest-execution-status":

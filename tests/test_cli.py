@@ -492,7 +492,11 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(exit_code, 0)
             self.assertTrue(output_path.is_file())
             self.assertEqual(fake_client.export_calls, 1)
-            self.assertIn("Evidence bundle saved to:", stdout.getvalue())
+            output = stdout.getvalue()
+            self.assertIn("Evidence bundle saved to:", output)
+            self.assertIn("Exported redacted guest-reported evidence bundle:", output)
+            self.assertIn("raw_binary_included: False", output)
+            self.assertIn("trust_model: dirty_instance_untrusted", output)
 
     def test_single_run_invokes_orchestration_and_prints_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1310,6 +1314,9 @@ class _FakeGuestAgentClient:
                 "output_path": str(destination),
                 "size": len(b"fake-zip"),
                 "sha256": "0" * 64,
+                "trust_model": "dirty_instance_untrusted",
+                "forensic_grade": False,
+                "raw_binary_included": False,
             },
         )
 

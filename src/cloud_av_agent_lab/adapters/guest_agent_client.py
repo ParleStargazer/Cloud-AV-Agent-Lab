@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import io
+import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -163,6 +165,7 @@ class GuestAgentClient:
                 "failed to write evidence bundle output",
                 source="local",
             ) from exc
+        manifest = _read_bundle_manifest(response.body)
         return GuestAgentResponse(
             status="ok",
             message="evidence bundle saved",
@@ -172,6 +175,10 @@ class GuestAgentClient:
                 "size": len(response.body),
                 "sha256": hashlib.sha256(response.body).hexdigest(),
                 "content_type": str(response.headers.get("content-type", "")),
+                "manifest": manifest,
+                "trust_model": str(manifest.get("trust_model", "")),
+                "forensic_grade": bool(manifest.get("forensic_grade", False)),
+                "raw_binary_included": bool(manifest.get("raw_binary_included", False)),
             },
         )
 
@@ -492,3 +499,18 @@ def _extract_error_message(decoded: Mapping[str, Any]) -> str:
     if isinstance(detail, list):
         return json.dumps(detail, ensure_ascii=False)
     return ""
+
+
+def _read_bundle_manifest(content: bytes) -> dict[str, Any]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as bundle:
+            decoded = json.loads(bundle.read("manifest.json").decode("utf-8"))
+    except (
+        KeyError,
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        zipfile.BadZipFile,
+    ):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}

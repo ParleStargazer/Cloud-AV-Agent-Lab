@@ -8,6 +8,47 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class CollectorArtifact:
+    path: str
+    category: str
+    include_in_evidence: bool
+    redaction_owner: str
+    redaction_state: str
+    sensitivity: str
+    reason: str | None = None
+    source_trust: str = "guest_reported"
+
+    def __post_init__(self) -> None:
+        normalized = self.path.replace("\\", "/")
+        if (
+            not normalized
+            or normalized.startswith("/")
+            or normalized.startswith("../")
+            or "/../" in normalized
+            or normalized == ".."
+            or (len(normalized) >= 2 and normalized[1] == ":")
+            or normalized.startswith("//")
+            or "\x00" in normalized
+        ):
+            raise ValueError(f"unsafe collector artifact path: {self.path!r}")
+        object.__setattr__(self, "path", normalized)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "path": self.path,
+            "category": self.category,
+            "include_in_evidence": self.include_in_evidence,
+            "redaction_owner": self.redaction_owner,
+            "redaction_state": self.redaction_state,
+            "sensitivity": self.sensitivity,
+            "source_trust": self.source_trust,
+        }
+        if self.reason:
+            payload["reason"] = self.reason
+        return payload
+
+
+@dataclass(frozen=True)
 class CollectionWindow:
     start_utc: str
     end_utc: str
@@ -70,6 +111,7 @@ class CollectorResult:
     artifacts: Mapping[str, Any] = field(default_factory=dict)
     window: CollectionWindow | None = None
     collected_at_utc: str = ""
+    artifact_items: Sequence[CollectorArtifact] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -81,7 +123,10 @@ class CollectorResult:
             "evidence_count": self.evidence_count,
             "events": [event.to_dict() for event in self.events],
             "errors": list(self.errors),
-            "artifacts": dict(self.artifacts),
+            "artifacts": _collector_artifacts_payload(
+                self.artifact_items,
+                self.artifacts,
+            ),
             "window": self.window.to_dict() if self.window is not None else {},
             "collected_at_utc": self.collected_at_utc,
         }
@@ -98,3 +143,23 @@ class ProductLogCollector(ABC):
         window: CollectionWindow,
     ) -> CollectorResult:
         """Collect and normalize product logs for one prepared case."""
+
+
+def _collector_artifacts_payload(
+    items: Sequence[CollectorArtifact],
+    legacy: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not items and _already_structured_artifacts(legacy):
+        return dict(legacy)
+    return {
+        "schema_version": "collector-artifacts.v1",
+        "items": [item.to_dict() for item in items],
+        "legacy": dict(legacy),
+    }
+
+
+def _already_structured_artifacts(legacy: Mapping[str, Any]) -> bool:
+    items = legacy.get("items")
+    return legacy.get("schema_version") == "collector-artifacts.v1" and isinstance(
+        items, list
+    )

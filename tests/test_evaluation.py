@@ -306,21 +306,31 @@ class EvidenceExportTests(TestCase):
                 self.assertIn("case_summary.json", names)
                 self.assertIn("events.jsonl", names)
                 self.assertIn("sample/sample.json", names)
-                self.assertIn("collection/huorong/log.db", names)
                 self.assertIn("worker-state/worker_execution_state.json", names)
                 self.assertIn("collector/normalized_evidence.json", names)
+                self.assertNotIn("collection/huorong/log.db", names)
                 self.assertNotIn("sample/sample.bin", names)
                 self.assertNotIn(".env", names)
                 self.assertNotIn("evidence/old.zip", names)
                 manifest = json.loads(bundle.read("manifest.json").decode("utf-8"))
                 self.assertEqual(manifest["schema_version"], "evidence-bundle.v2")
-                self.assertIn("collection/huorong/log.db", manifest["included_paths"])
+                self.assertEqual(manifest["trust_model"], "dirty_instance_untrusted")
+                self.assertFalse(manifest["forensic_grade"])
+                self.assertFalse(manifest["raw_binary_included"])
+                self.assertIn("redacted_files", manifest)
                 self.assertIn("sample/", manifest["excluded_paths"])
                 self.assertIn("configs/real.toml", manifest["excluded_paths"])
                 self.assertTrue(
                     any(
                         item["path"] == "sample/sample.bin"
                         and item["reason"] == "uploaded_sample_bytes"
+                        for item in manifest["excluded_path_details"]
+                    )
+                )
+                self.assertTrue(
+                    any(
+                        item["path"] == "collection/huorong/log.db"
+                        and item["reason"] == "raw_binary_redaction_not_supported"
                         for item in manifest["excluded_path_details"]
                     )
                 )

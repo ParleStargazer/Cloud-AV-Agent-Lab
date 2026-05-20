@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from cloud_av_agent_lab.guest_agent_server.collectors.base import (
+    CollectorArtifact,
     CollectionWindow,
     CollectorResult,
     NormalizedSecurityEvent,
@@ -68,6 +69,7 @@ class HuorongLogCollector(ProductLogCollector):
                 "source_log_dir": str(self.log_dir),
                 "copied_files": copied_files,
             },
+            artifact_items=_huorong_artifacts(copied_files),
             window=window,
             collected_at_utc=_utc_now(),
         )
@@ -261,3 +263,43 @@ def _is_safe_identifier(value: str) -> bool:
 def _safe_sqlite_error_message(exc: sqlite3.Error) -> str:
     message = str(exc).replace("\r", " ").replace("\n", " ").strip()
     return message[:300]
+
+
+def _huorong_artifacts(
+    copied_files: list[dict[str, Any]],
+) -> tuple[CollectorArtifact, ...]:
+    items: list[CollectorArtifact] = []
+    copied_by_name = {
+        str(item.get("name", "")): bool(item.get("copied"))
+        for item in copied_files
+        if isinstance(item, dict)
+    }
+    for filename in LOG_FILENAMES:
+        items.append(
+            CollectorArtifact(
+                path=f"collection/{PRODUCT_ID}/{filename}",
+                category="raw_product_log",
+                include_in_evidence=False,
+                redaction_owner="collector",
+                redaction_state="raw_blocked",
+                sensitivity="high",
+                reason=(
+                    "raw Huorong SQLite artifact is guest-reported and is not "
+                    "included in the default redacted evidence bundle"
+                    if copied_by_name.get(filename)
+                    else "raw Huorong SQLite artifact was not copied"
+                ),
+            )
+        )
+    items.append(
+        CollectorArtifact(
+            path="collector/normalized_evidence.json",
+            category="normalized_evidence",
+            include_in_evidence=True,
+            redaction_owner="exporter",
+            redaction_state="redacted",
+            sensitivity="low",
+            reason="derived normalized product evidence with exporter text redaction",
+        )
+    )
+    return tuple(items)

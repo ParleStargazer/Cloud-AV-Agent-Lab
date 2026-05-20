@@ -4,11 +4,13 @@ import json
 import os
 import zipfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .manifest import build_manifest, sha256_bytes
+from .redaction import RedactionContext, RedactionError, redact_text_artifact
 
 EVIDENCE_BUNDLE_PREFIX = "case_evidence_"
 ALLOWED_DIRECT_FILES = (
@@ -22,6 +24,8 @@ ALLOWED_DIRECT_FILES = (
 )
 ALLOWED_DIRECTORIES = ("collection", "worker-state")
 VIRTUAL_NORMALIZED_EVIDENCE = "collector/normalized_evidence.json"
+TEXT_SUFFIXES = (".json", ".jsonl", ".md", ".txt")
+RAW_BINARY_SUFFIXES = (".db", ".sqlite", ".sqlite3", ".wal", ".shm", ".exe", ".dll")
 SENSITIVE_NAME_MARKERS = (
     ".env",
     "token",
@@ -33,6 +37,21 @@ SENSITIVE_NAME_MARKERS = (
     ".worker_secret",
 )
 SENSITIVE_SUFFIXES = (".local.toml", ".secret.toml", ".secrets.toml")
+MAX_BUNDLE_FILES = 200
+MAX_ENTRY_BYTES = 10 * 1024 * 1024
+MAX_BUNDLE_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+SOURCE_HASH_MAX_BYTES = 10 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class BundleEntry:
+    path: str
+    content: bytes
+    category: str
+    redaction_state: str
+    redacted: bool
+    encoding: str = "utf-8"
+    source_trust: str = "guest_reported"
 
 
 def build_evidence_bundle(
@@ -40,17 +59,40 @@ def build_evidence_bundle(
     output_path: Path,
 ) -> dict[str, Any]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    entries, excluded = _workspace_entries(workspace, output_path)
-    _add_normalized_evidence(entries, workspace)
+    collection = _read_json(workspace / "case_collection.json")
+    artifact_map, artifact_warnings = _collector_artifact_map(collection)
+    redaction_context = _redaction_context(workspace, collection)
+    entries, excluded, redacted_files, warnings = _workspace_entries(
+        workspace,
+        output_path,
+        artifact_map,
+        redaction_context,
+    )
+    warnings.extend(artifact_warnings)
+    _add_normalized_evidence(
+        entries,
+        excluded,
+        redacted_files,
+        warnings,
+        workspace,
+        artifact_map,
+        redaction_context,
+    )
+
     generated_at = _utc_now()
     files = [
         {
-            "path": name,
-            "size": len(content),
-            "sha256": sha256_bytes(content),
-            "category": _category_for_entry(name),
+            "path": entry.path,
+            "size": len(entry.content),
+            "sha256": sha256_bytes(entry.content),
+            "archive_sha256": sha256_bytes(entry.content),
+            "category": entry.category,
+            "redaction_state": entry.redaction_state,
+            "redacted": entry.redacted,
+            "encoding": entry.encoding,
+            "source_trust": entry.source_trust,
         }
-        for name, content in sorted(entries.items())
+        for entry in sorted(entries.values(), key=lambda item: item.path)
     ]
     manifest = build_manifest(
         case_id=_case_id_from_entries(entries),
@@ -60,15 +102,19 @@ def build_evidence_bundle(
         included_paths=sorted(entries),
         excluded_paths=[item["path"] for item in excluded],
         excluded_path_details=excluded,
+        redacted_files=redacted_files,
+        redaction_warnings=warnings,
+        raw_binary_included=False,
     )
-    entries["manifest.json"] = json.dumps(
+    zip_entries = {name: entry.content for name, entry in sorted(entries.items())}
+    zip_entries["manifest.json"] = json.dumps(
         manifest,
         ensure_ascii=False,
         indent=2,
     ).encode("utf-8")
 
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        for name, content in sorted(entries.items()):
+        for name, content in sorted(zip_entries.items()):
             bundle.writestr(name, content)
 
     bundle_bytes = output_path.read_bytes()
@@ -84,44 +130,126 @@ def build_evidence_bundle(
 def _workspace_entries(
     workspace: Path,
     output_path: Path,
-) -> tuple[dict[str, bytes], list[dict[str, str]]]:
-    entries: dict[str, bytes] = {}
-    excluded: list[dict[str, str]] = []
+    artifact_map: Mapping[str, Mapping[str, Any]],
+    context: RedactionContext,
+) -> tuple[
+    dict[str, BundleEntry],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[str],
+]:
+    entries: dict[str, BundleEntry] = {}
+    excluded: list[dict[str, Any]] = []
+    redacted_files: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    total_bytes = 0
     workspace_root = workspace.resolve()
     output_resolved = output_path.resolve()
     for source in _iter_workspace_files(workspace):
         if source.is_symlink() or _is_junction(source):
             excluded.append(
-                {
-                    "path": _relative_name_unresolved(workspace, source) or str(source),
-                    "reason": "symlink_or_junction_not_followed",
-                }
+                _excluded_detail(
+                    _relative_name_unresolved(workspace, source) or "<unknown>",
+                    "symlink_or_junction_not_followed",
+                )
             )
             continue
+
         rel = _relative_name(workspace_root, source)
         if not rel:
-            excluded.append({"path": str(source), "reason": "path_outside_workspace"})
+            excluded.append(
+                _excluded_detail("<outside-workspace>", "path_outside_workspace")
+            )
             continue
         if source.resolve() == output_resolved:
-            excluded.append({"path": rel, "reason": "evidence_output_file"})
+            excluded.append(_excluded_detail(rel, "evidence_output_file"))
             continue
+
+        artifact = artifact_map.get(rel, {})
         reason = _exclude_reason(rel)
         if reason:
-            excluded.append({"path": rel, "reason": reason})
+            excluded.append(_excluded_detail(rel, reason, artifact, source))
             continue
         if not _is_allowed_artifact(rel):
-            excluded.append({"path": rel, "reason": "not_in_allowed_roots"})
+            excluded.append(
+                _excluded_detail(rel, "not_in_allowed_roots", artifact, source)
+            )
             continue
+        artifact_reason = _artifact_exclude_reason(rel, artifact)
+        if artifact_reason:
+            excluded.append(_excluded_detail(rel, artifact_reason, artifact, source))
+            continue
+
         try:
-            entries[rel] = source.read_bytes()
+            size = source.stat().st_size
         except OSError as exc:
             excluded.append(
-                {"path": rel, "reason": f"read_failed:{type(exc).__name__}"}
+                _excluded_detail(rel, f"stat_failed:{type(exc).__name__}", artifact)
             )
-    return entries, excluded
+            continue
+        if size > MAX_ENTRY_BYTES:
+            excluded.append(
+                _excluded_detail(rel, "entry_size_limit_exceeded", artifact, source)
+            )
+            continue
+
+        try:
+            content = source.read_bytes()
+        except OSError as exc:
+            excluded.append(
+                _excluded_detail(rel, f"read_failed:{type(exc).__name__}", artifact)
+            )
+            continue
+
+        entry, redaction_detail, warning = _entry_from_content(
+            rel,
+            content,
+            artifact,
+            context,
+        )
+        if warning:
+            warnings.append(f"{rel}: {warning}")
+        if entry is None:
+            excluded.append(
+                _excluded_detail(
+                    rel, redaction_detail or "redaction_failed", artifact, source
+                )
+            )
+            continue
+        if len(entries) >= MAX_BUNDLE_FILES:
+            excluded.append(
+                _excluded_detail(rel, "bundle_file_count_limit_exceeded", artifact)
+            )
+            continue
+        if total_bytes + len(entry.content) > MAX_BUNDLE_UNCOMPRESSED_BYTES:
+            excluded.append(
+                _excluded_detail(
+                    rel, "bundle_uncompressed_size_limit_exceeded", artifact
+                )
+            )
+            continue
+        entries[rel] = entry
+        total_bytes += len(entry.content)
+        if entry.redacted:
+            redacted_files.append(
+                {
+                    "path": entry.path,
+                    "redaction_state": entry.redaction_state,
+                    "encoding": entry.encoding,
+                }
+            )
+    return entries, excluded, redacted_files, warnings
 
 
-def _add_normalized_evidence(entries: dict[str, bytes], workspace: Path) -> None:
+def _add_normalized_evidence(
+    entries: dict[str, BundleEntry],
+    excluded: list[dict[str, Any]],
+    redacted_files: list[dict[str, Any]],
+    warnings: list[str],
+    workspace: Path,
+    artifact_map: Mapping[str, Mapping[str, Any]],
+    context: RedactionContext,
+) -> None:
     collection = _read_json(workspace / "case_collection.json")
     events = collection.get("events")
     if not isinstance(events, list):
@@ -133,11 +261,68 @@ def _add_normalized_evidence(entries: dict[str, bytes], workspace: Path) -> None
         "evidence_count": collection.get("evidence_count", 0),
         "events": events,
     }
-    entries[VIRTUAL_NORMALIZED_EVIDENCE] = json.dumps(
-        payload,
-        ensure_ascii=False,
-        indent=2,
-    ).encode("utf-8")
+    content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    artifact = artifact_map.get(
+        VIRTUAL_NORMALIZED_EVIDENCE,
+        {
+            "path": VIRTUAL_NORMALIZED_EVIDENCE,
+            "category": "normalized_evidence",
+            "include_in_evidence": True,
+            "redaction_state": "redacted",
+        },
+    )
+    entry, redaction_detail, warning = _entry_from_content(
+        VIRTUAL_NORMALIZED_EVIDENCE,
+        content,
+        artifact,
+        context,
+    )
+    if warning:
+        warnings.append(f"{VIRTUAL_NORMALIZED_EVIDENCE}: {warning}")
+    if entry is None:
+        excluded.append(
+            _excluded_detail(
+                VIRTUAL_NORMALIZED_EVIDENCE,
+                redaction_detail or "redaction_failed",
+                artifact,
+            )
+        )
+        return
+    entries[VIRTUAL_NORMALIZED_EVIDENCE] = entry
+    if entry.redacted:
+        redacted_files.append(
+            {
+                "path": entry.path,
+                "redaction_state": entry.redaction_state,
+                "encoding": entry.encoding,
+            }
+        )
+
+
+def _entry_from_content(
+    rel: str,
+    content: bytes,
+    artifact: Mapping[str, Any],
+    context: RedactionContext,
+) -> tuple[BundleEntry | None, str, str]:
+    if not _is_text_format(rel):
+        return None, "raw_binary_redaction_not_supported", ""
+    try:
+        result = redact_text_artifact(rel, content, context=context)
+    except RedactionError as exc:
+        return None, str(exc), ""
+    return (
+        BundleEntry(
+            path=rel,
+            content=result.content,
+            category=str(artifact.get("category") or _category_for_entry(rel)),
+            redaction_state="redacted",
+            redacted=result.redacted,
+            encoding=result.encoding,
+        ),
+        "",
+        ";".join(result.warnings),
+    )
 
 
 def _iter_workspace_files(workspace: Path) -> list[Path]:
@@ -169,6 +354,16 @@ def _is_allowed_artifact(rel: str) -> bool:
     return any(rel.startswith(directory + "/") for directory in ALLOWED_DIRECTORIES)
 
 
+def _artifact_exclude_reason(rel: str, artifact: Mapping[str, Any]) -> str:
+    if artifact and not bool(artifact.get("include_in_evidence", True)):
+        if str(artifact.get("category", "")) == "raw_product_log":
+            return "raw_binary_redaction_not_supported"
+        return str(artifact.get("redaction_state") or "collector_policy_excluded")
+    if rel.startswith("collection/") and _is_raw_binary_like_path(rel):
+        return "raw_binary_redaction_not_supported"
+    return ""
+
+
 def _exclude_reason(rel: str) -> str:
     lowered = rel.casefold().replace("\\", "/")
     name = Path(rel).name.casefold()
@@ -180,15 +375,134 @@ def _exclude_reason(rel: str) -> str:
         return "uploaded_sample_bytes"
     if lowered.startswith("evidence/") and lowered.endswith(".zip"):
         return "recursive_evidence_zip"
-    if lowered.startswith("configs/"):
-        return "config_file"
     if lowered == "configs/real.toml":
         return "real_cloud_config"
+    if lowered.startswith("configs/"):
+        return "config_file"
     if name.endswith(SENSITIVE_SUFFIXES):
         return "sensitive_config_name"
     if any(marker in name for marker in SENSITIVE_NAME_MARKERS):
         return "suspected_secret_name"
     return ""
+
+
+def _excluded_detail(
+    rel: str,
+    reason: str,
+    artifact: Mapping[str, Any] | None = None,
+    source: Path | None = None,
+) -> dict[str, Any]:
+    artifact = artifact or {}
+    detail: dict[str, Any] = {
+        "path": rel.replace("\\", "/"),
+        "reason": reason,
+        "category": str(artifact.get("category") or _category_for_entry(rel)),
+        "redaction_state": str(artifact.get("redaction_state") or "not_included"),
+        "sensitivity": str(artifact.get("sensitivity") or "unknown"),
+        "source_trust": str(artifact.get("source_trust") or "guest_reported"),
+    }
+    if source is not None:
+        _add_best_effort_source_metadata(detail, source)
+    return detail
+
+
+def _add_best_effort_source_metadata(detail: dict[str, Any], source: Path) -> None:
+    try:
+        size = source.stat().st_size
+    except OSError:
+        detail["source_sha256_available"] = False
+        return
+    detail["source_size"] = size
+    if size > SOURCE_HASH_MAX_BYTES:
+        detail["source_sha256_available"] = False
+        detail["source_sha256_unavailable_reason"] = "source_hash_size_limit_exceeded"
+        return
+    try:
+        detail["source_sha256"] = sha256_bytes(source.read_bytes())
+        detail["source_sha256_available"] = True
+    except OSError as exc:
+        detail["source_sha256_available"] = False
+        detail["source_sha256_unavailable_reason"] = type(exc).__name__
+
+
+def _collector_artifact_map(
+    collection: Mapping[str, Any],
+) -> tuple[dict[str, Mapping[str, Any]], list[str]]:
+    artifacts = collection.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        return {}, []
+    items = artifacts.get("items")
+    if not isinstance(items, list):
+        return {}, []
+    mapped: dict[str, Mapping[str, Any]] = {}
+    warnings: list[str] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        path = str(item.get("path", "")).replace("\\", "/")
+        if not _is_safe_zip_name(path):
+            warnings.append("collector_artifact_unsafe_path_ignored")
+            continue
+        mapped[path] = dict(item)
+    return mapped, warnings
+
+
+def _redaction_context(
+    workspace: Path, collection: Mapping[str, Any]
+) -> RedactionContext:
+    known_paths: dict[str, str] = {}
+    artifacts = collection.get("artifacts")
+    if isinstance(artifacts, Mapping):
+        legacy = artifacts.get("legacy")
+        if isinstance(legacy, Mapping):
+            _collect_known_paths(legacy, known_paths)
+    return RedactionContext(
+        case_workspace=str(workspace.resolve()),
+        known_paths=known_paths,
+    )
+
+
+def _collect_known_paths(value: Any, known_paths: dict[str, str]) -> None:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            placeholder = _placeholder_for_key(str(key))
+            if isinstance(child, str) and _looks_like_absolute_path(child):
+                known_paths[child] = placeholder
+            else:
+                _collect_known_paths(child, known_paths)
+        return
+    if isinstance(value, list):
+        for child in value:
+            _collect_known_paths(child, known_paths)
+        return
+    if isinstance(value, str) and _looks_like_absolute_path(value):
+        known_paths[value] = "<collector_path>"
+
+
+def _placeholder_for_key(key: str) -> str:
+    lowered = key.casefold()
+    if "source" in lowered:
+        return "<collector_source>"
+    if "artifact" in lowered:
+        return "<collector_artifact>"
+    return "<collector_path>"
+
+
+def _looks_like_absolute_path(value: str) -> bool:
+    normalized = value.replace("/", "\\")
+    return (
+        (len(normalized) >= 3 and normalized[1] == ":" and normalized[2] == "\\")
+        or normalized.startswith("\\\\")
+        or value.startswith("/")
+    )
+
+
+def _is_text_format(rel: str) -> bool:
+    return Path(rel).suffix.casefold() in TEXT_SUFFIXES
+
+
+def _is_raw_binary_like_path(rel: str) -> bool:
+    return Path(rel).suffix.casefold() in RAW_BINARY_SUFFIXES
 
 
 def _relative_name(workspace_root: Path, source: Path) -> str:
@@ -207,7 +521,7 @@ def _relative_name_unresolved(workspace: Path, source: Path) -> str:
 
 
 def _is_safe_zip_name(name: str) -> bool:
-    if not name or name.startswith(("/", "\\")):
+    if not name or "\x00" in name or "\\" in name or name.startswith(("/", "\\")):
         return False
     normalized = name.replace("\\", "/")
     if normalized.startswith("../") or "/../" in normalized or normalized == "..":
@@ -241,31 +555,31 @@ def _category_for_entry(name: str) -> str:
     return "workspace_artifact"
 
 
-def _case_id_from_entries(entries: Mapping[str, bytes]) -> str:
+def _case_id_from_entries(entries: Mapping[str, BundleEntry]) -> str:
     for filename in ("case_summary.json", "case_report.json", "case_state.json"):
-        payload = _decode_entry(entries.get(filename, b""))
+        payload = _decode_entry(entries.get(filename))
         case_id = payload.get("case_id")
         if case_id:
             return str(case_id)
     return ""
 
 
-def _product_id_from_entries(entries: Mapping[str, bytes]) -> str:
-    summary = _decode_entry(entries.get("case_summary.json", b""))
+def _product_id_from_entries(entries: Mapping[str, BundleEntry]) -> str:
+    summary = _decode_entry(entries.get("case_summary.json"))
     if summary.get("product_id"):
         return str(summary["product_id"])
-    report = _decode_entry(entries.get("case_report.json", b""))
+    report = _decode_entry(entries.get("case_report.json"))
     if report.get("product_id"):
         return str(report["product_id"])
-    collection = _decode_entry(entries.get("case_collection.json", b""))
+    collection = _decode_entry(entries.get("case_collection.json"))
     return str(collection.get("product_id", ""))
 
 
-def _decode_entry(content: bytes) -> dict[str, Any]:
-    if not content:
+def _decode_entry(entry: BundleEntry | None) -> dict[str, Any]:
+    if entry is None:
         return {}
     try:
-        decoded = json.loads(content.decode("utf-8"))
+        decoded = json.loads(entry.content.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return {}
     return decoded if isinstance(decoded, dict) else {}
@@ -276,7 +590,7 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
     try:
         decoded = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
         return {}
     return decoded if isinstance(decoded, dict) else {}
 

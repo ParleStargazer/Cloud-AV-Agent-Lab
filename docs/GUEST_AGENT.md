@@ -335,6 +335,9 @@ The result is written to `case_collection.json` and includes:
 - `events`: normalized product-log evidence.
 - `timeline`: Guest Agent events and product-log events sorted by UTC time.
 - `errors`: non-fatal collection or parse errors.
+- `artifacts`: collector artifact policy metadata. Raw Huorong SQLite files are
+  declared as `raw_product_log` and blocked from the default redacted evidence
+  bundle, while normalized evidence is declared as a text artifact.
 
 Verdict handling is conservative. `removed_after_save` and process disappearance
 are useful observations, but they are not automatically treated as AV
@@ -370,17 +373,35 @@ was actually observed, collection completed successfully in a window covering
 execution, and no matching product evidence or collector errors were present.
 
 `GET /cases/{case_id}/evidence-bundle` returns
-`case_evidence_<case_id>.zip`. The bundle contains `manifest.json`,
-`case_state.json`, `case_report.json`, `case_collection.json`,
+`case_evidence_<case_id>.zip`. The bundle is a Redaction MVP archive, not a raw
+forensic archive. It contains `manifest.json`, redacted case metadata,
 `case_summary.json`, `case_summary.md`, `events.jsonl`, `sample/sample.json`,
-Worker state, normalized collector evidence, and collector-produced artifacts
-under `collection/<product_id>/`. Huorong collection can therefore include the
-copied `collection/huorong/log.db` family for later review. It does not include
-uploaded sample bytes, token values, environment variables, cloud credentials,
-recursive evidence zips, real cloud configuration files, symlinks, junctions, or
-unknown workspace roots. The manifest records the v2 collection policy,
-included paths, excluded path details, categories, and SHA-256 hashes for every
-file included in the zip so the bundle can be archived and later verified.
+Worker state, and redacted normalized collector evidence. JSON / JSONL /
+Markdown / TXT entries are redacted in the archive copy only; the original case
+workspace files are not modified.
+
+The bundle does not include uploaded sample bytes, token values, environment
+variables, cloud credentials, recursive evidence zips, real cloud configuration
+files, symlinks, junctions, unknown workspace roots, raw SQLite databases,
+WAL/SHM files, executables, DLLs, or other unredacted binary product logs. Raw
+Huorong `collection/huorong/log.db*` files may exist in the guest workspace for
+parsing, but the default evidence bundle only records their guest-reported
+metadata and exclusion reason in `manifest.json`.
+
+The manifest records the v2 collection policy, `trust_model =
+dirty_instance_untrusted`, `source_trust = guest_reported`, `forensic_grade =
+false`, `raw_binary_included = false`, redaction policy, redacted files,
+redaction warnings, included paths, excluded path details, categories, and
+SHA-256 hashes for every file included in the zip so the bundle can be archived
+and later verified.
+
+Once a sample has been delivered or triggered, files and tools inside the test
+instance are not treated as trusted. The Guest Agent and Desktop Worker provide
+guest-reported observations for review; they are not a forensic trust root. If
+future work needs raw product logs, it should use a separate offline workflow:
+stop the instance, create a cloud snapshot or cloned disk, attach it read-only
+to a clean forensic environment, run a trusted collector/redactor, and export
+redacted text evidence from there.
 
 ## Status Observation Notes
 

@@ -11,6 +11,7 @@ Cloud AV Agent Lab 是一个本地自动化编排框架，用于把 AI Agent、�
 - 框架只提供编排、日志解析、结果判断和报告生成接口，不提供样本、不生成样本、不包含绕过或规避杀软的逻辑。
 - 真实测试中的投递、运行、截图、日志采集必须由云端隔离虚拟机和 Guest Agent 完成，本地控制面不执行样本。
 - 每个测试用例都应恢复到基线快照，避免样本之间互相污染。
+- 一旦样本在测试云实例内被投送或触发，该实例内的静态文件、日志、工具、解释器、Guest Agent、Desktop Worker 和临时目录都默认不可信；默认 evidence bundle 只回传脱敏后的结构化 text-format 观察结果，不把 raw binary、raw SQLite DB、WAL/SHM 或可执行文件搬回本地。
 
 ## 目录结构
 
@@ -120,7 +121,7 @@ runs/
 
 `run_state.json` 会记录每一步状态、样本 SHA-256、证据导出状态、清理状态和错误，并额外维护 `stages.environment/delivery/execution/collection/summary/evidence/cleanup` 结构，方便后续 multi-run 聚合。`run.log` 每行带 `[instance_id][run_id]` 上下文。`runs/.locks/<instance_id>.lock` 防止同一 Lighthouse 实例被并发操作，过期或心跳陈旧的锁会被归档，必要时可使用 `--force-unlock`。证据导出发生在结尾快照回滚之前；如果流程异常，会尝试短超时 fast-fail 证据打捞，随后再进行清理回滚。若回滚失败，会尝试 emergency stop，并在最终输出中提示人工介入。
 
-证据包采用 `evidence-bundle.v2` 策略：包含 case 元数据、`sample/sample.json`、summary、events、Worker 状态、normalized evidence，以及各 collector 复制到 `collection/<product_id>/` 的证据文件；不包含上传样本本体、token、云密钥、`configs/real.toml`、递归 zip、symlink/junction 或未知根目录。
+证据包采用 `evidence-bundle.v2` + Redaction MVP 策略：默认只包含 guest-reported、已脱敏的 text-format artifacts，例如 case 元数据、`sample/sample.json`、summary、events、Worker 状态和 normalized evidence；不包含上传样本本体、token、云密钥、`configs/real.toml`、递归 zip、symlink/junction、未知根目录、raw SQLite/WAL/SHM 或其他未脱敏二进制产品日志。raw 证据如确需保留，应走停止实例、云快照/克隆盘、干净取证环境只读挂载、可信 collector/redactor 导出的离线取证链路。
 
 ## 工作流
 
@@ -348,7 +349,7 @@ python -m cloud_av_agent_lab guest-execute-sample `
 
 收集阶段新增 `guest-collect-logs --product huorong`，通过云端 Guest Agent 读取火绒日志副本并输出 `case_collection.json`。火绒 collector 会先把 `C:\ProgramData\Huorong\sysdiag\log.db`、`log.db-shm`、`log.db-wal` 复制到当前 case 的 `collection\huorong\` artifact 目录，再只读打开 SQLite 并自动发现最新的 `HrLogV3_*` 表。JSON payload 列会优先按常见列名识别，包含真实火绒表里的 DB 列 `detail`；该列 JSON 内部还有嵌套 `detail` 对象。识别不到时按火绒导出脚本的约定读取第 5 列。输出包含统一时间线、时间窗口、normalized product-log events 和保守 verdict：只有产品日志证据匹配当前 case 的 hash、sample path、root/child PID 或时间窗口时才判定 `intercepted`；单独的文件消失或进程不可观察不会被直接判定为杀软拦截。设计见 [COLLECTION_MODEL.md](docs/COLLECTION_MODEL.md)。
 
-Evaluation / Evidence Export MVP 在 collection 之后运行。collector 只负责产品日志收集和归一化；`evaluation` 模块汇总投送、执行和 collection 证据，生成保守的 `case_summary.json` / `case_summary.md`，CLI 命令为 `guest-case-summary`。CLI 默认输出类似 `case_summary.md` 的简洁结论；需要完整结构时显式加 `--json`。summary timeline 会剔除重复轮询事件，只保留 upload/execution 状态变化、collection 边界和产品日志证据；完整审计流水仍保留在 `events.jsonl`。`evidence` exporter 生成可归档的 `case_evidence_<case_id>.zip`，CLI 命令为 `guest-export-evidence`。证据包只包含 metadata：`manifest.json`、`case_state.json`、`case_report.json`、`case_collection.json`、`case_summary.json`、`events.jsonl` 和 normalized evidence；不包含 `sample/` 目录、上传样本本体、token、环境变量、云密钥或真实云配置文件。verdict 仍保持保守：产品日志有明确证据才给出 `detected_or_blocked`，单独的文件消失只会被汇总为 `suspiciously_removed`，进程消失不会单独解释为杀软拦截。
+Evaluation / Evidence Export MVP 在 collection 之后运行。collector 只负责产品日志收集、产品语义归一化和 artifact 语义声明；`evaluation` 模块汇总投送、执行和 collection 证据，生成保守的 `case_summary.json` / `case_summary.md`，CLI 命令为 `guest-case-summary`。CLI 默认输出类似 `case_summary.md` 的简洁结论；需要完整结构时显式加 `--json`。summary timeline 会剔除重复轮询事件，只保留 upload/execution 状态变化、collection 边界和产品日志证据；完整审计流水仍保留在 `events.jsonl`。`evidence` exporter 生成可归档的 redacted guest-reported `case_evidence_<case_id>.zip`，CLI 命令为 `guest-export-evidence`。证据包只包含脱敏后的 text-format artifacts：`manifest.json`、`case_state.json`、`case_report.json`、`case_collection.json`、`case_summary.json`、`case_summary.md`、`events.jsonl`、`sample/sample.json` 和 normalized evidence；不包含上传样本本体、token、环境变量、云密钥、真实云配置文件或 raw copied log DB。manifest 会记录 `trust_model = dirty_instance_untrusted`、`forensic_grade = false`、`raw_binary_included = false`、redaction policy、redacted files 和被排除 raw artifact 的 guest-reported 元数据。verdict 仍保持保守：产品日志有明确证据才给出 `detected_or_blocked`，单独的文件消失只会被汇总为 `suspiciously_removed`，进程消失不会单独解释为杀软拦截。
 
 受控触发能力默认关闭。`guest-execute-sample` 默认请求 `dry_run_execute_uploaded_sample`，只校验当前 case 已登记上传样本的 metadata 和路径归属，不启动样本进程；显式加 `--real-action` 时会请求 `execute_uploaded_sample`，只有云端 Guest Agent 启用 execution、提供正确执行 token、Desktop Worker ready，且 Worker 校验短期单次 execution lease 后，才会启动当前 case 的已登记 `.exe`。真实启动发生在 Desktop Worker 内，使用 `subprocess.Popen([sample_path], cwd=sample_dir, shell=False)`、`DEVNULL` 标准流、`CREATE_NO_WINDOW`、`close_fds=True` 和最小化环境；不接受任意路径、命令、shell/cmd/PowerShell 或参数。执行观测是低侵入式只读元信息快照，只观测当前 case 的 root PID 及子进程，不缓存进程对象，不阻碍 Defender 或其他安全软件终止进程。下一步验证可以使用 EICAR 或无害命令 exe；依旧不引入有害样本，本地也仍不执行任何样本。proof 文件只作为早期联调辅助，长期评测需要结合投送状态、执行观测和只读安全产品日志证据。详细协议和单实例串行锁设计见 [GUEST_AGENT.md](docs/GUEST_AGENT.md)，受控触发模型见 [EXECUTION_MODEL.md](docs/EXECUTION_MODEL.md)，收集模型见 [COLLECTION_MODEL.md](docs/COLLECTION_MODEL.md)，Windows 免 Python 部署见 [GUEST_AGENT_DEPLOYMENT.md](docs/GUEST_AGENT_DEPLOYMENT.md)。
 

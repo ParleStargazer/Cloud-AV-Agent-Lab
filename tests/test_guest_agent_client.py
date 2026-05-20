@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import zipfile
 from io import BytesIO
 from dataclasses import replace
 from pathlib import Path
@@ -310,11 +311,24 @@ class GuestAgentClientTests(TestCase):
             token_env="GUEST_TOKEN",
             timeout_seconds=5,
         )
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as bundle:
+            bundle.writestr(
+                "manifest.json",
+                json.dumps(
+                    {
+                        "trust_model": "dirty_instance_untrusted",
+                        "forensic_grade": False,
+                        "raw_binary_included": False,
+                    }
+                ),
+            )
+        bundle_bytes = zip_buffer.getvalue()
         network = FakeNetworkClient(
             NetworkResponse(
                 status=200,
                 headers={"content-type": "application/zip"},
-                body=b"fake zip bytes",
+                body=bundle_bytes,
             )
         )
         client = GuestAgentClient(
@@ -329,10 +343,13 @@ class GuestAgentClientTests(TestCase):
                 timeout_seconds=120,
             )
 
-            self.assertEqual(output_path.read_bytes(), b"fake zip bytes")
+            self.assertEqual(output_path.read_bytes(), bundle_bytes)
 
         self.assertEqual(response.message, "evidence bundle saved")
-        self.assertEqual(response.data["size"], len(b"fake zip bytes"))
+        self.assertEqual(response.data["size"], len(bundle_bytes))
+        self.assertEqual(response.data["trust_model"], "dirty_instance_untrusted")
+        self.assertFalse(response.data["forensic_grade"])
+        self.assertFalse(response.data["raw_binary_included"])
         self.assertEqual(len(network.calls), 1)
         call = network.calls[0]
         self.assertEqual(call["method"], "GET")

@@ -34,14 +34,18 @@ src/cloud_av_agent_lab/guest_agent_server/collectors/
 - `CollectionWindow`: the time window used to attribute product logs to the
   current case.
 - `NormalizedSecurityEvent`: a product-independent event record for evidence.
+- `CollectorArtifact`: product-specific artifact metadata. It declares a
+  relative workspace path, category, whether the collector suggests inclusion in
+  the default redacted evidence bundle, redaction owner/state, sensitivity, and
+  reason.
 - `CollectorResult`: the product collector result written into
   `case_collection.json`.
 - `ProductLogCollector`: the base interface implemented by product collectors.
 
 Product collectors own only product-specific details: log locations, copy
-strategy, raw field parsing, and conservative evidence matching. The rest of
-the system consumes normalized events and collector results; it should not need
-to know raw product database columns.
+strategy, raw field parsing, artifact sensitivity, and conservative evidence
+matching. The rest of the system consumes normalized events and collector
+results; it should not need to know raw product database columns.
 
 ## Huorong MVP
 
@@ -75,6 +79,13 @@ fields, PID fields, and hashes. Single-row parse failures are recorded as
 collector errors and do not abort the entire collection. SQLite-level failures
 include a safe diagnostic message, such as missing table names and available
 tables, without returning sample contents or tokens.
+
+The copied Huorong SQLite files are raw product logs. They are useful as
+guest-side working inputs for parsing, but they are marked as
+`raw_product_log`, `include_in_evidence=false`, `redaction_state=raw_blocked`,
+and `sensitivity=high`. The default redacted evidence bundle records their
+existence, size, and best-effort guest-reported source hash in `manifest.json`,
+but does not include `log.db`, `log.db-shm`, or `log.db-wal` bytes.
 
 ## Unified Event Timeline
 
@@ -173,20 +184,47 @@ Its verdict vocabulary is broader than a collector verdict:
   no-detection claim would be too strong.
 - `inconclusive` / `unknown`: evidence is incomplete or contradictory.
 
-The exporter then creates an evidence bundle using the v2 workspace artifact
+The exporter then creates an evidence bundle using the v2 redacted text artifact
 policy. It includes `manifest.json`, case metadata, `sample/sample.json`,
-normalized product evidence, summaries, events, Worker state, and artifacts that
-collectors deliberately copied into `collection/<product_id>/`. This means a
-Huorong run can include `collection/huorong/log.db`, `log.db-shm`, and
-`log.db-wal` when the Huorong collector produced those files. The exporter does
-not know where Huorong or any future product stores logs on the live system; it
-only packages collector-produced artifacts already inside the case workspace.
+normalized product evidence, summaries, events, and Worker state after applying
+global text redaction to JSON / JSONL / Markdown / TXT entries. The exporter
+does not know where Huorong or any future product stores logs on the live
+system; it only considers collector-produced artifacts already inside the case
+workspace and then makes the final include/exclude safety decision.
 
-The bundle still excludes the uploaded sample body, uploaded sample bytes,
-everything under `sample/` except `sample/sample.json`, recursive evidence zip
-files, token-like files, cloud credentials, real cloud configs such as
-`configs/real.toml`, environment dumps, symlinks, junctions, and files outside
-the explicit allowlisted roots.
-The manifest records `included_paths`, concrete `excluded_path_details`, and
-file-level SHA-256 hashes so the archive is reviewable without including unsafe
-or secret material.
+The bundle excludes the uploaded sample body, uploaded sample bytes, everything
+under `sample/` except `sample/sample.json`, recursive evidence zip files,
+token-like files, cloud credentials, real cloud configs such as
+`configs/real.toml`, environment dumps, symlinks, junctions, files outside the
+explicit allowlisted roots, and raw/binary product logs such as SQLite DB,
+WAL, SHM, executable, or DLL files. JSON / JSONL parse failures fall back to
+plain text redaction; true decode/redaction failures fail closed and exclude the
+entry rather than returning unredacted content.
+
+The manifest records `trust_model = dirty_instance_untrusted`,
+`source_trust = guest_reported`, `forensic_grade = false`,
+`raw_binary_included = false`, redaction policy, redacted files, redaction
+warnings, included paths, excluded path details, and archive SHA-256 hashes so
+the archive is reviewable without including unsafe or secret material.
+
+## Dirty Instance Trust Boundary
+
+After a sample has been delivered or triggered in the test VM, the guest
+workspace, static files, Guest Agent process, Desktop Worker process, Python
+runtime, temporary directories, and local guest-side tools are treated as
+untrusted observations. Redaction MVP evidence is therefore
+`guest-reported redacted evidence`; it is useful for development, EICAR or
+harmless sample validation, coursework delivery, and first-pass review, but it
+is not forensic-grade evidence.
+
+Default export must not move raw binary artifacts from the dirty instance back
+to the local host. Password-protected archives can reduce accidental opening,
+but they do not make a dirty guest a trusted packager and are not the primary
+safety boundary.
+
+If future work needs raw product logs, use an offline forensic workflow instead:
+stop the test instance, create a cloud snapshot or cloned disk, attach it
+read-only to a clean temporary forensic environment, run a trusted
+collector/redactor there, export redacted text artifacts, and destroy the
+temporary environment. Raw artifact retention must be an explicit high-risk
+workflow, not the default evidence bundle.

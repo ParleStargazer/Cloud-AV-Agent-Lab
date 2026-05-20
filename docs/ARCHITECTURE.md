@@ -167,12 +167,24 @@ Missing or partial collection, Worker/lease/sha mismatch states, and process
 disappearance without product-log evidence remain `inconclusive` or
 `execution_not_observed`.
 
-Evidence export uses the v2 allowlisted workspace artifact model. It includes
-case metadata, `sample/sample.json`, Worker state, normalized evidence, and any
-collector-produced files under `collection/<product_id>/`, while excluding
-uploaded sample bytes, recursive zip files, real cloud configs, token-like files,
-symlinks, junctions, and unknown roots. The manifest records included and
-excluded paths plus SHA-256 hashes for audit.
+Evidence export uses the v2 redacted text artifact model. Once a sample has
+been delivered or triggered, the test guest workspace, Guest Agent, Desktop
+Worker, interpreter, tools, static files, copied logs, and temporary
+directories are treated as untrusted guest-reported observations. The default
+bundle includes only redacted text-format artifacts such as case metadata,
+`sample/sample.json`, Worker state JSON, summaries, events, and normalized
+evidence. It excludes uploaded sample bytes, recursive zip files, real cloud
+configs, token-like files, symlinks, junctions, unknown roots, raw SQLite/WAL/SHM
+logs, executables, DLLs, and other unredacted binary product artifacts. The
+manifest records included/excluded paths, redaction policy, redacted files,
+`trust_model=dirty_instance_untrusted`, `forensic_grade=false`,
+`raw_binary_included=false`, and SHA-256 hashes for audit.
+
+Raw product logs are not part of the normal evidence bundle. If a later phase
+requires forensic-grade raw evidence, the trust root should move to an offline
+workflow: stop the test instance, clone or snapshot the disk, mount it read-only
+in a clean forensic environment, run a trusted collector/redactor there, and
+export redacted text artifacts from that environment.
 
 `VmProfile` represents a recoverable test environment profile, not necessarily a unique cloud machine. Multiple profiles may share the same Lighthouse `instance_id` when each profile points to a different `baseline_snapshot` and `product_id`. This single-instance, multi-snapshot layout is supported as long as orchestration remains serial or future schedulers lock by `instance_id`.
 

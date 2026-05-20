@@ -1244,6 +1244,23 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertTrue(collection_file.is_file())
         saved = json.loads(collection_file.read_text(encoding="utf-8"))
         self.assertEqual(saved["product_id"], "huorong")
+        artifacts = saved["artifacts"]
+        self.assertEqual(artifacts["schema_version"], "collector-artifacts.v1")
+        item_by_path = {item["path"]: item for item in artifacts["items"]}
+        self.assertEqual(
+            item_by_path["collection/huorong/log.db"]["category"],
+            "raw_product_log",
+        )
+        self.assertFalse(
+            item_by_path["collection/huorong/log.db"]["include_in_evidence"]
+        )
+        self.assertEqual(
+            item_by_path["collection/huorong/log.db"]["redaction_state"],
+            "raw_blocked",
+        )
+        self.assertTrue(
+            item_by_path["collector/normalized_evidence.json"]["include_in_evidence"]
+        )
         self.assertTrue((workspace / "collection" / "huorong" / "log.db").is_file())
         self.assertNotIn(TOKEN, response.text)
         self.assertNotIn(UPLOAD_TOKEN, response.text)
@@ -1557,13 +1574,22 @@ class GuestAgentServerTests(unittest.TestCase):
             self.assertIn("case_summary.json", names)
             self.assertIn("events.jsonl", names)
             self.assertIn("sample/sample.json", names)
-            self.assertIn("collection/huorong/log.db", names)
             self.assertIn("collector/normalized_evidence.json", names)
+            self.assertNotIn("collection/huorong/log.db", names)
             self.assertNotIn("sample/eicar.txt", names)
             self.assertNotIn("configs/real.toml", names)
             manifest = json.loads(bundle.read("manifest.json").decode("utf-8"))
             self.assertEqual(manifest["schema_version"], "evidence-bundle.v2")
-            self.assertIn("collection/huorong/log.db", manifest["included_paths"])
+            self.assertEqual(manifest["trust_model"], "dirty_instance_untrusted")
+            self.assertFalse(manifest["forensic_grade"])
+            self.assertFalse(manifest["raw_binary_included"])
+            self.assertTrue(
+                any(
+                    item["path"] == "collection/huorong/log.db"
+                    and item["reason"] == "raw_binary_redaction_not_supported"
+                    for item in manifest["excluded_path_details"]
+                )
+            )
             for item in manifest["files"]:
                 content = bundle.read(item["path"])
                 self.assertEqual(item["sha256"], hashlib.sha256(content).hexdigest())
