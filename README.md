@@ -259,7 +259,7 @@ Agent 不应直接操作本地样本，也不应生成规避检测建议。
 
 ## Guest Agent MVP
 
-Guest Agent 运行在云端隔离 Windows 主机内，本地只通过统一 `NetworkClient` 发起 HTTP 控制面调用。MVP 支持 `/health`、`/system-info`、`/prepare-case`、`/cases/{case_id}/sample`、`/cases/{case_id}/status`、`/cases/{case_id}/report`、`/cases/{case_id}/summary`、`/cases/{case_id}/evidence-bundle`、`/cases/{case_id}/execution-status`、受控 `/cases/{case_id}/actions`，以及 `/cases/{case_id}/collection/{product_id}` 日志收集接口，用于连通性、系统信息、无害工作目录准备、EICAR/无害测试文件上传、上传后状态观测、case 报告、保守评测摘要、脱敏后的 guest-reported 证据包、默认关闭的受控触发、低侵入式执行观测和产品日志归一化。不接触真实病毒样本，不暴露任意命令执行接口；默认工作流不执行样本，真实触发必须显式启用 execution 并限定为当前 case 已登记的上传文件。
+Guest Agent 运行在云端隔离 Windows 主机内，本地只通过统一 `NetworkClient` 发起 HTTP 控制面调用。MVP 支持 `/health`、`/system-info`、`/prepare-case`、`/cases/{case_id}/sample`、`/cases/{case_id}/status`、`/cases/{case_id}/report`、`/cases/{case_id}/summary`、`/cases/{case_id}/evidence-bundle`、`/cases/{case_id}/execution-status`、受控 `/cases/{case_id}/actions`、`/cases/{case_id}/security-product-readiness/{product_id}`，以及 `/cases/{case_id}/collection/{product_id}` 日志收集接口，用于连通性、系统信息、无害工作目录准备、安全产品测试前只读就绪检查、EICAR/无害测试文件上传、上传后状态观测、case 报告、保守评测摘要、脱敏后的 guest-reported 证据包、默认关闭的受控触发、低侵入式执行观测和产品日志归一化。不接触真实病毒样本，不暴露任意命令执行接口；默认工作流不执行样本，真实触发必须显式启用 execution 并限定为当前 case 已登记的上传文件。
 
 配置默认关闭：
 
@@ -285,6 +285,7 @@ python -m cloud_av_agent_lab guest-upload-sample --config configs/lab.local.toml
 python -m cloud_av_agent_lab guest-case-status --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
 python -m cloud_av_agent_lab guest-case-report --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
 python -m cloud_av_agent_lab guest-execute-sample --config configs/lab.local.toml --vm-id sg-win10 --sample-id case-001 --case-id case-001__tencent-pc-manager
+python -m cloud_av_agent_lab guest-check-security-product-readiness --config configs/lab.local.toml --vm-id win10-huorong --case-id case-001__huorong --product huorong
 python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml --vm-id win10-huorong --case-id case-001__huorong --product huorong
 python -m cloud_av_agent_lab guest-case-summary --config configs/lab.local.toml --vm-id win10-huorong --case-id case-001__huorong
 python -m cloud_av_agent_lab guest-export-evidence --config configs/lab.local.toml --vm-id win10-huorong --case-id case-001__huorong --output .\artifacts\case_evidence_case-001__huorong.zip
@@ -346,6 +347,8 @@ python -m cloud_av_agent_lab guest-execute-sample `
 上传接口只负责写盘并立即返回，耗时等待放在本地 CLI：`guest-upload-sample` 会在上传成功后先等待 10 秒，然后每 2 秒轮询一次状态，最多观察到 30 秒；一旦出现 `removed_after_save` 会立即报告拦截成功。需要继续观察时，可以手动重复运行 `guest-case-status`。
 
 每个 case 会维护 `case_state.json`、`events.jsonl` 和 `case_report.json`。`guest-case-report` 汇总投送阶段 metadata 和 execution 区域，但不读取 Defender 或其他杀软日志，不读取样本内容。
+
+安全产品就绪检查新增第一轮最小闭环：`security_product_readiness` 与 `collectors` 并列，运行在投送前、collection 前，只做低侵入只读检查，不解析拦截日志、不读取样本内容、不启动/停止/修复安全产品。Huorong MVP 检查 `C:\ProgramData\Huorong\sysdiag` 与 `log.db` 是否存在，并把 `log.db` best-effort 复制到当前 case 的 `security-product-readiness\huorong\` 目录后只读检查副本 metadata。结果写入 `case_security_product_readiness.json`、`case_state.security_product_readiness`、`case_report.security_product_readiness` 和 `events.jsonl`。`ready` 只代表 Huorong 日志可观察链路具备最低条件，`protection_state` 仍为 `unknown`，不证明实时防护已开启或一定会检出。CLI 为 `guest-check-security-product-readiness --product huorong`。
 
 日志收集、简易评测和证据导出阶段已经形成 MVP：杀毒软件日志收集框架定义 collector 插件和统一证据 schema；火绒 collector 是首个产品实现；Guest Agent 暴露日志收集接口、简易结论报告接口和证据包导出接口；本地 CLI 对应提供 `guest-collect-logs`、`guest-case-summary` 和 `guest-export-evidence`。
 

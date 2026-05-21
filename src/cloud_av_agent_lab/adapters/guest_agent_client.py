@@ -200,6 +200,31 @@ class GuestAgentClient:
             method="GET",
         )
 
+    def check_security_product_readiness(
+        self,
+        case_id: str,
+        product_id: str,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
+        return self._request(
+            "cases/"
+            f"{quote(case_id, safe='')}/security-product-readiness/"
+            f"{quote(product_id, safe='')}",
+            method="POST",
+            timeout_seconds=timeout_seconds,
+        )
+
+    def security_product_readiness_status(
+        self,
+        case_id: str,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
+        return self._request(
+            f"cases/{quote(case_id, safe='')}/security-product-readiness/status",
+            method="GET",
+            timeout_seconds=timeout_seconds,
+        )
+
     def execution_status(
         self,
         case_id: str,

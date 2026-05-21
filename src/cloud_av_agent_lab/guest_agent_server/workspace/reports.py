@@ -38,6 +38,7 @@ def _build_case_report(workspace: Path, max_events: int) -> dict[str, Any]:
     state = _read_json_file(workspace / "case_state.json")
     sample_metadata = _read_json_file(workspace / "sample" / "sample.json")
     collection_data = _read_json_file(workspace / "case_collection.json")
+    readiness_data = _read_json_file(workspace / "case_security_product_readiness.json")
     all_events = _read_recent_events(workspace / "events.jsonl", max_events=1000)
     recent_events = all_events[-max(0, max_events) :]
 
@@ -125,6 +126,7 @@ def _build_case_report(workspace: Path, max_events: int) -> dict[str, Any]:
             if isinstance(collection_data.get("errors"), list)
             else [],
         },
+        "security_product_readiness": _readiness_summary(readiness_data, state),
         "recent_events": recent_events,
     }
     return report
@@ -156,3 +158,27 @@ def _first_event_time(events: list[dict[str, Any]], event_type: str) -> str:
         if event.get("event_type") == event_type:
             return str(event.get("timestamp_utc", ""))
     return ""
+
+
+def _readiness_summary(
+    readiness_data: Mapping[str, Any],
+    state: Mapping[str, Any],
+) -> dict[str, Any]:
+    readiness = readiness_data
+    if not readiness:
+        state_readiness = state.get("security_product_readiness")
+        readiness = state_readiness if isinstance(state_readiness, Mapping) else {}
+    return {
+        "product_id": str(readiness.get("product_id", "")),
+        "state": str(readiness.get("state", "not_checked")),
+        "confidence": str(readiness.get("confidence", "low")),
+        "scope": str(readiness.get("scope", "log_observability")),
+        "protection_state": str(readiness.get("protection_state", "unknown")),
+        "checked_at_utc": str(readiness.get("checked_at_utc", "")),
+        "warnings": list(readiness.get("warnings", []))
+        if isinstance(readiness.get("warnings"), list)
+        else [],
+        "errors": list(readiness.get("errors", []))
+        if isinstance(readiness.get("errors"), list)
+        else [],
+    }

@@ -32,7 +32,8 @@ process facts, and AV verdict logic.
 stateDiagram-v2
     [*] --> Delivery
     Delivery --> CasePrepared: guest-prepare-case
-    CasePrepared --> SampleUploaded: guest-upload-sample
+    CasePrepared --> ProductReadiness: guest-check-security-product-readiness
+    ProductReadiness --> SampleUploaded: guest-upload-sample
     SampleUploaded --> UploadObserved: guest-case-status polling
     UploadObserved --> DeliveryReport: guest-case-report
 
@@ -80,6 +81,16 @@ product-specific logs after the trigger phase, the evaluator produces a
 conservative verdict, and the exporter writes a redacted guest-reported evidence
 bundle before the Lighthouse baseline snapshot is restored. Defender or
 vendor-log parsing should not be coupled into upload or trigger endpoints.
+
+Security product readiness is a separate case-scoped pre-delivery observation
+stage. The first MVP supports Huorong log observability and writes
+`case_security_product_readiness.json`, `case_state.security_product_readiness`,
+and a `case_report.json` summary. It is read-only: it checks the product log
+directory, copies `log.db` into the case readiness snapshot directory, and reads
+copied-file metadata. It does not parse interception logs, does not read sample
+bytes, does not modify product services, and does not prove real-time
+protection is enabled. Collection remains responsible for product-log evidence
+and verdict inputs.
 
 ## Adapter Contracts
 

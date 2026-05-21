@@ -1475,6 +1475,117 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertIn("guest-prepare-case", response.json()["detail"])
 
+    def test_security_product_readiness_huorong_writes_case_metadata(self) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        (log_dir / "log.db").write_bytes(b"sqlite-placeholder")
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server."
+            "security_product_readiness.huorong."
+            "HuorongSecurityProductReadinessProbe.DEFAULT_LOG_DIR",
+            log_dir,
+        ):
+            response = self.client.post(
+                "/cases/case-001__huorong/security-product-readiness/huorong",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["state"], "ready")
+        self.assertEqual(data["scope"], "log_observability")
+        self.assertEqual(data["protection_state"], "unknown")
+        workspace = self.workdir / "cases" / "case-001__huorong"
+        self.assertTrue((workspace / "case_security_product_readiness.json").is_file())
+        self.assertTrue(
+            (workspace / "security-product-readiness" / "huorong" / "log.db").is_file()
+        )
+        state = json.loads((workspace / "case_state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["security_product_readiness"]["state"], "ready")
+        report = json.loads(
+            (workspace / "case_report.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(report["security_product_readiness"]["state"], "ready")
+        events = _read_events(workspace / "events.jsonl")
+        event_types = [event["event_type"] for event in events]
+        self.assertIn("security_product_readiness_started", event_types)
+        self.assertIn("security_product_readiness_checked", event_types)
+        self.assertNotIn(TOKEN, response.text)
+
+    def test_security_product_readiness_status_returns_latest_result(self) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        (log_dir / "log.db").write_bytes(b"sqlite-placeholder")
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server."
+            "security_product_readiness.huorong."
+            "HuorongSecurityProductReadinessProbe.DEFAULT_LOG_DIR",
+            log_dir,
+        ):
+            self.client.post(
+                "/cases/case-001__huorong/security-product-readiness/huorong",
+                headers=self._headers(),
+            )
+
+        response = self.client.get(
+            "/cases/case-001__huorong/security-product-readiness/status",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["state"], "ready")
+        self.assertIn("recent_events", data)
+
+    def test_security_product_readiness_missing_case_returns_404(self) -> None:
+        response = self.client.post(
+            "/cases/missing-case/security-product-readiness/huorong",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("guest-prepare-case", response.json()["detail"])
+
+    def test_security_product_readiness_unsupported_product_returns_200(self) -> None:
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+
+        response = self.client.post(
+            "/cases/case-001__tencent-pc-manager/"
+            "security-product-readiness/unsupported",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["state"], "unsupported")
+        self.assertNotIn(TOKEN, response.text)
+
+    def test_security_product_readiness_rejects_path_traversal_case_id(self) -> None:
+        response = self.client.post(
+            "/cases/..%2Fescape/security-product-readiness/huorong",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse((self.workdir.parent / "escape").exists())
+
     def test_collection_rejects_path_traversal_case_id(self) -> None:
         response = self.client.post(
             "/cases/..%2Fescape/collection/huorong",

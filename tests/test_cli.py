@@ -338,6 +338,27 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(exit_error.exception.code, 2)
         self.assertIn("[Local Check]", stderr.getvalue())
 
+    def test_guest_check_security_product_readiness_disabled_is_clear(self) -> None:
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+            main(
+                [
+                    "guest-check-security-product-readiness",
+                    "--config",
+                    str(ROOT / "configs" / "lab.example.toml"),
+                    "--vm-id",
+                    "win10-huorong",
+                    "--case-id",
+                    "case-001__huorong",
+                    "--product",
+                    "huorong",
+                ]
+            )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("[Local Check]", stderr.getvalue())
+
     def test_guest_execute_sample_exits_clearly_when_guest_agent_disabled(
         self,
     ) -> None:
@@ -393,6 +414,43 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(fake_client.collect_calls, 1)
         self.assertIn('"message": "collection completed"', stdout.getvalue())
         self.assertIn('"verdict": "intercepted"', stdout.getvalue())
+
+    def test_guest_check_security_product_readiness_prints_concise_status(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+            stdout = StringIO()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "guest-check-security-product-readiness",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-huorong",
+                        "--case-id",
+                        "case-001__huorong",
+                        "--product",
+                        "huorong",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_client.readiness_calls, 1)
+        output = stdout.getvalue()
+        self.assertIn("Security product readiness:", output)
+        self.assertIn("state: ready", output)
+        self.assertIn("[ok] huorong_log_db_exists", output)
 
     def test_guest_case_summary_outputs_verdict_and_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1223,6 +1281,8 @@ class _FakeGuestAgentClient:
         self.summary_calls = 0
         self.export_calls = 0
         self.execution_status_calls = 0
+        self.readiness_calls = 0
+        self.readiness_status_calls = 0
         self.execute_calls: list[dict[str, object]] = []
         self.execute_called = False
 
@@ -1342,6 +1402,54 @@ class _FakeGuestAgentClient:
             data={
                 "case_id": case_id,
                 "collection_state": "collected",
+            },
+        )
+
+    def check_security_product_readiness(
+        self,
+        case_id: str,
+        product_id: str,
+    ) -> GuestAgentResponse:
+        self.readiness_calls += 1
+        return GuestAgentResponse(
+            status="ok",
+            message="security product readiness checked",
+            data={
+                "case_id": case_id,
+                "product_id": product_id,
+                "state": "ready",
+                "confidence": "medium",
+                "scope": "log_observability",
+                "protection_state": "unknown",
+                "checks": [
+                    {
+                        "name": "huorong_log_db_exists",
+                        "status": "ok",
+                        "message": "Huorong log database exists",
+                        "data": {"filename": "log.db"},
+                    }
+                ],
+                "warnings": [],
+                "errors": [],
+            },
+        )
+
+    def security_product_readiness_status(
+        self,
+        case_id: str,
+    ) -> GuestAgentResponse:
+        self.readiness_status_calls += 1
+        return GuestAgentResponse(
+            status="ok",
+            message="security product readiness status loaded",
+            data={
+                "case_id": case_id,
+                "product_id": "huorong",
+                "state": "ready",
+                "confidence": "medium",
+                "checks": [],
+                "warnings": [],
+                "errors": [],
             },
         )
 
@@ -1471,6 +1579,19 @@ class _FailingGuestAgentClient:
         raise self.error
 
     def collection_status(self, case_id: str) -> GuestAgentResponse:
+        raise self.error
+
+    def check_security_product_readiness(
+        self,
+        case_id: str,
+        product_id: str,
+    ) -> GuestAgentResponse:
+        raise self.error
+
+    def security_product_readiness_status(
+        self,
+        case_id: str,
+    ) -> GuestAgentResponse:
         raise self.error
 
     def worker_status(self) -> GuestAgentResponse:

@@ -15,6 +15,28 @@ not expose arbitrary path reads, shell commands, PowerShell, cmd, exec, or
 run-command behavior. Local control still only calls the Guest Agent through
 HTTP via `NetworkClient`; the local host does not execute or inspect samples.
 
+## Security Product Readiness
+
+Security product readiness is a separate pre-delivery stage, implemented under
+`guest_agent_server/security_product_readiness/`. It is intentionally not a
+collector. Readiness probes run after `prepare-case` and before upload, do only
+low-intrusion read-only environment checks, and write
+`case_security_product_readiness.json`.
+
+The first probe supports Huorong and is scoped to `log_observability`: it checks
+that the Huorong sysdiag directory and `log.db` exist, copies `log.db` into the
+current case readiness snapshot directory, and reads only copied-file metadata.
+It does not open the live SQLite database, does not parse interception logs,
+does not read sample content, and does not start, stop, repair, or modify the
+security product. `protection_state` is therefore `unknown` even when readiness
+is `ready`; readiness means the log observation path has minimum prerequisites,
+not that real-time protection is confirmed.
+
+Readiness and collection share `product_id`, but not verdict semantics.
+Unsupported, unknown, or not-ready readiness states must not be interpreted as
+evidence of no detection. Product-log evidence remains the responsibility of
+collectors.
+
 ## Collector Plugin Model
 
 Each security product has its own collector package under the Guest Agent

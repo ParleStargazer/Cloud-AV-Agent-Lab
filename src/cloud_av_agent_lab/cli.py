@@ -174,8 +174,36 @@ def build_parser() -> argparse.ArgumentParser:
     guest_collect.add_argument(
         "--product",
         required=True,
-        choices=["huorong"],
-        help="collector product id; currently supported: huorong",
+        help="security product id for log collection; currently supported: huorong",
+    )
+
+    guest_readiness = subparsers.add_parser(
+        "guest-check-security-product-readiness",
+        help="run a low-intrusion security product readiness check for a case",
+    )
+    guest_readiness.add_argument("--config", required=True, help="path to TOML config")
+    guest_readiness.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+    guest_readiness.add_argument("--case-id", required=True, help="prepared case id")
+    guest_readiness.add_argument(
+        "--product",
+        required=True,
+        help="security product id to check; currently supported: huorong",
+    )
+
+    guest_readiness_status = subparsers.add_parser(
+        "guest-security-product-readiness-status",
+        help="load the latest security product readiness status for a case",
+    )
+    guest_readiness_status.add_argument(
+        "--config", required=True, help="path to TOML config"
+    )
+    guest_readiness_status.add_argument(
+        "--vm-id", required=True, help="VM profile id from config"
+    )
+    guest_readiness_status.add_argument(
+        "--case-id", required=True, help="prepared case id"
     )
 
     guest_execute = subparsers.add_parser(
@@ -586,6 +614,42 @@ def main(argv: Sequence[str] | None = None) -> int:
         except GuestAgentError as exc:
             parser.exit(2, _format_guest_error(exc))
         _print_guest_response(response)
+        return 0
+
+    if args.command == "guest-check-security-product-readiness":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        if args.product not in config.products:
+            parser.exit(2, f"error: unknown product id {args.product!r}\n")
+        if vm.product_id != args.product:
+            parser.exit(
+                2,
+                "error: [Local Check] VM profile product_id does not match "
+                f"--product ({vm.product_id!r} != {args.product!r})\n",
+            )
+        _ensure_guest_agent_enabled(parser, config)
+        try:
+            response = _create_guest_agent_client(
+                config
+            ).check_security_product_readiness(args.case_id, args.product)
+        except GuestAgentError as exc:
+            parser.exit(2, _format_guest_error(exc))
+        _print_security_product_readiness(response.data)
+        return 0
+
+    if args.command == "guest-security-product-readiness-status":
+        vm = config.vms.get(args.vm_id)
+        if vm is None:
+            parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        _ensure_guest_agent_enabled(parser, config)
+        try:
+            response = _create_guest_agent_client(
+                config
+            ).security_product_readiness_status(args.case_id)
+        except GuestAgentError as exc:
+            parser.exit(2, _format_guest_error(exc))
+        _print_security_product_readiness(response.data)
         return 0
 
     if args.command == "guest-execute-sample":
@@ -1020,6 +1084,42 @@ def _print_case_summary(data: dict[str, object]) -> None:
         print("Key Reasons:")
         for reason in reasons:
             print(f"- {reason}")
+
+
+def _print_security_product_readiness(data: dict[str, object]) -> None:
+    print("Security product readiness:")
+    print(f"  case_id: {data.get('case_id', '')}")
+    print(f"  product_id: {data.get('product_id', '')}")
+    print(f"  state: {data.get('state', '')}")
+    print(f"  confidence: {data.get('confidence', '')}")
+    scope = data.get("scope")
+    protection_state = data.get("protection_state")
+    if scope or protection_state:
+        print(f"  scope: {scope or ''}")
+        print(f"  protection_state: {protection_state or ''}")
+    checks = data.get("checks", [])
+    if isinstance(checks, list) and checks:
+        print("")
+        print("Checks:")
+        for check in checks:
+            if not isinstance(check, dict):
+                continue
+            print(
+                f"  [{check.get('status', '')}] "
+                f"{check.get('name', '')}: {check.get('message', '')}"
+            )
+    warnings = data.get("warnings", [])
+    if isinstance(warnings, list) and warnings:
+        print("")
+        print("Warnings:")
+        for warning in warnings:
+            print(f"- {warning}")
+    errors = data.get("errors", [])
+    if isinstance(errors, list) and errors:
+        print("")
+        print("Errors:")
+        for error in errors:
+            print(f"- {error}")
 
 
 def _print_guest_upload_response(response: GuestAgentResponse) -> None:

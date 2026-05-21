@@ -225,6 +225,7 @@ python -m cloud_av_agent_lab guest-upload-sample --config configs/lab.local.toml
 python -m cloud_av_agent_lab guest-case-status --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
 python -m cloud_av_agent_lab guest-case-report --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__tencent-pc-manager
 python -m cloud_av_agent_lab guest-execute-sample --config configs/lab.local.toml --vm-id sg-win10 --sample-id case-001 --case-id case-001__tencent-pc-manager
+python -m cloud_av_agent_lab guest-check-security-product-readiness --config configs/lab.local.toml --vm-id win10-huorong --case-id case-001__huorong --product huorong
 python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml --vm-id win10-huorong --case-id case-001__huorong --product huorong
 ```
 
@@ -243,6 +244,8 @@ python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml 
 `removed_after_save` 和 `locked_or_busy` 都不是 HTTP 上传失败。CLI 会给出 warning，并建议需要时使用 `guest-case-status` 查询 `case_state.json`、`sample.json` 和最近事件。只有鉴权失败、case 不存在、路径非法或磁盘写入失败等基础设施问题才会让命令失败退出。
 
 `guest-case-report` 会生成并读取云端 case 工作目录下的 `case_report.json`，汇总投送阶段 metadata、execution 观测摘要和最近事件：case/sample/vm/product 标识、上传状态、saved/removed/locked/stable 标记、文件名、哈希、大小、root PID、退出码、子进程摘要和时间戳。它不读取样本内容，不读取 Defender 或其他杀软日志；杀软日志采集和检测判定属于后续评测阶段。
+
+2026-05-21 阶段新增了安全产品就绪检查 MVP。该能力位于 `src/cloud_av_agent_lab/guest_agent_server/security_product_readiness/`，与 collection collector 并列，不复用 collector verdict。Huorong probe 只做测试前只读检查：确认 `C:\ProgramData\Huorong\sysdiag` 和 `log.db` 存在，把 live `log.db` best-effort 复制到当前 case 的 `security-product-readiness\huorong\` 快照目录，再对复制后的文件做 metadata 检查。它不打开 live SQLite，不解析产品拦截日志，不读取样本内容，也不启动、停止、修复或修改安全产品。结果写入 `case_security_product_readiness.json`，同步到 `case_state.security_product_readiness`、`case_report.security_product_readiness` 和 `events.jsonl`。`ready` 只代表日志可观察链路具备最低条件，`protection_state=unknown`，不能当作实时防护已开启或一定会检出的证明。当前 CLI 是 `guest-check-security-product-readiness --product huorong`；第一轮暂不接入 single-run、evidence bundle 或 evaluator gating。
 
 2026-05-16 阶段完成了日志收集、简易评测和证据导出的 MVP：杀毒软件日志收集框架负责 product collector 插件与统一证据 schema；火绒 collector 作为首个实现负责读取和归一化火绒拦截日志；Guest Agent 提供 collection、summary 和 evidence-bundle 接口；本地 CLI 对应提供 `guest-collect-logs`、`guest-case-summary` 和 `guest-export-evidence`。
 

@@ -24,6 +24,7 @@ from cloud_av_agent_lab.guest_agent_server.workspace import (
     ExecutionRegistry,
     WorkspaceError,
     WorkspaceNotFoundError,
+    check_and_record_case_security_product_readiness,
     collect_case_logs,
     export_case_evidence_bundle,
     prepare_worker_execute_request,
@@ -31,6 +32,7 @@ from cloud_av_agent_lab.guest_agent_server.workspace import (
     read_case_collection_status,
     read_case_execution_status,
     read_case_report,
+    read_case_security_product_readiness_status,
     read_case_summary,
     read_case_status,
     record_worker_execution_observed,
@@ -257,6 +259,62 @@ def create_app(
         return {
             "status": "ok",
             "message": "collection status loaded",
+            "data": payload,
+        }
+
+    @app.post("/cases/{case_id:path}/security-product-readiness/{product_id}")
+    def check_security_product_readiness(
+        case_id: str,
+        product_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        authorize(authorization)
+        try:
+            payload = check_and_record_case_security_product_readiness(
+                workdir_path,
+                case_id,
+                product_id,
+            )
+        except WorkspaceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except WorkspaceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return {
+            "status": "ok",
+            "message": "security product readiness checked",
+            "data": payload,
+        }
+
+    @app.get("/cases/{case_id:path}/security-product-readiness/status")
+    def security_product_readiness_status(
+        case_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        authorize(authorization)
+        try:
+            payload = read_case_security_product_readiness_status(
+                workdir_path,
+                case_id,
+            )
+        except WorkspaceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except WorkspaceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return {
+            "status": "ok",
+            "message": "security product readiness status loaded",
             "data": payload,
         }
 

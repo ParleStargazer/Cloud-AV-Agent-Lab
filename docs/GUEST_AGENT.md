@@ -32,6 +32,11 @@ chain for EICAR or harmless test files:
   prepared case. The first supported collector is `huorong`.
 - `GET /cases/{case_id}/collection/status`: return the latest
   `case_collection.json` summary without reading sample bytes.
+- `POST /cases/{case_id}/security-product-readiness/{product_id}`: run a
+  low-intrusion, read-only pre-delivery product readiness check for the prepared
+  case. The first supported probe is `huorong`.
+- `GET /cases/{case_id}/security-product-readiness/status`: return the latest
+  `case_security_product_readiness.json` result.
 - `GET /cases/{case_id}/summary`: generate the conservative
   `case_summary.json` evaluator result.
 - `GET /cases/{case_id}/evidence-bundle`: return a redacted guest-reported
@@ -146,6 +151,26 @@ Manual `guest-case-status` calls can be repeated later if Defender or another AV
 product processes EICAR more slowly. Guest Agent logs the successful write and
 each status refresh at INFO level. Logs do not include tokens or sample
 contents.
+
+Security product readiness can be checked after `guest-prepare-case` and before
+upload:
+
+```powershell
+python -m cloud_av_agent_lab guest-check-security-product-readiness --config configs/lab.local.toml --vm-id win10-huorong --case-id case-001__huorong --product huorong
+```
+
+This endpoint is deliberately separate from collection. It does not parse
+product interception logs, does not read sample bytes, and does not start,
+stop, repair, or modify a security product. The Huorong MVP only verifies
+minimum log observability: the sysdiag directory and `log.db` exist, the live
+`log.db` can be copied into
+`<workdir>\cases\<case_id>\security-product-readiness\huorong\`, and the copied
+database metadata can be read. Optional WAL/SHM copy problems are warnings. The
+result is written to `case_security_product_readiness.json`, mirrored into
+`case_state.json` / `case_report.json`, and recorded in `events.jsonl`. A
+`ready` result means the Huorong log observation path appears usable; it does
+not prove real-time protection is enabled, and `protection_state` remains
+`unknown`.
 
 Recent status can be queried without reading sample content:
 
