@@ -348,7 +348,7 @@ python -m cloud_av_agent_lab guest-execute-sample `
 
 每个 case 会维护 `case_state.json`、`events.jsonl` 和 `case_report.json`。`guest-case-report` 汇总投送阶段 metadata 和 execution 区域，但不读取 Defender 或其他杀软日志，不读取样本内容。
 
-安全产品就绪检查新增第一轮最小闭环：`security_product_readiness` 与 `collectors` 并列，运行在投送前、collection 前，只做低侵入只读检查，不解析拦截日志、不读取样本内容、不启动/停止/修复安全产品。Huorong MVP 检查 `C:\ProgramData\Huorong\sysdiag` 与 `log.db` 是否存在，并把 `log.db` best-effort 复制到当前 case 的 `security-product-readiness\huorong\` 目录后只读检查副本 metadata。结果写入 `case_security_product_readiness.json`、`case_state.security_product_readiness`、`case_report.security_product_readiness` 和 `events.jsonl`。`ready` 只代表 Huorong 日志可观察链路具备最低条件，`protection_state` 仍为 `unknown`，不证明实时防护已开启或一定会检出。CLI 为 `guest-check-security-product-readiness --product huorong`。
+安全产品就绪检查新增第一轮最小闭环：`security_product_readiness` 与 `collectors` 并列，运行在投送前、collection 前，只做低侵入只读检查，不解析拦截日志、不读取样本内容、不启动/停止/修复安全产品。Huorong MVP 检查 `C:\ProgramData\Huorong\sysdiag` 与 `log.db` 是否存在，并把 `log.db` best-effort 复制到当前 case 的 `security-product-readiness\huorong\` 目录后只读检查副本 metadata。结果写入 `case_security_product_readiness.json`、`case_state.security_product_readiness`、`case_report.security_product_readiness` 和 `events.jsonl`。`ready` 只代表 Huorong 日志可观察链路具备最低条件，`protection_state` 仍为 `unknown`，不证明实时防护已开启或一定会检出。CLI 为 `guest-check-security-product-readiness --product huorong`，详细模型见 [SECURITY_PRODUCT_READINESS.md](docs/SECURITY_PRODUCT_READINESS.md)。
 
 日志收集、简易评测和证据导出阶段已经形成 MVP：杀毒软件日志收集框架定义 collector 插件和统一证据 schema；火绒 collector 是首个产品实现；Guest Agent 暴露日志收集接口、简易结论报告接口和证据包导出接口；本地 CLI 对应提供 `guest-collect-logs`、`guest-case-summary` 和 `guest-export-evidence`。
 

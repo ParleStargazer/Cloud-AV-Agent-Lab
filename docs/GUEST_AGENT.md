@@ -170,7 +170,8 @@ result is written to `case_security_product_readiness.json`, mirrored into
 `case_state.json` / `case_report.json`, and recorded in `events.jsonl`. A
 `ready` result means the Huorong log observation path appears usable; it does
 not prove real-time protection is enabled, and `protection_state` remains
-`unknown`.
+`unknown`. The standalone model and manual CLI flow are documented in
+`docs/SECURITY_PRODUCT_READINESS.md`.
 
 Recent status can be queried without reading sample content:
 
