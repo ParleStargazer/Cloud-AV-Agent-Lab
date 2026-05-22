@@ -67,6 +67,12 @@ src/cloud_av_agent_lab/guest_agent_server/collectors/
   `case_collection.json`.
 - `ProductLogCollector`: the base interface implemented by product collectors.
 
+`collectors/registry.py` is the only place that maps `product_id` values to
+collector implementations. Workspace collection code calls the registry and
+must not import individual product collectors directly. The product onboarding
+checklist, including evidence attribution downgrade rules for missing fields,
+is documented in `docs/PRODUCT_ONBOARDING.md`.
+
 Product collectors own only product-specific details: log locations, copy
 strategy, raw field parsing, artifact sensitivity, and conservative evidence
 matching. The rest of the system consumes normalized events and collector

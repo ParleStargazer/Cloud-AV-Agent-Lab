@@ -12,7 +12,10 @@ from cloud_av_agent_lab.guest_agent_server.collectors.base import (
     NormalizedSecurityEvent,
     ProductLogCollector,
 )
-from cloud_av_agent_lab.guest_agent_server.collectors.huorong import HuorongLogCollector
+from cloud_av_agent_lab.guest_agent_server.collectors.registry import (
+    get_product_log_collector,
+    supported_product_log_collectors,
+)
 
 from .errors import WorkspaceError, WorkspaceNotFoundError
 from .io import (
@@ -26,7 +29,6 @@ from .io import (
 from .paths import _case_workspace, safe_case_id
 from .reports import write_case_report
 
-SUPPORTED_COLLECTORS = {"huorong"}
 WINDOW_PRE_BUFFER_SECONDS = 60
 
 
@@ -156,11 +158,13 @@ def write_case_collection(
 
 
 def _collector_for(product_id: str) -> ProductLogCollector:
-    if product_id == "huorong":
-        return HuorongLogCollector()
+    collector = get_product_log_collector(product_id)
+    if collector is not None:
+        return collector
+    available = ", ".join(supported_product_log_collectors()) or "none"
     raise WorkspaceError(
         f"collector for product {product_id!r} is not supported; "
-        "available collectors: huorong"
+        f"available collectors: {available}"
     )
 
 

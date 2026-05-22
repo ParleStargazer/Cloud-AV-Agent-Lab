@@ -33,6 +33,18 @@ class DocsTests(TestCase):
         self.assertIn("exporter", text)
         self.assertIn("uploaded sample body", text)
 
+    def test_product_onboarding_documents_registry_and_attribution(self) -> None:
+        path = ROOT / "docs" / "PRODUCT_ONBOARDING.md"
+
+        self.assertTrue(path.is_file())
+        text = path.read_text(encoding="utf-8").casefold()
+        self.assertIn("security product onboarding", text)
+        self.assertIn("collectors/registry.py", text)
+        self.assertIn("security_product_readiness/registry.py", text)
+        self.assertIn("evidence attribution policy", text)
+        self.assertIn("missing timestamp", text)
+        self.assertIn("must not by themselves create a confident detection", text)
+
     def test_desktop_worker_model_documents_loopback_and_no_arbitrary_exec(
         self,
     ) -> None:

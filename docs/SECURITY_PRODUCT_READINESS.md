@@ -19,6 +19,11 @@ Readiness does not produce product-log evidence and does not own verdict
 semantics. A `ready` result is only an environment observation, not proof that a
 product will detect or block a sample.
 
+New products should follow the onboarding checklist in
+`docs/PRODUCT_ONBOARDING.md`: implement a low-risk readiness probe, register it
+in `security_product_readiness/registry.py`, and keep product-specific logic out
+of orchestration and evaluation.
+
 ## Safety Boundary
 
 Readiness probes must stay low-risk and read-only:
