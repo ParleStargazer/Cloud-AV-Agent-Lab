@@ -245,7 +245,7 @@ python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml 
 
 `guest-case-report` 会生成并读取云端 case 工作目录下的 `case_report.json`，汇总投送阶段 metadata、execution 观测摘要和最近事件：case/sample/vm/product 标识、上传状态、saved/removed/locked/stable 标记、文件名、哈希、大小、root PID、退出码、子进程摘要和时间戳。它不读取样本内容，不读取 Defender 或其他杀软日志；杀软日志采集和检测判定属于后续评测阶段。
 
-2026-05-21 阶段新增了安全产品就绪检查 MVP。该能力位于 `src/cloud_av_agent_lab/guest_agent_server/security_product_readiness/`，与 collection collector 并列，不复用 collector verdict。Huorong probe 只做测试前只读检查：确认 `C:\ProgramData\Huorong\sysdiag` 和 `log.db` 存在，把 live `log.db` best-effort 复制到当前 case 的 `security-product-readiness\huorong\` 快照目录，再对复制后的文件做 metadata 检查。它不打开 live SQLite，不解析产品拦截日志，不读取样本内容，也不启动、停止、修复或修改安全产品。结果写入 `case_security_product_readiness.json`，同步到 `case_state.security_product_readiness`、`case_report.security_product_readiness` 和 `events.jsonl`。`ready` 只代表日志可观察链路具备最低条件，`protection_state=unknown`，不能当作实时防护已开启或一定会检出的证明。当前 CLI 是 `guest-check-security-product-readiness --product huorong`；evidence bundle 只纳入脱敏后的 `case_security_product_readiness.json`，并继续排除 `security-product-readiness/` 下的 raw readiness snapshot。第一轮仍暂不接入 single-run 或 evaluator gating。
+2026-05-21 阶段新增了安全产品就绪检查 MVP。该能力位于 `src/cloud_av_agent_lab/guest_agent_server/security_product_readiness/`，与 collection collector 并列，不复用 collector verdict。Huorong probe 只做测试前只读检查：确认 `C:\ProgramData\Huorong\sysdiag` 和 `log.db` 存在，把 live `log.db` best-effort 复制到当前 case 的 `security-product-readiness\huorong\` 快照目录，再对复制后的文件做 metadata 检查。它不打开 live SQLite，不解析产品拦截日志，不读取样本内容，也不启动、停止、修复或修改安全产品。结果写入 `case_security_product_readiness.json`，同步到 `case_state.security_product_readiness`、`case_report.security_product_readiness` 和 `events.jsonl`。`ready` 只代表日志可观察链路具备最低条件，`protection_state=unknown`，不能当作实时防护已开启或一定会检出的证明。当前 CLI 是 `guest-check-security-product-readiness --product huorong`；evidence bundle 只纳入脱敏后的 `case_security_product_readiness.json`，并继续排除 `security-product-readiness/` 下的 raw readiness snapshot。single-run 现在会在 `prepare-case` 后、`upload-sample` 前 warning-only 调用 readiness：`ready` 记为 ok，其余状态或 API failure 记为 warning 并继续流程；仍暂不接入 evaluator gating 或 strict mode。
 
 2026-05-16 阶段完成了日志收集、简易评测和证据导出的 MVP：杀毒软件日志收集框架负责 product collector 插件与统一证据 schema；火绒 collector 作为首个实现负责读取和归一化火绒拦截日志；Guest Agent 提供 collection、summary 和 evidence-bundle 接口；本地 CLI 对应提供 `guest-collect-logs`、`guest-case-summary` 和 `guest-export-evidence`。
 
@@ -316,11 +316,13 @@ single-run 面向普通用户，默认就是完整真实流程：生成配置为
 
 上传后执行不再无条件触发。single-run 会读取上传状态轮询的最终结果：`stable` 才调用 `execute_uploaded_sample` 或 dry-run action；`removed_after_save` 表示文件已被安全产品处理，`locked_or_busy` 表示文件可能正在被安全产品占用，二者都会记录 `execution_action_status = "skipped"` 并继续进入日志收集、summary 和 evidence 导出。若状态查询返回其他未知状态，也按保守策略跳过执行。即使执行接口返回“样本已不存在”或“启动失败”这类业务失败，也会记录为 `not_started` / `launch_failed` 等观察结果，并继续收集证据；只有网络、鉴权、本地配置和云生命周期等基础设施错误才会让 single-run 进入失败分支。
 
-推荐单轮流程已经串联：运行锁、生成配置、实例状态查询、快照回滚/启动、Guest Agent 连续 health OK、Desktop Worker ready gate、settling cooldown、prepare-case、upload-sample 与动态状态轮询、受控 action、execution-status 轮询、Huorong collection、case summary、evidence bundle、结尾回滚和 emergency stop 兜底。证据导出在清理前执行；异常分支会短超时尝试 evidence salvage，失败只记录，不阻塞清理。
+推荐单轮流程已经串联：运行锁、生成配置、实例状态查询、快照回滚/启动、Guest Agent 连续 health OK、Desktop Worker ready gate、settling cooldown、prepare-case、security product readiness warning-only check、upload-sample 与动态状态轮询、受控 action、execution-status 轮询、Huorong collection、case summary、evidence bundle、结尾回滚和 emergency stop 兜底。证据导出在清理前执行；异常分支会短超时尝试 evidence salvage，失败只记录，不阻塞清理。
 
 `run_state.json` 现在同时保留旧的扁平字段和新的结构化 `stages`：
-`environment`、`delivery`、`execution`、`collection`、`summary`、`evidence`
-和 `cleanup`。可预期的测试对象状态，例如 `removed_after_save`、
+`environment`、`delivery`、`security_product_readiness`、`execution`、
+`collection`、`summary`、`evidence` 和 `cleanup`。readiness stage 会记录
+`status`、`product_id`、`state`、`confidence`、`scope`、
+`protection_state`、`checked_at_utc`、`warnings` 和 `errors`。可预期的测试对象状态，例如 `removed_after_save`、
 `locked_or_busy`、`worker_busy`、`sample_missing_before_execution`、
 `sha256_mismatch` 或 collector 远端失败，会写入 `warnings` 与对应 stage，
 并继续 summary/evidence；网络不可达、鉴权、本地配置和云生命周期错误仍会

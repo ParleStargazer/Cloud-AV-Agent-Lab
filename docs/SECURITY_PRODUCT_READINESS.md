@@ -116,19 +116,34 @@ Security product readiness:
   protection_state: unknown
 ```
 
-## Current Integration Boundary
+## Single-Run Integration
 
-The first MVP is exposed through API, client, CLI, workspace state, and
-`case_report.json`. The redacted evidence bundle now includes only the text
-metadata file `case_security_product_readiness.json` and marks it as
+The readiness check is now part of `single-run` in warning-only mode. The
+orchestrator calls it after `prepare-case` succeeds and before
+`upload-sample`. This ordering is required because readiness is case-scoped and
+writes into the prepared case workspace.
+
+`single-run` records the result in `run_state.stages.security_product_readiness`
+and logs a concise message:
+
+- `ready`: status `ok`, continue.
+- `partial`, `not_ready`, `unknown`, `unsupported`: status `warning`, continue.
+- API or network failure: status `warning`, continue.
+
+This stage must not block delivery yet. It does not enable evaluator gating,
+strict mode, or a `--require-security-product-readiness` flag.
+
+## Evidence Bundle Boundary
+
+The redacted evidence bundle includes only the text metadata file
+`case_security_product_readiness.json` and marks it as
 `security_product_readiness_metadata` in `manifest.json`; the copied readiness
 snapshot directory remains excluded.
 
 It is not yet wired into:
 
-- `single-run`;
 - evaluator gating;
 - strict blocking mode.
 
-The next intended steps are to call readiness from `single-run` in warning-only
-mode, then use it as conservative gating for `no_detection_observed`.
+The next intended step is conservative evaluator gating for
+`no_detection_observed`.

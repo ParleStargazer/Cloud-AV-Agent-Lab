@@ -21,8 +21,10 @@ from cloud_av_agent_lab.orchestration.locks import (
 )
 from cloud_av_agent_lab.orchestration.single_run import (
     SingleRunOptions,
+    _check_security_product_readiness_warning_only,
     run_single_case,
 )
+from cloud_av_agent_lab.orchestration.run_state import RunState
 from cloud_av_agent_lab.orchestration.timeout import NetworkTimeoutProfile
 
 
@@ -57,6 +59,10 @@ class SingleRunTests(TestCase):
             self.assertGreaterEqual(adapter.calls.count("restore_snapshot"), 2)
             self.assertEqual(client.health_calls, 2)
             self.assertEqual(client.execute_dry_runs, [False])
+            self.assertEqual(
+                client.calls[:3],
+                ["prepare_case", "check_security_product_readiness", "upload_sample"],
+            )
             generated_config = result.generated_config_path.read_text(encoding="utf-8")
             self.assertIn('mode = "real"', generated_config)
             self.assertIn("dry_run = false", generated_config)
@@ -79,6 +85,14 @@ class SingleRunTests(TestCase):
                 "active",
             )
             self.assertEqual(run_state["stages"]["delivery"]["upload_state"], "stable")
+            self.assertEqual(
+                run_state["stages"]["security_product_readiness"]["status"],
+                "ok",
+            )
+            self.assertEqual(
+                run_state["stages"]["security_product_readiness"]["state"],
+                "ready",
+            )
             self.assertEqual(
                 run_state["stages"]["execution"]["action_status"],
                 "observed",
@@ -105,6 +119,96 @@ class SingleRunTests(TestCase):
             self.assertIn("dry_run = true", generated_config)
             self.assertIn("enabled = false", generated_config)
             self.assertEqual(client.execute_dry_runs, [True])
+
+    def test_single_run_readiness_warning_states_continue_to_upload(self) -> None:
+        for readiness_state in ("partial", "not_ready", "unknown", "unsupported"):
+            with self.subTest(readiness_state=readiness_state):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    sample_path = root / "sample.bin"
+                    sample_path.write_bytes(b"harmless")
+                    client = FakeGuestClient(readiness_state=readiness_state)
+
+                    result = run_single_case(
+                        _options(root, sample_path),
+                        cloud_adapter_factory=lambda *args, **kwargs: (
+                            FakeCloudAdapter()
+                        ),
+                        guest_client_factory=lambda config: client,
+                        sleep=lambda seconds: None,
+                    )
+
+                    self.assertEqual(result.final_status, "completed_with_warnings")
+                    self.assertIn("upload_sample", client.calls)
+                    self.assertLess(
+                        client.calls.index("check_security_product_readiness"),
+                        client.calls.index("upload_sample"),
+                    )
+                    run_state = json.loads(
+                        result.run_state_path.read_text(encoding="utf-8")
+                    )
+                    readiness = run_state["stages"]["security_product_readiness"]
+                    self.assertEqual(readiness["status"], "warning")
+                    self.assertEqual(readiness["state"], readiness_state)
+                    self.assertIn(
+                        "warning-only",
+                        (result.run_dir / "run.log").read_text(encoding="utf-8"),
+                    )
+
+    def test_single_run_readiness_api_failure_is_warning_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.bin"
+            sample_path.write_bytes(b"harmless")
+            client = FakeGuestClient(
+                readiness_error=GuestAgentError(
+                    "Authorization: Bearer should-not-leak token=should-not-leak",
+                    source="network",
+                )
+            )
+
+            result = run_single_case(
+                _options(root, sample_path),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            self.assertIn("upload_sample", client.calls)
+            run_state_text = result.run_state_path.read_text(encoding="utf-8")
+            run_log = (result.run_dir / "run.log").read_text(encoding="utf-8")
+            self.assertIn("readiness API call failed", run_state_text)
+            self.assertIn("readiness is warning-only", run_log)
+            self.assertNotIn("should-not-leak", run_state_text)
+            self.assertNotIn("should-not-leak", run_log)
+
+    def test_readiness_warning_only_skips_when_product_id_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = RunState(
+                Path(tmp) / "run_state.json",
+                run_id="run-001",
+                case_id="case-001",
+                instance_id="lhins-example",
+                snapshot_id="lhsnap-example",
+                region="ap-singapore",
+                product_id="",
+                sample_name="eicar",
+                sample_path="eicar.txt",
+            )
+
+            result = _check_security_product_readiness_warning_only(
+                client=FakeGuestClient(),
+                state=state,
+                case_id="case-001",
+                product_id="",
+            )
+
+            self.assertEqual(result["status"], "skipped")
+            run_state = json.loads(state.path.read_text(encoding="utf-8"))
+            readiness = run_state["stages"]["security_product_readiness"]
+            self.assertEqual(readiness["status"], "skipped")
+            self.assertEqual(readiness["reason"], "product_id is not configured")
 
     def test_single_run_fails_before_delivery_when_worker_not_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -366,12 +470,16 @@ class FakeGuestClient:
         self,
         fail_collect: bool = False,
         status_upload_state: str = "stable",
+        readiness_state: str = "ready",
+        readiness_error: GuestAgentError | None = None,
         execute_error: GuestAgentError | None = None,
         worker_ready: bool = True,
         worker_reason: str = "",
     ) -> None:
         self.fail_collect = fail_collect
         self.status_upload_state = status_upload_state
+        self.readiness_state = readiness_state
+        self.readiness_error = readiness_error
         self.execute_error = execute_error
         self.worker_ready = worker_ready
         self.worker_reason = worker_reason
@@ -379,6 +487,7 @@ class FakeGuestClient:
         self.worker_status_calls = 0
         self.export_timeouts: list[float | None] = []
         self.execute_dry_runs: list[bool] = []
+        self.calls: list[str] = []
 
     def health(self, timeout_seconds: float | None = None) -> GuestAgentResponse:
         self.health_calls += 1
@@ -404,7 +513,35 @@ class FakeGuestClient:
         case: object,
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
+        self.calls.append("prepare_case")
         return GuestAgentResponse(status="ok", message="prepared", data={})
+
+    def check_security_product_readiness(
+        self,
+        case_id: str,
+        product_id: str,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
+        self.calls.append("check_security_product_readiness")
+        if self.readiness_error is not None:
+            raise self.readiness_error
+        return GuestAgentResponse(
+            status="ok",
+            message="security product readiness checked",
+            data={
+                "case_id": case_id,
+                "product_id": product_id,
+                "state": self.readiness_state,
+                "confidence": "medium",
+                "scope": "log_observability",
+                "protection_state": "unknown",
+                "checked_at_utc": "2026-05-22T00:00:00Z",
+                "warnings": ["readiness warning"]
+                if self.readiness_state != "ready"
+                else [],
+                "errors": [],
+            },
+        )
 
     def upload_sample(
         self,
@@ -414,6 +551,7 @@ class FakeGuestClient:
         sha256: str = "",
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
+        self.calls.append("upload_sample")
         return GuestAgentResponse(
             status="ok",
             message="uploaded",

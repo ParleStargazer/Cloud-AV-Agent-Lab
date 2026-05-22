@@ -291,12 +291,18 @@ Lighthouse lifecycle readiness, then requires Guest Agent `/health` to succeed
 twice. For real runs, the generated config also enables the Desktop Worker
 gate, so Control Agent `/worker/status` must report an interactive desktop
 Worker ready before delivery continues. Only after that does it apply the
-settling cooldown, call `prepare-case`, upload the explicit EICAR or harmless
-file, poll case status, request the controlled action, collect Huorong logs,
-fetch the summary, and download the redacted guest-reported evidence bundle. The command
-defaults to a real run after one runtime risk confirmation; use `--dry-run` to
-keep cloud lifecycle, Desktop Worker gate, and controlled action requests in
-dry-run mode.
+settling cooldown, call `prepare-case`, run security product readiness in
+warning-only mode, upload the explicit EICAR or harmless file, poll case status,
+request the controlled action, collect Huorong logs, fetch the summary, and
+download the redacted guest-reported evidence bundle. The command defaults to a
+real run after one runtime risk confirmation; use `--dry-run` to keep cloud
+lifecycle, Desktop Worker gate, and controlled action requests in dry-run mode.
+
+The single-run readiness stage records
+`run_state.stages.security_product_readiness`. `ready` is stored as `ok`;
+`partial`, `not_ready`, `unknown`, `unsupported`, and API failures are stored as
+warnings and do not block upload. Strict readiness gating is intentionally not
+enabled in this phase.
 
 Desktop Worker is now the real execution layer when enabled. Control Agent keeps
 the stable HTTP control plane in Session 0, signs a short-TTL single-use

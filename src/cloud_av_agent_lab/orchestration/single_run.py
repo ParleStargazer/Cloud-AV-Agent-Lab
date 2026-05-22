@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -66,6 +67,10 @@ NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS = {
     "uploaded sample failed to start": "launch_failed",
     "execute_uploaded_sample requires a previously uploaded sample": "not_uploaded",
 }
+SENSITIVE_MESSAGE_RE = re.compile(
+    r"(?i)\b(authorization|bearer|token|secret|password|credential|api[_-]?key|"
+    r"cloud[_-]?secret)\b(\s*[:=]\s*)?[^\s,;\"']*"
+)
 
 
 class SingleRunError(RuntimeError):
@@ -427,6 +432,17 @@ def _run_single_case_locked(
             state.mark("case_started", True)
             state.mark_stage("delivery", "case_started", True)
 
+        with state.step("security_product_readiness"):
+            lock.heartbeat()
+            readiness_result = _check_security_product_readiness_warning_only(
+                client=client,
+                state=state,
+                case_id=case_id,
+                product_id=product_id,
+            )
+            if readiness_result["status"] == "warning":
+                warning_count += 1
+
         with state.step("upload_sample"):
             lock.heartbeat()
             client.upload_sample(
@@ -779,6 +795,115 @@ def _poll_upload_status(
             return last_response
         sleep(wait_seconds)
         elapsed += wait_seconds
+
+
+def _check_security_product_readiness_warning_only(
+    *,
+    client: GuestAgentClient,
+    state: RunState,
+    case_id: str,
+    product_id: str,
+) -> dict[str, str]:
+    stage = "security_product_readiness"
+    if not product_id:
+        reason = "product_id is not configured"
+        state.mark_stage(stage, "status", "skipped")
+        state.mark_stage(stage, "reason", reason)
+        state.mark_stage("environment", "product_readiness_checked", False)
+        state.mark_stage("environment", "product_environment_ready", None)
+        state.add_warning(stage, reason)
+        LOGGER.warning(
+            "Security product readiness skipped: %s; continuing because "
+            "readiness is warning-only",
+            reason,
+        )
+        return {"status": "skipped", "state": "unknown"}
+
+    try:
+        response = client.check_security_product_readiness(
+            case_id,
+            product_id,
+            timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+        )
+    except Exception:
+        reason = (
+            "readiness API call failed; continuing because readiness is warning-only"
+        )
+        state.mark_stage(stage, "status", "warning")
+        state.mark_stage(stage, "product_id", product_id)
+        state.mark_stage(stage, "state", "unknown")
+        state.mark_stage(stage, "reason", reason)
+        state.mark_stage("environment", "product_readiness_checked", False)
+        state.mark_stage("environment", "product_environment_ready", None)
+        state.add_warning(stage, reason)
+        LOGGER.warning(
+            "Security product readiness check failed; continuing because "
+            "readiness is warning-only"
+        )
+        return {"status": "warning", "state": "unknown"}
+
+    data = response.data
+    readiness_state = str(data.get("state") or "unknown")
+    status = "ok" if readiness_state == "ready" else "warning"
+    confidence = str(data.get("confidence") or "")
+    scope = str(data.get("scope") or "")
+    protection_state = str(data.get("protection_state") or "")
+    checked_at = str(data.get("checked_at_utc") or "")
+
+    state.mark_stage(stage, "status", status)
+    state.mark_stage(stage, "product_id", str(data.get("product_id") or product_id))
+    state.mark_stage(stage, "state", readiness_state)
+    state.mark_stage(stage, "confidence", confidence)
+    state.mark_stage(stage, "scope", scope)
+    state.mark_stage(stage, "protection_state", protection_state)
+    state.mark_stage(stage, "checked_at_utc", checked_at)
+    state.mark_stage(stage, "warnings", _safe_readiness_messages(data.get("warnings")))
+    state.mark_stage(stage, "errors", _safe_readiness_messages(data.get("errors")))
+    state.mark_stage("environment", "product_readiness_checked", True)
+    state.mark_stage(
+        "environment",
+        "product_environment_ready",
+        readiness_state == "ready",
+    )
+
+    if status == "ok":
+        LOGGER.info(
+            "Security product readiness checked: product=%s state=%s "
+            "confidence=%s scope=%s protection_state=%s",
+            product_id,
+            readiness_state,
+            confidence,
+            scope,
+            protection_state,
+        )
+        return {"status": status, "state": readiness_state}
+
+    warning = (
+        f"security product readiness is {readiness_state}; continuing because "
+        "readiness is warning-only"
+    )
+    state.add_warning(stage, warning)
+    LOGGER.warning(
+        "Security product readiness warning: product=%s state=%s confidence=%s; "
+        "continuing because readiness is warning-only",
+        product_id,
+        readiness_state,
+        confidence,
+    )
+    return {"status": status, "state": readiness_state}
+
+
+def _safe_readiness_messages(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [_sanitize_readiness_message(str(item)) for item in value]
+
+
+def _sanitize_readiness_message(message: str) -> str:
+    sanitized = SENSITIVE_MESSAGE_RE.sub("<redacted>", message)
+    if len(sanitized) > 500:
+        return sanitized[:497] + "..."
+    return sanitized
 
 
 def _execute_after_upload_observation(

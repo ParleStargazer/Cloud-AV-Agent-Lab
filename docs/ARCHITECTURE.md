@@ -128,9 +128,9 @@ the adapter contracts; it composes them for one case:
 3. restore the Lighthouse baseline and wait for a stable running guest;
 4. wait for Guest Agent health twice, then require Desktop Worker ready for
    real runs before applying a settling cooldown;
-5. prepare the case, upload the explicit EICAR/harmless file, observe upload
-   state, optionally request the controlled action, collect logs, summarize, and
-   export evidence;
+5. prepare the case, run security product readiness in warning-only mode,
+   upload the explicit EICAR/harmless file, observe upload state, optionally
+   request the controlled action, collect logs, summarize, and export evidence;
 6. export evidence before cleanup, then restore the baseline again;
 7. if cleanup restore fails, attempt the same guarded `stop_vm` path as
    emergency poweroff and record the result in `run_state.json`.

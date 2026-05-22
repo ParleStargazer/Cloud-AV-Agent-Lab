@@ -97,6 +97,8 @@ python -m cloud_av_agent_lab single-run `
 
 真实 single-run 现在会生成 `[guest_agent.desktop_worker]` 并默认要求云端 Control Agent 的 `/worker/status` 返回 ready 后才进入投送阶段。Desktop Worker 是为了解决 Windows Session 0 执行问题而引入的执行层：Control Agent 继续常驻 Session 0，真实 `execute_uploaded_sample` 会由 Control Agent 签发短期 execution lease 后转发给运行在交互式桌面 session 的 Worker；Worker 只执行当前 case 已登记的 `.exe`，并就近观测执行状态。需要诊断旧环境时可以临时使用 `--disable-desktop-worker-gate`，但这会回到不可判定的环境风险模型。详细见 [DESKTOP_WORKER.md](docs/DESKTOP_WORKER.md)。
 
+single-run 会在 `prepare-case` 成功后、`upload-sample` 之前自动调用 `security_product_readiness`，把产品日志可观察性写入 `run_state.stages.security_product_readiness` 和云端 case workspace。该阶段目前是 warning-only：`ready` 记录为 `ok`，`partial`、`not_ready`、`unknown`、`unsupported` 或 API 调用失败都只记录 warning 并继续投送样本，不触发 strict mode，也不参与 evaluator gating。
+
 真实触发仍然只允许云端 Guest Agent 执行当前 case 已登记上传文件，且必须满足云端 execution 开关和 token 校验；本地控制面仍不执行样本。single-run 会根据上传轮询结果决定是否触发：只有 `stable` 才请求执行接口；`removed_after_save`、`locked_or_busy` 或未知状态会记录为执行跳过，并继续 collection、summary 和 evidence 导出。若执行接口返回样本已不存在或启动失败这类业务状态，也会作为本轮观察结果继续收集证据，而不是直接中断整个流程。
 
 summary 现在按保守原则生成：只有产品日志明确匹配当前 case 时才输出
@@ -348,7 +350,7 @@ python -m cloud_av_agent_lab guest-execute-sample `
 
 每个 case 会维护 `case_state.json`、`events.jsonl` 和 `case_report.json`。`guest-case-report` 汇总投送阶段 metadata 和 execution 区域，但不读取 Defender 或其他杀软日志，不读取样本内容。
 
-安全产品就绪检查新增第一轮最小闭环：`security_product_readiness` 与 `collectors` 并列，运行在投送前、collection 前，只做低侵入只读检查，不解析拦截日志、不读取样本内容、不启动/停止/修复安全产品。Huorong MVP 检查 `C:\ProgramData\Huorong\sysdiag` 与 `log.db` 是否存在，并把 `log.db` best-effort 复制到当前 case 的 `security-product-readiness\huorong\` 目录后只读检查副本 metadata。结果写入 `case_security_product_readiness.json`、`case_state.security_product_readiness`、`case_report.security_product_readiness` 和 `events.jsonl`。Evidence bundle 只纳入脱敏后的 `case_security_product_readiness.json`；`security-product-readiness\huorong\log.db*` readiness snapshot 仍按 raw product log snapshot 排除。`ready` 只代表 Huorong 日志可观察链路具备最低条件，`protection_state` 仍为 `unknown`，不证明实时防护已开启或一定会检出。CLI 为 `guest-check-security-product-readiness --product huorong`，详细模型见 [SECURITY_PRODUCT_READINESS.md](docs/SECURITY_PRODUCT_READINESS.md)。
+安全产品就绪检查新增最小闭环：`security_product_readiness` 与 `collectors` 并列，运行在投送前、collection 前，只做低侵入只读检查，不解析拦截日志、不读取样本内容、不启动/停止/修复安全产品。Huorong MVP 检查 `C:\ProgramData\Huorong\sysdiag` 与 `log.db` 是否存在，并把 `log.db` best-effort 复制到当前 case 的 `security-product-readiness\huorong\` 目录后只读检查副本 metadata。结果写入 `case_security_product_readiness.json`、`case_state.security_product_readiness`、`case_report.security_product_readiness` 和 `events.jsonl`。single-run 会在 `prepare-case` 后、`upload-sample` 前 warning-only 调用 readiness，所有状态都继续后续流程。Evidence bundle 只纳入脱敏后的 `case_security_product_readiness.json`；`security-product-readiness\huorong\log.db*` readiness snapshot 仍按 raw product log snapshot 排除。`ready` 只代表 Huorong 日志可观察链路具备最低条件，`protection_state` 仍为 `unknown`，不证明实时防护已开启或一定会检出。CLI 为 `guest-check-security-product-readiness --product huorong`，详细模型见 [SECURITY_PRODUCT_READINESS.md](docs/SECURITY_PRODUCT_READINESS.md)。
 
 日志收集、简易评测和证据导出阶段已经形成 MVP：杀毒软件日志收集框架定义 collector 插件和统一证据 schema；火绒 collector 是首个产品实现；Guest Agent 暴露日志收集接口、简易结论报告接口和证据包导出接口；本地 CLI 对应提供 `guest-collect-logs`、`guest-case-summary` 和 `guest-export-evidence`。
 
