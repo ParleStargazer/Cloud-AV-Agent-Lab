@@ -33,9 +33,12 @@ is `ready`; readiness means the log observation path has minimum prerequisites,
 not that real-time protection is confirmed.
 
 Readiness and collection share `product_id`, but not verdict semantics.
-Unsupported, unknown, or not-ready readiness states must not be interpreted as
-evidence of no detection. Product-log evidence remains the responsibility of
-collectors.
+Unsupported, unknown, partial, missing, or not-ready readiness states must not
+be interpreted as evidence of detection or no detection. Product-log evidence
+remains the responsibility of collectors. The evaluator uses readiness only as
+a conservative gate before emitting `no_detection_observed`: only
+`state == ready` allows that optimistic verdict, and explicit product-log
+detections are not downgraded by readiness.
 
 ## Collector Plugin Model
 
@@ -208,7 +211,8 @@ Its verdict vocabulary is broader than a collector verdict:
 - `suspiciously_removed`: the uploaded file was saved once and later removed,
   but product evidence is missing.
 - `no_detection_observed`: the observation window completed without product
-  evidence, and execution was observable enough for a cautious statement.
+  evidence, execution was observable enough for a cautious statement, and
+  security product readiness was confirmed as `ready`.
 - `execution_not_observed`: execution did not happen or was not observable, so a
   no-detection claim would be too strong.
 - `inconclusive` / `unknown`: evidence is incomplete or contradictory.

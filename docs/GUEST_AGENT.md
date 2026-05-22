@@ -301,8 +301,9 @@ lifecycle, Desktop Worker gate, and controlled action requests in dry-run mode.
 The single-run readiness stage records
 `run_state.stages.security_product_readiness`. `ready` is stored as `ok`;
 `partial`, `not_ready`, `unknown`, `unsupported`, and API failures are stored as
-warnings and do not block upload. Strict readiness gating is intentionally not
-enabled in this phase.
+warnings and do not block upload. This is still not strict mode, but the
+evaluator later uses readiness as a conservative gate for
+`no_detection_observed`: only `ready` allows that verdict.
 
 Desktop Worker is now the real execution layer when enabled. Control Agent keeps
 the stable HTTP control plane in Session 0, signs a short-TTL single-use
@@ -403,7 +404,11 @@ Worker busy, sample missing, sha256 mismatch, unsupported file type, or launch
 failure, the verdict stays conservative rather than claiming a clean miss.
 `no_detection_observed` is only allowed when delivery stayed stable, execution
 was actually observed, collection completed successfully in a window covering
-execution, and no matching product evidence or collector errors were present.
+execution, no matching product evidence or collector errors were present, and
+`security_product_readiness.state == ready`. If readiness is missing, partial,
+not ready, unknown, or unsupported, the evaluator records the readiness reason
+and keeps the verdict conservative. This gate only limits a no-detection claim;
+it does not override `detected_or_blocked`.
 
 `GET /cases/{case_id}/evidence-bundle` returns
 `case_evidence_<case_id>.zip`. The bundle is a Redaction MVP archive, not a raw

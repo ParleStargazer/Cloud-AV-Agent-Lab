@@ -89,10 +89,13 @@ and a `case_report.json` summary. It is read-only: it checks the product log
 directory, copies `log.db` into the case readiness snapshot directory, and reads
 copied-file metadata. It does not parse interception logs, does not read sample
 bytes, does not modify product services, and does not prove real-time
-protection is enabled. The evidence exporter may include only the redacted
+protection is enabled. The evaluator uses readiness only to gate the optimistic
+`no_detection_observed` verdict: `ready` is required before claiming no
+detection was observed, while explicit product-log detections still win. The
+evidence exporter may include only the redacted
 `case_security_product_readiness.json` metadata; the copied readiness snapshot
 directory is raw product log material and remains excluded. Collection remains
-responsible for product-log evidence and verdict inputs.
+responsible for product-log detection evidence.
 
 ## Adapter Contracts
 
@@ -174,10 +177,11 @@ and Control Agent records the PID and Worker observation in case state.
 
 Evaluation and export are separate layers after collection. Collectors only copy
 and normalize product evidence into the case workspace. The evaluator combines
-delivery, execution, and collection evidence into a conservative
+delivery, execution, readiness, and collection evidence into a conservative
 `case_summary.json`; `no_detection_observed` is gated on stable delivery,
-observed execution, a successful collection window, and zero matching evidence.
-Missing or partial collection, Worker/lease/sha mismatch states, and process
+observed execution, a successful collection window, zero matching evidence, and
+`security_product_readiness.state == ready`. Missing or partial collection,
+missing or non-ready readiness, Worker/lease/sha mismatch states, and process
 disappearance without product-log evidence remain `inconclusive` or
 `execution_not_observed`.
 

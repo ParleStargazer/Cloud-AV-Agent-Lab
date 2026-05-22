@@ -51,6 +51,7 @@ def evaluate_case(
         delivery=delivery,
         execution=execution,
         collection=collection,
+        readiness=_mapping(environment.get("security_product_readiness")),
     )
     return EvaluationSummary(
         case_id=str(case_report.get("case_id", "")),
@@ -117,10 +118,15 @@ def render_summary_markdown(summary: EvaluationSummary | Mapping[str, Any]) -> s
     return "\n".join(lines).rstrip() + "\n"
 
 
+def allows_no_detection_observed(readiness: Mapping[str, Any] | None) -> bool:
+    return readiness is not None and readiness.get("state") == "ready"
+
+
 def _decide_verdict(
     delivery: Mapping[str, Any],
     execution: Mapping[str, Any],
     collection: Mapping[str, Any],
+    readiness: Mapping[str, Any] | None,
 ) -> tuple[str, str, str, list[str], list[str], list[str]]:
     reasons: list[str] = []
     blocking: list[str] = []
@@ -239,6 +245,20 @@ def _decide_verdict(
             and collection_verdict == "not_intercepted"
             and _collection_window_covers_execution(collection, execution)
         ):
+            if not allows_no_detection_observed(readiness):
+                reasons.append(
+                    "Security product readiness was not confirmed; "
+                    "no_detection_observed was not allowed."
+                )
+                blocking.append("security_product_readiness_not_confirmed")
+                return (
+                    "inconclusive",
+                    "low",
+                    "安全产品就绪状态未确认，因此不能输出未检出的乐观结论。",
+                    reasons,
+                    blocking,
+                    nonfatal,
+                )
             return (
                 "no_detection_observed",
                 "medium",

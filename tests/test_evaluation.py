@@ -12,15 +12,18 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cloud_av_agent_lab.evaluation import evaluate_case
+from cloud_av_agent_lab.evaluation import allows_no_detection_observed, evaluate_case
 from cloud_av_agent_lab.evidence import exporter
 from cloud_av_agent_lab.evidence import build_evidence_bundle
 
 
 class EvaluationTests(TestCase):
     def test_collection_evidence_yields_detected_or_blocked(self) -> None:
+        report = _case_report(upload_state="stable", stable=True)
+        report["security_product_readiness"] = _readiness("unknown")
+
         summary = evaluate_case(
-            case_report=_case_report(upload_state="stable", stable=True),
+            case_report=report,
             case_collection={
                 "product_id": "huorong",
                 "collection_state": "collected",
@@ -32,6 +35,12 @@ class EvaluationTests(TestCase):
 
         self.assertEqual(summary.verdict, "detected_or_blocked")
         self.assertEqual(summary.confidence, "high")
+
+    def test_allows_no_detection_observed_only_for_ready(self) -> None:
+        self.assertTrue(allows_no_detection_observed(_readiness("ready")))
+        for state in ("partial", "not_ready", "unknown", "unsupported", "missing"):
+            self.assertFalse(allows_no_detection_observed(_readiness(state)))
+        self.assertFalse(allows_no_detection_observed(None))
 
     def test_removed_after_save_without_collection_is_inconclusive(self) -> None:
         summary = evaluate_case(
@@ -67,6 +76,7 @@ class EvaluationTests(TestCase):
         self,
     ) -> None:
         report = _case_report(upload_state="stable", stable=True)
+        report["security_product_readiness"] = _readiness("ready")
         report["execution"] = {
             "state": "exited_cleanly",
             "exit_code": 0,
@@ -88,6 +98,72 @@ class EvaluationTests(TestCase):
         )
 
         self.assertEqual(summary.verdict, "no_detection_observed")
+
+    def test_no_detection_is_gated_by_readiness(self) -> None:
+        for state in ("partial", "not_ready", "unknown", "unsupported"):
+            with self.subTest(state=state):
+                report = _case_report(upload_state="stable", stable=True)
+                report["security_product_readiness"] = _readiness(state)
+                report["execution"] = {
+                    "state": "exited_cleanly",
+                    "exit_code": 0,
+                    "started_at_utc": "2026-05-16T00:00:05Z",
+                }
+
+                summary = evaluate_case(
+                    case_report=report,
+                    case_collection={
+                        "collection_state": "collected",
+                        "verdict": "not_intercepted",
+                        "intercepted": False,
+                        "evidence_count": 0,
+                        "window": {
+                            "execution_started_at_utc": "2026-05-16T00:00:05Z",
+                            "end_utc": "2026-05-16T00:01:00Z",
+                        },
+                    },
+                )
+
+                self.assertEqual(summary.verdict, "inconclusive")
+                self.assertIn(
+                    "security_product_readiness_not_confirmed",
+                    summary.blocking_conditions,
+                )
+                self.assertIn(
+                    "Security product readiness was not confirmed; "
+                    "no_detection_observed was not allowed.",
+                    summary.reasons,
+                )
+
+    def test_missing_readiness_does_not_crash_and_blocks_no_detection(self) -> None:
+        report = _case_report(upload_state="stable", stable=True)
+        report["execution"] = {
+            "state": "exited_cleanly",
+            "exit_code": 0,
+            "started_at_utc": "2026-05-16T00:00:05Z",
+        }
+
+        summary = evaluate_case(
+            case_report=report,
+            case_collection={
+                "collection_state": "collected",
+                "verdict": "not_intercepted",
+                "intercepted": False,
+                "evidence_count": 0,
+                "window": {
+                    "execution_started_at_utc": "2026-05-16T00:00:05Z",
+                    "end_utc": "2026-05-16T00:01:00Z",
+                },
+            },
+        ).to_dict()
+
+        self.assertEqual(summary["verdict"], "inconclusive")
+        self.assertEqual(
+            summary["decision_inputs"]["environment"]["security_product_readiness"][
+                "state"
+            ],
+            "not_checked",
+        )
 
     def test_collection_failed_never_yields_no_detection(self) -> None:
         report = _case_report(upload_state="stable", stable=True)
@@ -189,7 +265,7 @@ class EvaluationTests(TestCase):
         self.assertFalse(summary["environment"]["product_readiness_checked"])
         self.assertIsNone(summary["environment"]["product_environment_ready"])
 
-    def test_case_summary_reports_security_product_readiness_without_gating(
+    def test_case_summary_reports_security_product_readiness_decision_input(
         self,
     ) -> None:
         report = _case_report(upload_state="stable", stable=True)
@@ -645,6 +721,19 @@ def _case_report(
         "size": 68,
         "execution": {"state": "not_started"},
         "collection": {"state": "not_collected", "evidence_count": 0},
+    }
+
+
+def _readiness(state: str) -> dict[str, object]:
+    return {
+        "product_id": "huorong",
+        "state": state,
+        "confidence": "medium",
+        "scope": "log_observability",
+        "protection_state": "unknown",
+        "checked_at_utc": "2026-05-22T00:00:00Z",
+        "warnings": [],
+        "errors": [],
     }
 
 

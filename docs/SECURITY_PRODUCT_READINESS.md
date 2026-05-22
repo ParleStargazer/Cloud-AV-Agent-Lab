@@ -130,8 +130,27 @@ and logs a concise message:
 - `partial`, `not_ready`, `unknown`, `unsupported`: status `warning`, continue.
 - API or network failure: status `warning`, continue.
 
-This stage must not block delivery yet. It does not enable evaluator gating,
-strict mode, or a `--require-security-product-readiness` flag.
+This stage must not block delivery. It does not enable strict mode or a
+`--require-security-product-readiness` flag.
+
+## Evaluator Gating
+
+Readiness is used only as a conservative gate before the evaluator emits the
+optimistic verdict `no_detection_observed`. The centralized helper
+`allows_no_detection_observed()` currently allows that verdict only when:
+
+```text
+security_product_readiness.state == "ready"
+```
+
+Missing readiness, `partial`, `not_ready`, `unknown`, and `unsupported` all keep
+the final verdict conservative, usually `inconclusive`, if the evaluator would
+otherwise have returned `no_detection_observed`.
+
+Readiness never creates a detection verdict and never overrides stronger
+evidence. Product-log evidence that supports `detected_or_blocked`, or delivery
+states such as `removed_after_save` with their own conservative verdicts, remain
+prioritized.
 
 ## Evidence Bundle Boundary
 
@@ -140,10 +159,4 @@ The redacted evidence bundle includes only the text metadata file
 `security_product_readiness_metadata` in `manifest.json`; the copied readiness
 snapshot directory remains excluded.
 
-It is not yet wired into:
-
-- evaluator gating;
-- strict blocking mode.
-
-The next intended step is conservative evaluator gating for
-`no_detection_observed`.
+It is not yet wired into strict blocking mode.
