@@ -26,6 +26,11 @@ class RunState:
         sample_path: str,
     ) -> None:
         self.path = path
+        environment: dict[str, Any] = {
+            "product_readiness_checked": False,
+            "product_environment_ready": None,
+        }
+        security_product_readiness: dict[str, Any] = {"status": "pending"}
         self.data: dict[str, Any] = {
             "schema_version": "single-run-state.v1",
             "run_id": run_id,
@@ -40,13 +45,15 @@ class RunState:
                 "sha256": "",
                 "size": None,
             },
+            "environment": dict(environment),
+            "security_product_readiness": dict(security_product_readiness),
             "steps": [],
             "status": "pending",
             "test_verdict": "",
             "stages": {
-                "environment": {},
+                "environment": dict(environment),
                 "delivery": {},
-                "security_product_readiness": {"status": "pending"},
+                "security_product_readiness": dict(security_product_readiness),
                 "execution": {},
                 "collection": {},
                 "summary": {},
@@ -90,6 +97,12 @@ class RunState:
             stage_payload = {}
             stages[stage] = stage_payload
         stage_payload[key] = value
+        if stage in {"environment", "security_product_readiness"}:
+            mirror = self.data.setdefault(stage, {})
+            if not isinstance(mirror, dict):
+                mirror = {}
+                self.data[stage] = mirror
+            mirror[key] = value
         self.write()
 
     def mark_artifact(self, name: str, value: Any) -> None:

@@ -177,6 +177,7 @@ class EvaluationTests(TestCase):
             "delivery",
             "execution",
             "collection",
+            "environment",
             "decision_inputs",
             "blocking_conditions",
             "nonfatal_failures",
@@ -184,6 +185,42 @@ class EvaluationTests(TestCase):
             "generated_at_utc",
         ):
             self.assertIn(key, summary)
+
+        self.assertFalse(summary["environment"]["product_readiness_checked"])
+        self.assertIsNone(summary["environment"]["product_environment_ready"])
+
+    def test_case_summary_reports_security_product_readiness_without_gating(
+        self,
+    ) -> None:
+        report = _case_report(upload_state="stable", stable=True)
+        report["security_product_readiness"] = {
+            "product_id": "huorong",
+            "state": "ready",
+            "confidence": "medium",
+            "scope": "log_observability",
+            "protection_state": "unknown",
+            "checked_at_utc": "2026-05-22T00:00:00Z",
+            "warnings": [],
+            "errors": [],
+        }
+
+        summary = evaluate_case(
+            case_report=report,
+            case_collection={"collection_state": "not_collected"},
+        ).to_dict()
+
+        self.assertTrue(summary["environment"]["product_readiness_checked"])
+        self.assertTrue(summary["environment"]["product_environment_ready"])
+        self.assertEqual(
+            summary["environment"]["security_product_readiness"]["state"],
+            "ready",
+        )
+        self.assertEqual(
+            summary["decision_inputs"]["environment"]["security_product_readiness"][
+                "state"
+            ],
+            "ready",
+        )
 
     def test_timeline_keeps_only_key_state_changes(self) -> None:
         summary = evaluate_case(

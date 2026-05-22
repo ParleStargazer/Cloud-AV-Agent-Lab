@@ -1720,6 +1720,71 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertNotIn(UPLOAD_TOKEN, bundle_text)
         self.assertFalse(any(name.casefold().endswith("real.toml") for name in names))
 
+    def test_evidence_bundle_includes_security_product_readiness_metadata_after_check(
+        self,
+    ) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        (log_dir / "log.db").write_bytes(b"sqlite-placeholder")
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server."
+            "security_product_readiness.huorong."
+            "HuorongSecurityProductReadinessProbe.DEFAULT_LOG_DIR",
+            log_dir,
+        ):
+            readiness_response = self.client.post(
+                "/cases/case-001__huorong/security-product-readiness/huorong",
+                headers=self._headers(),
+            )
+        self.assertEqual(readiness_response.status_code, 200)
+
+        response = self.client.get(
+            "/cases/case-001__huorong/evidence-bundle",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        bundle_path = self.workdir / "readiness-bundle.zip"
+        bundle_path.write_bytes(response.content)
+        with zipfile.ZipFile(bundle_path) as bundle:
+            names = set(bundle.namelist())
+            self.assertIn("case_security_product_readiness.json", names)
+            self.assertNotIn("security-product-readiness/huorong/log.db", names)
+            readiness = json.loads(
+                bundle.read("case_security_product_readiness.json").decode("utf-8")
+            )
+            case_state = json.loads(bundle.read("case_state.json").decode("utf-8"))
+            case_report = json.loads(bundle.read("case_report.json").decode("utf-8"))
+            case_summary = json.loads(bundle.read("case_summary.json").decode("utf-8"))
+            manifest = json.loads(bundle.read("manifest.json").decode("utf-8"))
+
+        self.assertEqual(readiness["state"], "ready")
+        self.assertEqual(case_state["security_product_readiness"]["state"], "ready")
+        self.assertEqual(case_report["security_product_readiness"]["state"], "ready")
+        self.assertEqual(
+            case_summary["environment"]["security_product_readiness"]["state"],
+            "ready",
+        )
+        self.assertEqual(
+            case_summary["decision_inputs"]["environment"][
+                "security_product_readiness"
+            ]["state"],
+            "ready",
+        )
+        self.assertTrue(
+            any(
+                item["path"] == "case_security_product_readiness.json"
+                and item["category"] == "security_product_readiness_metadata"
+                for item in manifest["files"]
+            )
+        )
+
     def test_evidence_bundle_missing_case_returns_404(self) -> None:
         response = self.client.get(
             "/cases/missing-case/evidence-bundle",

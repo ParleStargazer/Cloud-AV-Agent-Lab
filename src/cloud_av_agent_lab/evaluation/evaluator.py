@@ -45,6 +45,7 @@ def evaluate_case(
     execution = _mapping(case_report.get("execution"))
     collection = _collection_summary(case_report, collection_payload)
     delivery = _delivery_summary(case_report)
+    environment = _environment_summary(case_report)
     timeline = _simple_timeline(collection_payload, events or (), max_timeline_events)
     verdict, confidence, summary, reasons, blocking, nonfatal = _decide_verdict(
         delivery=delivery,
@@ -65,11 +66,12 @@ def evaluate_case(
         delivery=delivery,
         execution=execution,
         collection=collection,
+        environment=environment,
         decision_inputs={
             "delivery": delivery,
             "execution": execution,
             "collection": collection,
-            "environment": {},
+            "environment": environment,
         },
         blocking_conditions=tuple(blocking),
         nonfatal_failures=tuple(nonfatal),
@@ -327,6 +329,31 @@ def _collection_summary(
         or _list_value(report_collection.get("errors")),
         "window": _mapping(case_collection.get("window"))
         or _mapping(report_collection.get("window")),
+    }
+
+
+def _environment_summary(case_report: Mapping[str, Any]) -> dict[str, Any]:
+    readiness = _mapping(case_report.get("security_product_readiness"))
+    readiness_state = str(readiness.get("state", "not_checked") or "not_checked")
+    checked = readiness_state not in {"", "not_checked"}
+    ready: bool | None
+    if not checked:
+        ready = None
+    else:
+        ready = readiness_state == "ready"
+    return {
+        "product_readiness_checked": checked,
+        "product_environment_ready": ready,
+        "security_product_readiness": {
+            "product_id": str(readiness.get("product_id", "")),
+            "state": readiness_state,
+            "confidence": str(readiness.get("confidence", "")),
+            "scope": str(readiness.get("scope", "")),
+            "protection_state": str(readiness.get("protection_state", "")),
+            "checked_at_utc": str(readiness.get("checked_at_utc", "")),
+            "warnings": _list_value(readiness.get("warnings")),
+            "errors": _list_value(readiness.get("errors")),
+        },
     }
 
 

@@ -98,11 +98,27 @@ class SingleRunTests(TestCase):
                 run_state["stages"]["security_product_readiness"]["state"],
                 "ready",
             )
+            self.assertEqual(
+                run_state["security_product_readiness"]["state"],
+                "ready",
+            )
             self.assertTrue(
                 run_state["stages"]["environment"]["product_readiness_checked"]
             )
             self.assertTrue(
                 run_state["stages"]["environment"]["product_environment_ready"]
+            )
+            self.assertTrue(run_state["environment"]["product_readiness_checked"])
+            self.assertTrue(run_state["environment"]["product_environment_ready"])
+            readiness_artifact = result.run_dir / "case_security_product_readiness.json"
+            self.assertTrue(readiness_artifact.is_file())
+            readiness_payload = json.loads(
+                readiness_artifact.read_text(encoding="utf-8")
+            )
+            self.assertEqual(readiness_payload["state"], "ready")
+            self.assertEqual(
+                run_state["artifacts"]["security_product_readiness"],
+                str(readiness_artifact),
             )
             self.assertEqual(
                 run_state["stages"]["execution"]["action_status"],
@@ -166,6 +182,13 @@ class SingleRunTests(TestCase):
             readiness = run_state["stages"]["security_product_readiness"]
             self.assertEqual(readiness["status"], "ok")
             self.assertEqual(readiness["state"], "ready")
+            self.assertEqual(
+                run_state["security_product_readiness"]["state"],
+                "ready",
+            )
+            self.assertTrue(
+                (result.run_dir / "case_security_product_readiness.json").is_file()
+            )
 
     def test_single_run_dry_run_generates_mock_config_and_dry_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -217,12 +240,28 @@ class SingleRunTests(TestCase):
                     readiness = run_state["stages"]["security_product_readiness"]
                     self.assertEqual(readiness["status"], "warning")
                     self.assertEqual(readiness["state"], readiness_state)
+                    self.assertEqual(
+                        run_state["security_product_readiness"]["state"],
+                        readiness_state,
+                    )
                     self.assertTrue(
                         run_state["stages"]["environment"]["product_readiness_checked"]
                     )
                     self.assertFalse(
                         run_state["stages"]["environment"]["product_environment_ready"]
                     )
+                    self.assertTrue(
+                        run_state["environment"]["product_readiness_checked"]
+                    )
+                    self.assertFalse(
+                        run_state["environment"]["product_environment_ready"]
+                    )
+                    readiness_payload = json.loads(
+                        (
+                            result.run_dir / "case_security_product_readiness.json"
+                        ).read_text(encoding="utf-8")
+                    )
+                    self.assertEqual(readiness_payload["state"], readiness_state)
                     self.assertIn(
                         "warning-only",
                         (result.run_dir / "run.log").read_text(encoding="utf-8"),
@@ -265,6 +304,15 @@ class SingleRunTests(TestCase):
             self.assertIsNone(
                 run_state["stages"]["environment"]["product_environment_ready"]
             )
+            self.assertFalse(run_state["environment"]["product_readiness_checked"])
+            self.assertIsNone(run_state["environment"]["product_environment_ready"])
+            readiness_payload = json.loads(
+                (result.run_dir / "case_security_product_readiness.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(readiness_payload["status"], "warning")
+            self.assertEqual(readiness_payload["state"], "unknown")
 
     def test_readiness_warning_only_skips_when_product_id_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -298,6 +346,14 @@ class SingleRunTests(TestCase):
             self.assertIsNone(
                 run_state["stages"]["environment"]["product_environment_ready"]
             )
+            self.assertFalse(run_state["environment"]["product_readiness_checked"])
+            self.assertIsNone(run_state["environment"]["product_environment_ready"])
+            readiness_payload = json.loads(
+                (state.path.parent / "case_security_product_readiness.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(readiness_payload["status"], "skipped")
 
     def test_single_run_fails_before_delivery_when_worker_not_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -356,6 +412,14 @@ class SingleRunTests(TestCase):
             self.assertEqual(run_state["evidence_export_status"], "saved")
             self.assertTrue(run_state["case_started"])
             self.assertEqual(run_state["stages"]["collection"]["state"], "failed")
+            self.assertEqual(
+                run_state["stages"]["security_product_readiness"]["status"],
+                "ok",
+            )
+            self.assertEqual(
+                run_state["stages"]["security_product_readiness"]["state"],
+                "ready",
+            )
             self.assertTrue(run_state["warnings"])
 
     def test_removed_after_save_skips_execution_but_continues_flow(self) -> None:

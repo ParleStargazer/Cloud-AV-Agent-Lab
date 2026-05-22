@@ -816,6 +816,19 @@ def _check_security_product_readiness_warning_only(
         state.mark_stage(stage, "reason", reason)
         state.mark_stage("environment", "product_readiness_checked", False)
         state.mark_stage("environment", "product_environment_ready", None)
+        _write_local_readiness_artifact(
+            state,
+            {
+                "schema_version": "single-run-security-product-readiness.v1",
+                "case_id": case_id,
+                "product_id": "",
+                "status": "skipped",
+                "state": "unknown",
+                "reason": reason,
+                "warnings": [reason],
+                "errors": [],
+            },
+        )
         state.add_warning(stage, reason)
         LOGGER.warning(
             "Security product readiness skipped: %s; continuing because "
@@ -840,6 +853,19 @@ def _check_security_product_readiness_warning_only(
         state.mark_stage(stage, "reason", reason)
         state.mark_stage("environment", "product_readiness_checked", False)
         state.mark_stage("environment", "product_environment_ready", None)
+        _write_local_readiness_artifact(
+            state,
+            {
+                "schema_version": "single-run-security-product-readiness.v1",
+                "case_id": case_id,
+                "product_id": product_id,
+                "status": "warning",
+                "state": "unknown",
+                "reason": reason,
+                "warnings": [reason],
+                "errors": [],
+            },
+        )
         state.add_warning(stage, reason)
         LOGGER.warning(
             "Security product readiness check failed; continuing because "
@@ -870,6 +896,12 @@ def _check_security_product_readiness_warning_only(
         "product_environment_ready",
         readiness_state == "ready",
     )
+    local_payload = dict(data)
+    local_payload["schema_version"] = "single-run-security-product-readiness.v1"
+    local_payload["status"] = status
+    local_payload["warnings"] = _safe_readiness_messages(data.get("warnings"))
+    local_payload["errors"] = _safe_readiness_messages(data.get("errors"))
+    _write_local_readiness_artifact(state, local_payload)
 
     if status == "ok":
         LOGGER.info(
@@ -937,6 +969,26 @@ def _safe_readiness_messages(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [_sanitize_readiness_message(str(item)) for item in value]
+
+
+def _write_local_readiness_artifact(
+    state: RunState,
+    payload: dict[str, Any],
+) -> None:
+    output_path = state.path.parent / "case_security_product_readiness.json"
+    safe_payload = dict(payload)
+    safe_payload["warnings"] = _safe_readiness_messages(safe_payload.get("warnings"))
+    safe_payload["errors"] = _safe_readiness_messages(safe_payload.get("errors"))
+    output_path.write_text(
+        json.dumps(safe_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    state.mark_artifact("security_product_readiness", str(output_path))
+    state.mark_stage(
+        "security_product_readiness",
+        "local_artifact_path",
+        str(output_path),
+    )
 
 
 def _sanitize_readiness_message(message: str) -> str:
