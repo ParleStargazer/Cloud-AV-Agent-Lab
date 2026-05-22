@@ -58,3 +58,10 @@ scripts/pack/
 
 # Ignore running results
 runs/*
+
+# Ignore EICAR-TEST-FILE
+eicar.com
+eicar.com.txt
+
+# Ignore .spec
+*.spec
