@@ -4,7 +4,10 @@ annotated-types==0.7.0
 anyio==4.13.0
 certifi==2026.4.22
 click==8.3.3
--e git+https://github.com/ParleStargazer/Cloud-AV-Agent-Lab.git@844139b9cb28d0d024d155e5a89f355b58165730#egg=cloud_av_agent_lab
+# Install the project from the current checkout. Do not pin this editable
+# install to a fixed git commit, or cloud-side agents can keep running stale
+# code after `git pull`.
+-e .[guest-agent,guest-agent-build,desktop-worker,desktop-worker-build]
 colorama==0.4.6
 fastapi==0.136.1
 greenlet==3.5.0

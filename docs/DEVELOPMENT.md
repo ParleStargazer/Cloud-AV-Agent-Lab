@@ -21,6 +21,40 @@ python -m pip install ruff
 
 在当前 Windows 环境里，多个并行 `conda run` 偶尔会争用临时激活文件。遇到这种情况，优先使用环境内 `python.exe` 直接执行命令。
 
+### 源码更新与 Editable Install
+
+本项目在本地和云端调试时常用 editable install。editable install 必须指向当前源码 checkout，而不是固定某个 git commit。更新云端或平台机源码后，请在仓库根目录重新执行：
+
+```powershell
+git pull
+python -m pip install -e ".[guest-agent,desktop-worker]"
+```
+
+如果要安装打包依赖，再显式加 build extras：
+
+```powershell
+python -m pip install -e ".[guest-agent,guest-agent-build,desktop-worker,desktop-worker-build]"
+```
+
+如果使用 `requirements.txt`，也要从仓库根目录执行，使其中的 `-e .[...]` 指向当前 checkout：
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+不要使用类似下面的固定提交安装：
+
+```text
+-e git+https://github.com/.../Cloud-AV-Agent-Lab.git@<commit>#egg=cloud_av_agent_lab
+```
+
+这种写法会让云端进程继续运行旧代码，即使工作区已经 `git pull` 到新版本，也可能出现本地源码看起来正确、但 Guest Agent / Desktop Worker / single-run artifact 仍是旧行为的情况。排查时先确认 Python 实际加载的模块路径：
+
+```powershell
+python -c "import cloud_av_agent_lab; print(cloud_av_agent_lab.__file__)"
+python -c "import cloud_av_agent_lab.orchestration.single_run as s; print(s.__file__)"
+```
+
 ## 配置文件
 
 示例配置在 `configs/lab.example.toml`。真实开发时建议复制成本地配置：

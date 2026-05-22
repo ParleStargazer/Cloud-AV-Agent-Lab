@@ -52,6 +52,27 @@ python -m pip install uv
 python -m uv pip install -e .
 ```
 
+### Editable Install 更新注意
+
+云端或平台机如果通过源码 checkout 运行控制面、Guest Agent 或 Desktop Worker，更新代码后必须在该 checkout 根目录重新执行本地 editable install：
+
+```powershell
+git pull
+python -m pip install -e ".[guest-agent,desktop-worker]"
+```
+
+如果使用 `requirements.txt` 复现环境，也必须在仓库根目录执行，因为其中的项目安装项指向当前 checkout：
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+不要在 `requirements.txt` 或部署脚本里使用固定 commit 的 editable 安装，例如 `-e git+https://...@<commit>`。这种写法会让运行环境继续加载旧提交，导致本地源码、云端 Agent 和传回的 `run_state.json` / evidence bundle 行为不一致。排查时先确认实际加载路径：
+
+```powershell
+python -c "import cloud_av_agent_lab.orchestration.single_run as s; print(s.__file__)"
+```
+
 ## 快速开始
 
 ```powershell

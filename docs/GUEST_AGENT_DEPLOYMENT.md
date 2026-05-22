@@ -23,6 +23,45 @@ The script:
 `--onedir` is preferred for this phase because it is easier to inspect and debug
 than a single-file executable.
 
+## Source Checkout Update Pitfall
+
+If the cloud instance or platform machine runs from a git checkout instead of a
+freshly uploaded `dist\guest-agent` directory, update the checkout and reinstall
+the current working tree:
+
+```powershell
+git pull
+python -m pip install -e ".[guest-agent,desktop-worker]"
+```
+
+If you use `requirements.txt`, run it from the repository root so its local
+editable entry points at the current checkout:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Do not keep an editable install pinned to a fixed commit, for example:
+
+```text
+-e git+https://github.com/.../Cloud-AV-Agent-Lab.git@<commit>#egg=cloud_av_agent_lab
+```
+
+That pattern can leave the running Guest Agent, Desktop Worker, or control-plane
+CLI loading old code even after the repository has been pulled to a newer
+revision. The symptom is usually confusing: local source files show the new
+logic, but `run_state.json`, `case_summary.json`, or the evidence bundle still
+look like they came from an older flow.
+
+Before debugging behavior, verify the loaded module path from the same terminal
+and environment that starts the agent:
+
+```powershell
+python -c "import cloud_av_agent_lab; print(cloud_av_agent_lab.__file__)"
+python -c "import cloud_av_agent_lab.guest_agent_server.app as a; print(a.__file__)"
+python -c "import cloud_av_agent_lab.desktop_worker.app as w; print(w.__file__)"
+```
+
 ## Upload To Lighthouse
 
 Suggested cloud-side directory:
