@@ -579,6 +579,11 @@ def _run_single_case_locked(
             state.mark("agent_dead", True)
         LOGGER.error("single-run case flow failed: %s", exc)
     finally:
+        _ensure_security_product_readiness_stage_recorded(
+            state,
+            product_id=product_id,
+            case_started=case_started,
+        )
         if case_started and not evidence_saved:
             salvaged_path = _try_fast_fail_salvage(
                 client=locals().get("client"),
@@ -891,6 +896,41 @@ def _check_security_product_readiness_warning_only(
         confidence,
     )
     return {"status": status, "state": readiness_state}
+
+
+def _ensure_security_product_readiness_stage_recorded(
+    state: RunState,
+    *,
+    product_id: str,
+    case_started: bool,
+) -> None:
+    stages = state.data.get("stages", {})
+    stage_payload = (
+        stages.get("security_product_readiness", {}) if isinstance(stages, dict) else {}
+    )
+    status = stage_payload.get("status") if isinstance(stage_payload, dict) else None
+    if status and status != "pending":
+        return
+
+    if not product_id:
+        reason = "product_id is not configured"
+        state.mark_stage("security_product_readiness", "status", "skipped")
+        state.mark_stage("security_product_readiness", "reason", reason)
+        state.mark_stage("environment", "product_readiness_checked", False)
+        state.mark_stage("environment", "product_environment_ready", None)
+        return
+
+    if case_started:
+        reason = (
+            "security product readiness check was not completed before the "
+            "case flow ended; continuing because readiness is warning-only"
+        )
+        state.mark_stage("security_product_readiness", "status", "warning")
+        state.mark_stage("security_product_readiness", "product_id", product_id)
+        state.mark_stage("security_product_readiness", "state", "unknown")
+        state.mark_stage("security_product_readiness", "reason", reason)
+        state.mark_stage("environment", "product_readiness_checked", False)
+        state.mark_stage("environment", "product_environment_ready", None)
 
 
 def _safe_readiness_messages(value: object) -> list[str]:

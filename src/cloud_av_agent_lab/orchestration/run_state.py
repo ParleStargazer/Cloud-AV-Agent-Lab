@@ -46,7 +46,7 @@ class RunState:
             "stages": {
                 "environment": {},
                 "delivery": {},
-                "security_product_readiness": {},
+                "security_product_readiness": {"status": "pending"},
                 "execution": {},
                 "collection": {},
                 "summary": {},

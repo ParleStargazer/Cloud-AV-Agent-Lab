@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -14,6 +17,7 @@ from cloud_av_agent_lab.adapters.guest_agent_client import (
     GuestAgentError,
     GuestAgentResponse,
 )
+from cloud_av_agent_lab.cli import main
 from cloud_av_agent_lab.orchestration.locks import (
     InstanceLockedError,
     acquire_lock,
@@ -21,6 +25,7 @@ from cloud_av_agent_lab.orchestration.locks import (
 )
 from cloud_av_agent_lab.orchestration.single_run import (
     SingleRunOptions,
+    SingleRunResult,
     _check_security_product_readiness_warning_only,
     run_single_case,
 )
@@ -93,12 +98,74 @@ class SingleRunTests(TestCase):
                 run_state["stages"]["security_product_readiness"]["state"],
                 "ready",
             )
+            self.assertTrue(
+                run_state["stages"]["environment"]["product_readiness_checked"]
+            )
+            self.assertTrue(
+                run_state["stages"]["environment"]["product_environment_ready"]
+            )
             self.assertEqual(
                 run_state["stages"]["execution"]["action_status"],
                 "observed",
             )
             self.assertEqual(run_state["stages"]["evidence"]["status"], "saved")
             self.assertIn("evidence_bundle", run_state["artifacts"])
+
+    def test_cli_single_run_entry_executes_readiness_before_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.txt"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            client = FakeGuestClient()
+            captured: dict[str, SingleRunResult] = {}
+
+            def run_from_cli(options: SingleRunOptions) -> SingleRunResult:
+                result = run_single_case(
+                    options,
+                    cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                    guest_client_factory=lambda config: client,
+                    sleep=lambda seconds: None,
+                )
+                captured["result"] = result
+                return result
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli.run_single_case", side_effect=run_from_cli
+                ),
+                patch("cloud_av_agent_lab.cli._confirm_single_run_real_operation"),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "single-run",
+                        "--instance-id",
+                        "lhins-example",
+                        "--snapshot-id",
+                        "lhsnap-example",
+                        "--region",
+                        "ap-singapore",
+                        "--sample-name",
+                        "eicar",
+                        "--sample-path",
+                        str(sample_path),
+                        "--guest-agent-url",
+                        "http://127.0.0.1:8080",
+                        "--runs-dir",
+                        str(root / "runs"),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                client.calls[:3],
+                ["prepare_case", "check_security_product_readiness", "upload_sample"],
+            )
+            result = captured["result"]
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            readiness = run_state["stages"]["security_product_readiness"]
+            self.assertEqual(readiness["status"], "ok")
+            self.assertEqual(readiness["state"], "ready")
 
     def test_single_run_dry_run_generates_mock_config_and_dry_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -150,6 +217,12 @@ class SingleRunTests(TestCase):
                     readiness = run_state["stages"]["security_product_readiness"]
                     self.assertEqual(readiness["status"], "warning")
                     self.assertEqual(readiness["state"], readiness_state)
+                    self.assertTrue(
+                        run_state["stages"]["environment"]["product_readiness_checked"]
+                    )
+                    self.assertFalse(
+                        run_state["stages"]["environment"]["product_environment_ready"]
+                    )
                     self.assertIn(
                         "warning-only",
                         (result.run_dir / "run.log").read_text(encoding="utf-8"),
@@ -182,6 +255,16 @@ class SingleRunTests(TestCase):
             self.assertIn("readiness is warning-only", run_log)
             self.assertNotIn("should-not-leak", run_state_text)
             self.assertNotIn("should-not-leak", run_log)
+            run_state = json.loads(run_state_text)
+            readiness = run_state["stages"]["security_product_readiness"]
+            self.assertEqual(readiness["status"], "warning")
+            self.assertEqual(readiness["state"], "unknown")
+            self.assertFalse(
+                run_state["stages"]["environment"]["product_readiness_checked"]
+            )
+            self.assertIsNone(
+                run_state["stages"]["environment"]["product_environment_ready"]
+            )
 
     def test_readiness_warning_only_skips_when_product_id_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -209,6 +292,12 @@ class SingleRunTests(TestCase):
             readiness = run_state["stages"]["security_product_readiness"]
             self.assertEqual(readiness["status"], "skipped")
             self.assertEqual(readiness["reason"], "product_id is not configured")
+            self.assertFalse(
+                run_state["stages"]["environment"]["product_readiness_checked"]
+            )
+            self.assertIsNone(
+                run_state["stages"]["environment"]["product_environment_ready"]
+            )
 
     def test_single_run_fails_before_delivery_when_worker_not_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
