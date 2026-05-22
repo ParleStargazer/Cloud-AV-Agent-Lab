@@ -4,7 +4,7 @@ annotated-types==0.7.0
 anyio==4.13.0
 certifi==2026.4.22
 click==8.3.3
--e git+https://github.com/ParleStargazer/Cloud-AV-Agent-Lab.git@94c64c6f08cdb7f82b1a6fb6ac8a05b0f770d1c7#egg=cloud_av_agent_lab
+-e git+https://github.com/ParleStargazer/Cloud-AV-Agent-Lab.git@844139b9cb28d0d024d155e5a89f355b58165730#egg=cloud_av_agent_lab
 colorama==0.4.6
 fastapi==0.136.1
 greenlet==3.5.0
