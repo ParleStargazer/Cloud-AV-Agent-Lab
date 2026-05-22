@@ -109,6 +109,13 @@ and `sensitivity=high`. The default redacted evidence bundle records their
 existence, size, and best-effort guest-reported source hash in `manifest.json`,
 but does not include `log.db`, `log.db-shm`, or `log.db-wal` bytes.
 
+Readiness snapshots follow the same raw-artifact boundary. The text metadata
+file `case_security_product_readiness.json` may enter the redacted evidence
+bundle after global text redaction and is categorized as
+`security_product_readiness_metadata`. The copied readiness snapshot files under
+`security-product-readiness/`, such as Huorong `log.db`, `log.db-wal`, and
+`log.db-shm`, remain excluded and are not treated as default evidence.
+
 ## Unified Event Timeline
 
 `case_collection.json` contains a unified event timeline. It merges Guest Agent
@@ -208,11 +215,12 @@ Its verdict vocabulary is broader than a collector verdict:
 
 The exporter then creates an evidence bundle using the v2 redacted text artifact
 policy. It includes `manifest.json`, case metadata, `sample/sample.json`,
-normalized product evidence, summaries, events, and Worker state after applying
-global text redaction to JSON / JSONL / Markdown / TXT entries. The exporter
-does not know where Huorong or any future product stores logs on the live
-system; it only considers collector-produced artifacts already inside the case
-workspace and then makes the final include/exclude safety decision.
+`case_security_product_readiness.json`, normalized product evidence, summaries,
+events, and Worker state after applying global text redaction to JSON / JSONL /
+Markdown / TXT entries. The exporter does not know where Huorong or any future
+product stores logs on the live system; it only considers explicit metadata and
+collector-produced artifacts already inside the case workspace and then makes
+the final include/exclude safety decision.
 
 The bundle excludes the uploaded sample body, uploaded sample bytes, everything
 under `sample/` except `sample/sample.json`, recursive evidence zip files,

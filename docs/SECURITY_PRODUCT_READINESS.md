@@ -53,6 +53,11 @@ Snapshot output:
 <workdir>\cases\<case_id>\security-product-readiness\huorong\log.db
 ```
 
+The snapshot directory is a guest-side working area only. Files under
+`security-product-readiness\`, including `log.db`, `log.db-wal`, and
+`log.db-shm`, are raw product log snapshots and are not included in the default
+redacted evidence bundle.
+
 State output:
 
 ```text
@@ -114,16 +119,16 @@ Security product readiness:
 ## Current Integration Boundary
 
 The first MVP is exposed through API, client, CLI, workspace state, and
-`case_report.json`.
+`case_report.json`. The redacted evidence bundle now includes only the text
+metadata file `case_security_product_readiness.json` and marks it as
+`security_product_readiness_metadata` in `manifest.json`; the copied readiness
+snapshot directory remains excluded.
 
 It is not yet wired into:
 
 - `single-run`;
 - evaluator gating;
-- evidence bundle inclusion;
 - strict blocking mode.
 
-The next intended steps are to include the redacted
-`case_security_product_readiness.json` in evidence bundles, then call readiness
-from `single-run` in warning-only mode, and finally use it as conservative
-gating for `no_detection_observed`.
+The next intended steps are to call readiness from `single-run` in warning-only
+mode, then use it as conservative gating for `no_detection_observed`.

@@ -89,8 +89,10 @@ and a `case_report.json` summary. It is read-only: it checks the product log
 directory, copies `log.db` into the case readiness snapshot directory, and reads
 copied-file metadata. It does not parse interception logs, does not read sample
 bytes, does not modify product services, and does not prove real-time
-protection is enabled. Collection remains responsible for product-log evidence
-and verdict inputs.
+protection is enabled. The evidence exporter may include only the redacted
+`case_security_product_readiness.json` metadata; the copied readiness snapshot
+directory is raw product log material and remains excluded. Collection remains
+responsible for product-log evidence and verdict inputs.
 
 ## Adapter Contracts
 
@@ -184,10 +186,12 @@ been delivered or triggered, the test guest workspace, Guest Agent, Desktop
 Worker, interpreter, tools, static files, copied logs, and temporary
 directories are treated as untrusted guest-reported observations. The default
 bundle includes only redacted text-format artifacts such as case metadata,
-`sample/sample.json`, Worker state JSON, summaries, events, and normalized
-evidence. It excludes uploaded sample bytes, recursive zip files, real cloud
-configs, token-like files, symlinks, junctions, unknown roots, raw SQLite/WAL/SHM
-logs, executables, DLLs, and other unredacted binary product artifacts. The
+`case_security_product_readiness.json`, `sample/sample.json`, Worker state JSON,
+summaries, events, and normalized evidence. It excludes uploaded sample bytes,
+recursive zip files, real cloud configs, token-like files, symlinks, junctions,
+unknown roots, `security-product-readiness/` readiness snapshots, raw
+SQLite/WAL/SHM logs, executables, DLLs, and other unredacted binary product
+artifacts. The
 manifest records included/excluded paths, redaction policy, redacted files,
 `trust_model=dirty_instance_untrusted`, `forensic_grade=false`,
 `raw_binary_included=false`, and SHA-256 hashes for audit.

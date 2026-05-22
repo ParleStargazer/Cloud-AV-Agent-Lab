@@ -24,6 +24,7 @@ ALLOWED_DIRECT_FILES = (
     "case_state.json",
     "case_report.json",
     "case_collection.json",
+    "case_security_product_readiness.json",
     "case_summary.json",
     "case_summary.md",
     "events.jsonl",
@@ -568,6 +569,8 @@ def _category_for_entry(name: str) -> str:
         return "worker_state"
     if name == VIRTUAL_NORMALIZED_EVIDENCE:
         return "normalized_evidence"
+    if name == "case_security_product_readiness.json":
+        return "security_product_readiness_metadata"
     if name == "sample/sample.json":
         return "sample_metadata"
     if name.endswith(".json") or name.endswith(".jsonl") or name.endswith(".md"):

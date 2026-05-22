@@ -1238,7 +1238,13 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertTrue(data["intercepted"])
         self.assertEqual(data["evidence_count"], 1)
         self.assertEqual(data["events"][0]["event_type"], "av_quarantined")
-        self.assertEqual(data["timeline"][-1]["source"], "product_log")
+        self.assertTrue(
+            any(
+                event["source"] == "product_log"
+                and event["event_type"] == "av_quarantined"
+                for event in data["timeline"]
+            )
+        )
         workspace = self.workdir / "cases" / "case-001__huorong"
         collection_file = workspace / "case_collection.json"
         self.assertTrue(collection_file.is_file())

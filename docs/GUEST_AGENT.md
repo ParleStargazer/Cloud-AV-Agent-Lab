@@ -402,10 +402,11 @@ execution, and no matching product evidence or collector errors were present.
 `GET /cases/{case_id}/evidence-bundle` returns
 `case_evidence_<case_id>.zip`. The bundle is a Redaction MVP archive, not a raw
 forensic archive. It contains `manifest.json`, redacted case metadata,
-`case_summary.json`, `case_summary.md`, `events.jsonl`, `sample/sample.json`,
-Worker state, and redacted normalized collector evidence. JSON / JSONL /
-Markdown / TXT entries are redacted in the archive copy only; the original case
-workspace files are not modified.
+`case_security_product_readiness.json` when present, `case_summary.json`,
+`case_summary.md`, `events.jsonl`, `sample/sample.json`, Worker state, and
+redacted normalized collector evidence. JSON / JSONL / Markdown / TXT entries
+are redacted in the archive copy only; the original case workspace files are
+not modified.
 
 The bundle does not include uploaded sample bytes, token values, environment
 variables, cloud credentials, recursive evidence zips, real cloud configuration
@@ -413,7 +414,9 @@ files, symlinks, junctions, unknown workspace roots, raw SQLite databases,
 WAL/SHM files, executables, DLLs, or other unredacted binary product logs. Raw
 Huorong `collection/huorong/log.db*` files may exist in the guest workspace for
 parsing, but the default evidence bundle only records their guest-reported
-metadata and exclusion reason in `manifest.json`.
+metadata and exclusion reason in `manifest.json`. Readiness snapshot files under
+`security-product-readiness/`, including Huorong `log.db*`, are also excluded;
+only the redacted readiness metadata JSON can enter the bundle.
 
 The manifest records the v2 collection policy, `trust_model =
 dirty_instance_untrusted`, `source_trust = guest_reported`, `forensic_grade =

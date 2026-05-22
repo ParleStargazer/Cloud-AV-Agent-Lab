@@ -370,6 +370,83 @@ class EvidenceExportTests(TestCase):
                     content = bundle.read(item["path"])
                     self.assertEqual(len(content), item["size"])
 
+    def test_evidence_bundle_includes_redacted_readiness_metadata_only(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            _write_minimal_evidence_workspace(workspace)
+            _write_json(
+                workspace / "case_security_product_readiness.json",
+                {
+                    "case_id": "case-001__huorong",
+                    "product_id": "huorong",
+                    "state": "ready",
+                    "token": "should-not-leak",
+                    "cloud_secret": "should-not-leak",
+                    "environment": "should-not-leak",
+                },
+            )
+            snapshot_dir = workspace / "security-product-readiness" / "huorong"
+            snapshot_dir.mkdir(parents=True)
+            (snapshot_dir / "log.db").write_bytes(b"raw readiness sqlite")
+            (snapshot_dir / "log.db-wal").write_bytes(b"raw readiness wal")
+            (snapshot_dir / "log.db-shm").write_bytes(b"raw readiness shm")
+
+            output = workspace / "evidence.zip"
+            build_evidence_bundle(workspace, output)
+
+            with zipfile.ZipFile(output) as bundle:
+                names = set(bundle.namelist())
+                self.assertIn("case_security_product_readiness.json", names)
+                self.assertNotIn("security-product-readiness/huorong/log.db", names)
+                self.assertNotIn("security-product-readiness/huorong/log.db-wal", names)
+                self.assertNotIn("security-product-readiness/huorong/log.db-shm", names)
+                readiness = json.loads(
+                    bundle.read("case_security_product_readiness.json").decode("utf-8")
+                )
+                manifest = json.loads(bundle.read("manifest.json").decode("utf-8"))
+
+            self.assertEqual(readiness["state"], "ready")
+            self.assertEqual(readiness["token"], "<redacted>")
+            self.assertEqual(readiness["cloud_secret"], "<redacted>")
+            self.assertEqual(readiness["environment"], "<redacted>")
+            self.assertNotIn("should-not-leak", json.dumps(readiness))
+            self.assertTrue(
+                any(
+                    item["path"] == "case_security_product_readiness.json"
+                    and item["category"] == "security_product_readiness_metadata"
+                    and item["redacted"]
+                    for item in manifest["files"]
+                )
+            )
+            self.assertIn(
+                "security-product-readiness/",
+                manifest["excluded_paths"],
+            )
+            self.assertTrue(
+                any(
+                    item["path"] == "security-product-readiness/huorong/log.db"
+                    and item["reason"] == "not_in_allowed_roots"
+                    for item in manifest["excluded_path_details"]
+                )
+            )
+
+    def test_evidence_bundle_without_readiness_metadata_remains_compatible(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            _write_minimal_evidence_workspace(workspace)
+
+            output = workspace / "evidence.zip"
+            build_evidence_bundle(workspace, output)
+
+            with zipfile.ZipFile(output) as bundle:
+                names = set(bundle.namelist())
+            self.assertIn("manifest.json", names)
+            self.assertNotIn("case_security_product_readiness.json", names)
+
     def test_manifest_does_not_include_legacy_collector_absolute_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

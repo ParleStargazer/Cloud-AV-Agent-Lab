@@ -49,6 +49,7 @@ REDACTION_POLICY = {
 }
 EXCLUDED_PATHS = (
     "sample/",
+    "security-product-readiness/",
     "configs/*.toml",
     "evidence/*.zip",
     "*.local.toml",

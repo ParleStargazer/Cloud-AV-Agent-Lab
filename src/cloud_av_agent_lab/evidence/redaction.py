@@ -32,6 +32,7 @@ SENSITIVE_KEY_MARKERS = (
     "private_key",
     "authorization",
     "cookie",
+    "environment",
 )
 SENSITIVE_EXACT_KEYS = {"password"}
 SAFE_KEY_EXCEPTIONS = {
