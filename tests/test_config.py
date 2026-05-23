@@ -19,7 +19,14 @@ class ConfigTests(TestCase):
 
         cases = TestPipeline(config).build_plan()
 
-        self.assertEqual(len(cases), 6)
+        self.assertEqual(len(cases), 8)
+        self.assertIn("windows-defender", config.products)
+        self.assertIn("win10-windows-defender", config.vms)
+        self.assertTrue(config.products["windows-defender"].enabled)
+        self.assertEqual(
+            config.vms["win10-windows-defender"].product_id,
+            "windows-defender",
+        )
         self.assertEqual(cases[0].sample.id, "case-001")
         self.assertIn(cases[0].product.id, config.products)
         self.assertFalse(config.network.proxy.enabled)

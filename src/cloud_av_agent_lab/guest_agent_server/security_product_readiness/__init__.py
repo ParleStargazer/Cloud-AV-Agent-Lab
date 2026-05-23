@@ -7,7 +7,10 @@ from .base import (
     SecurityProductReadinessProbe,
     SecurityProductReadinessResult,
 )
-from .registry import run_security_product_readiness_probe
+from .registry import (
+    run_security_product_readiness_probe,
+    supported_security_product_readiness_probes,
+)
 
 __all__ = [
     "SecurityProductReadinessCheck",
@@ -16,4 +19,5 @@ __all__ = [
     "SecurityProductReadinessProbe",
     "SecurityProductReadinessResult",
     "run_security_product_readiness_probe",
+    "supported_security_product_readiness_probes",
 ]

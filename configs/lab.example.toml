@@ -107,6 +107,7 @@ require_interactive_session = true
 
 [[products]]
 id = "tencent-pc-manager"
+enabled = true
 display_name = "Tencent PC Manager"
 vendor = "Tencent"
 log_paths = [
@@ -118,6 +119,7 @@ detection_keywords = ["blocked", "quarantine", "virus", "trojan", "malware", "ri
 
 [[products]]
 id = "huorong"
+enabled = true
 display_name = "Huorong Internet Security"
 vendor = "Huorong"
 log_paths = [
@@ -128,7 +130,19 @@ ui_window_titles = ["Huorong", "火绒"]
 detection_keywords = ["blocked", "quarantine", "virus", "trojan", "malware", "拦截", "隔离"]
 
 [[products]]
+id = "windows-defender"
+enabled = true
+display_name = "Microsoft Defender Antivirus"
+vendor = "Microsoft"
+log_paths = [
+  'Microsoft-Windows-Windows Defender/Operational',
+]
+ui_window_titles = ["Windows Security", "Microsoft Defender Antivirus"]
+detection_keywords = ["detected", "quarantine", "blocked", "removed", "malware", "threat"]
+
+[[products]]
 id = "qihoo-360"
+enabled = true
 display_name = "360 Total Security"
 vendor = "Qihoo 360"
 log_paths = [
@@ -145,7 +159,7 @@ detection_keywords = ["blocked", "quarantine", "virus", "trojan", "malware", "�
 # 测试环境 profile”。
 #
 # 单实例多快照模式：
-# - 下面三个 profile 故意使用同一个 instance_id。
+# - 下面多个 profile 故意使用同一个 instance_id。
 # - 每个 profile 绑定一套 baseline_snapshot，对应一个已安装目标杀软的干净快照。
 # - 执行某个 profile 时，框架会对同一台实例恢复该 profile 的快照，再进入测试。
 # - 因为同一时间实例只能处于一个快照状态，调度必须串行。
@@ -170,6 +184,16 @@ region = "ap-guangzhou"
 image = "img-av-baseline-win10"
 baseline_snapshot = "snap-clean-huorong"
 product_id = "huorong"
+network_profile = "isolated-egress-deny-by-default"
+instance_id = "lhins-replace-tencent-manager"
+
+[[vms]]
+id = "win10-windows-defender"
+provider = "tencent-cloud-lighthouse"
+region = "ap-guangzhou"
+image = "img-av-baseline-win10"
+baseline_snapshot = "snap-clean-windows-defender"
+product_id = "windows-defender"
 network_profile = "isolated-egress-deny-by-default"
 instance_id = "lhins-replace-tencent-manager"
 

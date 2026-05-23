@@ -8,9 +8,11 @@ from .base import (
     SecurityProductReadinessResult,
 )
 from .huorong import HuorongSecurityProductReadinessProbe
+from .windows_defender import WindowsDefenderSecurityProductReadinessProbe
 
 SUPPORTED_SECURITY_PRODUCT_READINESS_PROBES = {
     "huorong": HuorongSecurityProductReadinessProbe,
+    "windows-defender": WindowsDefenderSecurityProductReadinessProbe,
 }
 
 
@@ -48,5 +50,9 @@ def run_security_product_readiness_probe(
     return probe_type().check(context)
 
 
-def _supported_products() -> tuple[str, ...]:
+def supported_security_product_readiness_probes() -> tuple[str, ...]:
     return tuple(SUPPORTED_SECURITY_PRODUCT_READINESS_PROBES)
+
+
+def _supported_products() -> tuple[str, ...]:
+    return supported_security_product_readiness_probes()

@@ -49,6 +49,7 @@ def collect_case_logs(
 
     case_data = _read_json_file(workspace / "case.json")
     state = _read_json_file(workspace / "case_state.json")
+    _ensure_case_product_matches(state, safe_product)
     sample_metadata = _read_json_file(workspace / "sample" / "sample.json")
     events = _read_recent_events(workspace / "events.jsonl", max_events=1000)
     window = _build_collection_window(state, sample_metadata, events)
@@ -166,6 +167,15 @@ def _collector_for(product_id: str) -> ProductLogCollector:
         f"collector for product {product_id!r} is not supported; "
         f"available collectors: {available}"
     )
+
+
+def _ensure_case_product_matches(state: Mapping[str, Any], product_id: str) -> None:
+    case_product = safe_case_id(state.get("product_id", ""))
+    if case_product and case_product != product_id:
+        raise WorkspaceError(
+            "requested product does not match prepared case product_id "
+            f"({product_id!r} != {case_product!r})"
+        )
 
 
 def _build_case_context(

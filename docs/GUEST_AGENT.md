@@ -29,12 +29,13 @@ chain for EICAR or harmless test files:
 - `GET /cases/{case_id}/report`: generate and return `case_report.json`, a
   delivery-stage summary built only from metadata, case state, and events.
 - `POST /cases/{case_id}/collection/{product_id}`: collect product logs for the
-  prepared case. The first supported collector is `huorong`.
+  prepared case. Supported collector IDs currently include `huorong` and
+  `windows-defender`.
 - `GET /cases/{case_id}/collection/status`: return the latest
   `case_collection.json` summary without reading sample bytes.
 - `POST /cases/{case_id}/security-product-readiness/{product_id}`: run a
   low-intrusion, read-only pre-delivery product readiness check for the prepared
-  case. The first supported probe is `huorong`.
+  case. Supported probe IDs currently include `huorong` and `windows-defender`.
 - `GET /cases/{case_id}/security-product-readiness/status`: return the latest
   `case_security_product_readiness.json` result.
 - `GET /cases/{case_id}/summary`: generate the conservative
@@ -106,7 +107,11 @@ python -m cloud_av_agent_lab guest-prepare-case --config configs/lab.local.toml 
 
 `guest-prepare-case` sends case metadata, VM metadata, product metadata, and the
 sample cloud object URI. It does not send a local file path and does not trigger
-sample download or execution.
+sample download or execution. The command accepts `--product`; if omitted, it
+uses the selected VM profile's `product_id` for backward-compatible Huorong
+flows. Once a case is prepared, the selected product is written to
+`case_state.json` as `product_id`; later readiness and collection commands must
+use the same product unless a future explicit override is added.
 
 For EICAR or harmless upload flow:
 
@@ -171,7 +176,9 @@ result is written to `case_security_product_readiness.json`, mirrored into
 `ready` result means the Huorong log observation path appears usable; it does
 not prove real-time protection is enabled, and `protection_state` remains
 `unknown`. The standalone model and manual CLI flow are documented in
-`docs/SECURITY_PRODUCT_READINESS.md`.
+`docs/SECURITY_PRODUCT_READINESS.md`. Use `--product windows-defender` for the
+Windows Defender readiness probe; local tests use fake readers, and the real
+reader is only used inside the Windows Guest Agent when pywin32 is available.
 
 Recent status can be queried without reading sample content:
 
@@ -293,10 +300,15 @@ gate, so Control Agent `/worker/status` must report an interactive desktop
 Worker ready before delivery continues. Only after that does it apply the
 settling cooldown, call `prepare-case`, run security product readiness in
 warning-only mode, upload the explicit EICAR or harmless file, poll case status,
-request the controlled action, collect Huorong logs, fetch the summary, and
+request the controlled action, collect logs for the selected product, fetch the summary, and
 download the redacted guest-reported evidence bundle. The command defaults to a
 real run after one runtime risk confirmation; use `--dry-run` to keep cloud
 lifecycle, Desktop Worker gate, and controlled action requests in dry-run mode.
+
+`--product` can be `huorong` or `windows-defender`. The selected product is
+written into `run_state.json` as `selected_product_id` and into the generated
+case's `case_state.json` as `product_id`; prepare, readiness, collection,
+summary, and evidence all consume that same case-bound product.
 
 The single-run readiness stage records
 `run_state.stages.security_product_readiness`. `ready` is stored as `ok`;
@@ -348,6 +360,7 @@ Current CLI:
 ```powershell
 python -m cloud_av_agent_lab guest-worker-status --config configs/lab.local.toml --vm-id sg-win10
 python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__huorong --product huorong
+python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml --vm-id win10-windows-defender --case-id case-001__windows-defender --product windows-defender
 python -m cloud_av_agent_lab guest-case-summary --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__huorong
 python -m cloud_av_agent_lab guest-export-evidence --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__huorong --output .\artifacts\case_evidence_case-001__huorong.zip
 ```

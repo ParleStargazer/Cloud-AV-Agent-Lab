@@ -80,6 +80,7 @@ class SingleRunTests(TestCase):
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
             self.assertEqual(run_state["final_status"], "completed")
             self.assertEqual(run_state["status"], "completed")
+            self.assertEqual(run_state["selected_product_id"], "huorong")
             self.assertEqual(run_state["test_verdict"], "detected_or_blocked")
             self.assertEqual(run_state["evidence_export_status"], "saved")
             self.assertEqual(run_state["cleanup_status"], "dry_run")
@@ -188,6 +189,40 @@ class SingleRunTests(TestCase):
             )
             self.assertTrue(
                 (result.run_dir / "case_security_product_readiness.json").is_file()
+            )
+
+    def test_single_run_windows_defender_product_flows_through_all_stages(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.txt"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            client = FakeGuestClient()
+
+            result = run_single_case(
+                _options(root, sample_path, product_id="windows-defender"),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(client.prepare_products, ["windows-defender"])
+            self.assertEqual(client.readiness_products, ["windows-defender"])
+            self.assertEqual(client.collection_products, ["windows-defender"])
+            generated_config = result.generated_config_path.read_text(encoding="utf-8")
+            self.assertIn('id = "windows-defender"', generated_config)
+            self.assertIn(
+                'log_paths = ["Microsoft-Windows-Windows Defender/Operational"]',
+                generated_config,
+            )
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_state["product_id"], "windows-defender")
+            self.assertEqual(run_state["selected_product_id"], "windows-defender")
+            self.assertEqual(
+                run_state["stages"]["security_product_readiness"]["product_id"],
+                "windows-defender",
             )
 
     def test_single_run_dry_run_generates_mock_config_and_dry_action(self) -> None:
@@ -641,6 +676,9 @@ class FakeGuestClient:
         self.export_timeouts: list[float | None] = []
         self.execute_dry_runs: list[bool] = []
         self.calls: list[str] = []
+        self.prepare_products: list[str] = []
+        self.readiness_products: list[str] = []
+        self.collection_products: list[str] = []
 
     def health(self, timeout_seconds: float | None = None) -> GuestAgentResponse:
         self.health_calls += 1
@@ -667,6 +705,7 @@ class FakeGuestClient:
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
         self.calls.append("prepare_case")
+        self.prepare_products.append(case.product.id)
         return GuestAgentResponse(status="ok", message="prepared", data={})
 
     def check_security_product_readiness(
@@ -676,6 +715,7 @@ class FakeGuestClient:
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
         self.calls.append("check_security_product_readiness")
+        self.readiness_products.append(product_id)
         if self.readiness_error is not None:
             raise self.readiness_error
         return GuestAgentResponse(
@@ -763,6 +803,7 @@ class FakeGuestClient:
         product_id: str,
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
+        self.collection_products.append(product_id)
         if self.fail_collect:
             raise GuestAgentError("collector failed", source="remote")
         return GuestAgentResponse(
@@ -782,7 +823,9 @@ class FakeGuestClient:
             data={
                 "case_id": case_id,
                 "sample_id": "eicar",
-                "product_id": "huorong",
+                "product_id": self.collection_products[-1]
+                if self.collection_products
+                else "huorong",
                 "verdict": "detected_or_blocked",
                 "confidence": "high",
                 "summary": "collected evidence",
@@ -811,6 +854,7 @@ def _options(
     sample_path: Path,
     *,
     dry_run: bool = False,
+    product_id: str = "huorong",
     salvage_timeout: NetworkTimeoutProfile | None = None,
     guest_ready_timeout_seconds: float = 120.0,
     guest_ready_successes: int = 2,
@@ -822,6 +866,7 @@ def _options(
         sample_name="eicar",
         sample_path=sample_path,
         guest_agent_url="http://127.0.0.1:8080",
+        product_id=product_id,
         dry_run=dry_run,
         runs_dir=root / "runs",
         guest_ready_timeout_seconds=guest_ready_timeout_seconds,

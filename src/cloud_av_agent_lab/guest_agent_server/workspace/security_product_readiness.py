@@ -11,7 +11,7 @@ from cloud_av_agent_lab.guest_agent_server.security_product_readiness import (
     run_security_product_readiness_probe,
 )
 
-from .errors import WorkspaceNotFoundError
+from .errors import WorkspaceError, WorkspaceNotFoundError
 from .io import (
     _case_sample_id,
     _read_json_file,
@@ -39,6 +39,8 @@ def check_and_record_case_security_product_readiness(
         raise WorkspaceNotFoundError(
             "case workspace does not exist; run guest-prepare-case first"
         )
+    state = _read_json_file(workspace / "case_state.json")
+    _ensure_case_product_matches(state, safe_product)
 
     sample_id = _case_sample_id(workspace)
     append_event(
@@ -69,22 +71,26 @@ def check_and_record_case_security_product_readiness(
 def read_case_security_product_readiness_status(
     workdir: str | Path,
     case_id: str,
+    product_id: str = "",
     max_events: int = 20,
 ) -> dict[str, Any]:
     safe_id = safe_case_id(case_id)
+    safe_product = safe_case_id(product_id) if product_id else ""
     workspace = _case_workspace(workdir, safe_id)
     if not workspace.is_dir():
         raise WorkspaceNotFoundError(
             "case workspace does not exist; run guest-prepare-case first"
         )
+    state = _read_json_file(workspace / "case_state.json")
+    if safe_product:
+        _ensure_case_product_matches(state, safe_product)
     readiness_file = workspace / "case_security_product_readiness.json"
     if not readiness_file.is_file():
-        state = _read_json_file(workspace / "case_state.json")
         return {
             "schema_version": READINESS_SCHEMA_VERSION,
             "case_id": safe_id,
             "sample_id": str(state.get("sample_id", "")),
-            "product_id": "",
+            "product_id": str(state.get("product_id", "")),
             "state": "not_checked",
             "confidence": "low",
             "scope": "log_observability",
@@ -99,6 +105,13 @@ def read_case_security_product_readiness_status(
             ),
         }
     payload = _read_json_file(readiness_file)
+    if safe_product:
+        readiness_product = safe_case_id(payload.get("product_id", ""))
+        if readiness_product and readiness_product != safe_product:
+            raise WorkspaceError(
+                "security product readiness status was recorded for a different "
+                f"product ({readiness_product!r} != {safe_product!r})"
+            )
     payload["recent_events"] = _read_recent_events(
         workspace / "events.jsonl",
         max_events=max_events,
@@ -186,3 +199,12 @@ def _append_result_event(
             "protection_state": result.protection_state,
         },
     )
+
+
+def _ensure_case_product_matches(state: Mapping[str, Any], product_id: str) -> None:
+    case_product = safe_case_id(state.get("product_id", ""))
+    if case_product and case_product != product_id:
+        raise WorkspaceError(
+            "requested product does not match prepared case product_id "
+            f"({product_id!r} != {case_product!r})"
+        )

@@ -57,7 +57,9 @@ def _build_case_report(workspace: Path, max_events: int) -> dict[str, Any]:
         "case_id": case_id,
         "sample_id": sample_id,
         "vm_id": str(_mapping_value(case_data, "vm", "id")),
-        "product_id": str(_mapping_value(case_data, "product", "id")),
+        "product_id": str(
+            state.get("product_id") or _mapping_value(case_data, "product", "id")
+        ),
         "upload_state": str(state.get("upload_state", "not_uploaded")),
         "saved_once": _bool_field(sample_state, sample_metadata, "saved_once"),
         "post_write_exists": _bool_field(

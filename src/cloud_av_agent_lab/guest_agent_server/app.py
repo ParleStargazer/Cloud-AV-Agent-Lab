@@ -292,8 +292,10 @@ def create_app(
         }
 
     @app.get("/cases/{case_id:path}/security-product-readiness/status")
+    @app.get("/cases/{case_id}/security-product-readiness/status")
     def security_product_readiness_status(
         case_id: str,
+        product_id: str = "",
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         authorize(authorization)
@@ -301,6 +303,7 @@ def create_app(
             payload = read_case_security_product_readiness_status(
                 workdir_path,
                 case_id,
+                product_id=product_id,
             )
         except WorkspaceNotFoundError as exc:
             raise HTTPException(

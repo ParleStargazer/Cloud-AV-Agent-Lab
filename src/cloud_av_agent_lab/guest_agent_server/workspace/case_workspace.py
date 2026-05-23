@@ -45,6 +45,7 @@ def prepare_case_workspace(
     )
 
     sample_id = _payload_sample_id(payload)
+    product_id = _payload_product_id(payload)
     state = _base_case_state(
         case_id=case_id,
         sample_id=sample_id,
@@ -60,6 +61,7 @@ def prepare_case_workspace(
             "size": None,
             "original_filename": "",
         },
+        product_id=product_id,
     )
     write_case_state(workspace, state)
     append_event(
@@ -68,7 +70,7 @@ def prepare_case_workspace(
         case_id=case_id,
         sample_id=sample_id,
         message="case workspace prepared",
-        data={"workspace": str(workspace)},
+        data={"workspace": str(workspace), "product_id": product_id},
     )
     write_case_report(workspace)
     return case_id, workspace
@@ -147,6 +149,10 @@ def save_uploaded_sample(
         encoding="utf-8",
     )
 
+    existing_state = _read_existing_case_state(workspace)
+    product_id = str(existing_state.get("product_id", "")) or _workspace_product_id(
+        workspace
+    )
     state = _base_case_state(
         case_id=safe_id,
         sample_id=sample_id,
@@ -163,6 +169,7 @@ def save_uploaded_sample(
             "original_filename": safe_name,
             "sha256": str(sha256),
         },
+        product_id=product_id,
     )
     write_case_state(workspace, state)
     write_case_report(workspace)
@@ -174,3 +181,37 @@ def _payload_sample_id(payload: Mapping[str, Any]) -> str:
     if isinstance(sample_value, Mapping):
         return str(sample_value.get("id", ""))
     return ""
+
+
+def _payload_product_id(payload: Mapping[str, Any]) -> str:
+    product_value = payload.get("product")
+    if isinstance(product_value, Mapping):
+        return str(product_value.get("id", "")).strip()
+    vm_value = payload.get("vm")
+    if isinstance(vm_value, Mapping):
+        return str(vm_value.get("product_id", "")).strip()
+    return ""
+
+
+def _read_existing_case_state(workspace: Path) -> dict[str, Any]:
+    state_path = workspace / "case_state.json"
+    if not state_path.exists():
+        return {}
+    try:
+        decoded = json.loads(state_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _workspace_product_id(workspace: Path) -> str:
+    case_path = workspace / "case.json"
+    if not case_path.exists():
+        return ""
+    try:
+        decoded = json.loads(case_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(decoded, Mapping):
+        return ""
+    return _payload_product_id(decoded)

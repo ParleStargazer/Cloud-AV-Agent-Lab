@@ -126,7 +126,7 @@ class WindowsDefenderReadinessTests(TestCase):
         self.assertIn("no_core_defender_events_returned", payload["reason_codes"])
         self.assertEqual(result.protection_state, "unknown")
 
-    def test_stage_three_registers_collector_but_not_readiness_endpoint(self) -> None:
+    def test_product_is_registered_for_collector_and_readiness(self) -> None:
         collector = collector_registry.get_product_log_collector("windows-defender")
 
         self.assertIsInstance(collector, WindowsDefenderLogCollector)
@@ -134,7 +134,7 @@ class WindowsDefenderReadinessTests(TestCase):
             "windows-defender",
             collector_registry.supported_product_log_collectors(),
         )
-        self.assertNotIn(
+        self.assertIn(
             "windows-defender",
             readiness_registry.SUPPORTED_SECURITY_PRODUCT_READINESS_PROBES,
         )

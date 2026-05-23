@@ -87,6 +87,7 @@ class ProductProfile:
     id: str
     display_name: str
     vendor: str
+    enabled: bool = True
     log_paths: tuple[str, ...] = ()
     ui_window_titles: tuple[str, ...] = ()
     detection_keywords: tuple[str, ...] = ()

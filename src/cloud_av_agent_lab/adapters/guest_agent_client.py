@@ -217,10 +217,14 @@ class GuestAgentClient:
     def security_product_readiness_status(
         self,
         case_id: str,
+        product_id: str = "",
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
+        path = f"cases/{quote(case_id, safe='')}/security-product-readiness/status"
+        if product_id:
+            path += "?" + urlencode({"product_id": product_id})
         return self._request(
-            f"cases/{quote(case_id, safe='')}/security-product-readiness/status",
+            path,
             method="GET",
             timeout_seconds=timeout_seconds,
         )

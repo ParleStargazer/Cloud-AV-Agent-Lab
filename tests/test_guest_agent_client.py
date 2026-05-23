@@ -496,6 +496,46 @@ class GuestAgentClientTests(TestCase):
         self.assertIn("guest-prepare-case", message)
         self.assertNotIn("agent-secret", message)
 
+    def test_security_product_readiness_status_passes_product_query(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            timeout_seconds=5,
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=200,
+                headers={},
+                body=(
+                    b'{"status":"ok","message":"security product readiness '
+                    b'status loaded","data":{"state":"ready"}}'
+                ),
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "secret"}
+        )
+
+        response = client.security_product_readiness_status(
+            "case-001__windows-defender",
+            product_id="windows-defender",
+        )
+
+        self.assertEqual(response.data["state"], "ready")
+        self.assertEqual(len(network.calls), 1)
+        call = network.calls[0]
+        self.assertEqual(call["method"], "GET")
+        self.assertEqual(
+            call["url"],
+            "http://guest-agent.local:8080/cases/"
+            "case-001__windows-defender/security-product-readiness/status"
+            "?product_id=windows-defender",
+        )
+        headers = call["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+
     def test_execution_status_uses_network_client(self) -> None:
         config = GuestAgentConfig(
             enabled=True,

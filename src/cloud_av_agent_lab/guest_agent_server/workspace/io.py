@@ -56,8 +56,9 @@ def _base_case_state(
     phase: str,
     upload_state: str,
     sample: Mapping[str, Any],
+    product_id: str = "",
 ) -> dict[str, Any]:
-    return {
+    state = {
         "case_id": str(case_id),
         "sample_id": str(sample_id),
         "phase": phase,
@@ -65,6 +66,9 @@ def _base_case_state(
         "sample": dict(sample),
         "updated_at_utc": _utc_now(),
     }
+    if product_id:
+        state["product_id"] = str(product_id)
+    return state
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:

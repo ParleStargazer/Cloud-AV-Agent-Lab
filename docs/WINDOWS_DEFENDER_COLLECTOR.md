@@ -86,12 +86,14 @@ protection is enabled.
 ## Collector Stage 3
 
 The `windows-defender` collector is registered in the product log collector
-registry. It queries the Defender Operational channel through
-`WindowsEventLogReader`, parses the returned XML, and emits normalized evidence.
-The Windows Defender readiness probe is still not registered in the readiness
-registry or exposed through a product-specific readiness endpoint in this stage;
-stage 3 validation should therefore start with direct collection checks before
-full `single-run` interpretation.
+registry, and the readiness probe is registered in the security product
+readiness registry. CLI flows can select it explicitly with
+`--product windows-defender`; `guest-prepare-case` stores that product in
+`case_state.json`, and subsequent readiness/collection calls must match the
+prepared case product. The collector queries the Defender Operational channel
+through `WindowsEventLogReader`, parses the returned XML, and emits normalized
+evidence. If pywin32 is missing on the Windows Guest Agent, collection returns a
+structured `failed` result rather than a 500 response.
 
 Collection event IDs:
 

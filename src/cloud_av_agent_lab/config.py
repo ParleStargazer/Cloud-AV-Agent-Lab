@@ -165,6 +165,7 @@ def load_config(path: str | Path) -> LabConfig:
             id=str(item["id"]),
             display_name=str(item["display_name"]),
             vendor=str(item["vendor"]),
+            enabled=bool(item.get("enabled", True)),
             log_paths=_tuple(item.get("log_paths")),
             ui_window_titles=_tuple(item.get("ui_window_titles")),
             detection_keywords=_tuple(item.get("detection_keywords")),

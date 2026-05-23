@@ -214,6 +214,7 @@ class GuestAgentServerTests(unittest.TestCase):
         )
         state = json.loads(state_file.read_text(encoding="utf-8"))
         self.assertEqual(state["phase"], "prepared")
+        self.assertEqual(state["product_id"], "tencent-pc-manager")
         self.assertEqual(state["upload_state"], "not_uploaded")
         events = _read_events(events_file)
         self.assertEqual(events[-1]["event_type"], "case_prepared")
@@ -1486,6 +1487,22 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertIn("pywin32 is required", " ".join(data["errors"]))
         self.assertNotIn(TOKEN, response.text)
 
+    def test_collection_rejects_prepared_product_mismatch(self) -> None:
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_huorong_payload(),
+        )
+
+        response = self.client.post(
+            "/cases/case-001__huorong/collection/windows-defender",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("product_id", response.json()["detail"])
+        self.assertNotIn(TOKEN, response.text)
+
     def test_collection_status_reads_case_collection_without_sample_content(
         self,
     ) -> None:
@@ -1605,6 +1622,39 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(data["state"], "ready")
         self.assertIn("recent_events", data)
 
+    def test_security_product_readiness_status_rejects_product_mismatch(
+        self,
+    ) -> None:
+        payload = _prepare_huorong_payload()
+        log_dir = self.workdir / "huorong-source"
+        log_dir.mkdir()
+        (log_dir / "log.db").write_bytes(b"sqlite-placeholder")
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server."
+            "security_product_readiness.huorong."
+            "HuorongSecurityProductReadinessProbe.DEFAULT_LOG_DIR",
+            log_dir,
+        ):
+            self.client.post(
+                "/cases/case-001__huorong/security-product-readiness/huorong",
+                headers=self._headers(),
+            )
+
+        response = self.client.get(
+            "/cases/case-001__huorong/security-product-readiness/status"
+            "?product_id=windows-defender",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("product_id", response.json()["detail"])
+        self.assertNotIn(TOKEN, response.text)
+
     def test_security_product_readiness_missing_case_returns_404(self) -> None:
         response = self.client.post(
             "/cases/missing-case/security-product-readiness/huorong",
@@ -1614,22 +1664,22 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertIn("guest-prepare-case", response.json()["detail"])
 
-    def test_security_product_readiness_unsupported_product_returns_200(self) -> None:
+    def test_security_product_readiness_rejects_prepared_product_mismatch(
+        self,
+    ) -> None:
         self.client.post(
             "/prepare-case",
             headers=self._headers(),
-            json=_prepare_payload(),
+            json=_prepare_huorong_payload(),
         )
 
         response = self.client.post(
-            "/cases/case-001__tencent-pc-manager/"
-            "security-product-readiness/unsupported",
+            "/cases/case-001__huorong/security-product-readiness/windows-defender",
             headers=self._headers(),
         )
 
-        self.assertEqual(response.status_code, 200)
-        data = response.json()["data"]
-        self.assertEqual(data["state"], "unsupported")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("product_id", response.json()["detail"])
         self.assertNotIn(TOKEN, response.text)
 
     def test_security_product_readiness_rejects_path_traversal_case_id(self) -> None:

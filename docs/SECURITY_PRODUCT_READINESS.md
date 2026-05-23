@@ -36,9 +36,22 @@ Readiness probes must stay low-risk and read-only:
 - no `configs/real.toml` access;
 - no Tencent Cloud API calls.
 
-## Huorong MVP
+## Supported Products
 
-The first probe supports `huorong` and uses:
+Readiness probes are resolved by explicit `product_id`. Current supported IDs
+are:
+
+- `huorong`
+- `windows-defender`
+
+`guest-prepare-case` stores the selected product in `case_state.json`; later
+readiness requests should use the same product. A request for a different
+product is rejected rather than silently checking a different security product
+baseline.
+
+## Huorong Probe
+
+The Huorong probe uses:
 
 ```text
 C:\ProgramData\Huorong\sysdiag
@@ -84,9 +97,23 @@ The result is also summarized in:
 - `unknown`: core copy/stat checks failed or there was not enough information.
 - `unsupported`: no readiness probe exists for the requested product.
 
-For Huorong MVP, `scope = "log_observability"` and
-`protection_state = "unknown"`. This is deliberate: readiness does not confirm
-real-time protection state.
+For both current probes, `scope = "log_observability"` and `protection_state =
+"unknown"`. This is deliberate: readiness does not confirm real-time protection
+state.
+
+## Windows Defender Probe
+
+The Windows Defender probe checks observability of:
+
+```text
+Microsoft-Windows-Windows Defender/Operational
+```
+
+It uses the Windows Event Log reader abstraction. Unit tests use injected fake
+readers and do not read the local machine's real Event Log. The real pywin32
+reader is only attempted inside the Windows Guest Agent when the probe runs on a
+Windows host with pywin32 available. No PowerShell, `wevtutil`, `cmd`, shell
+runner, or service/configuration changes are used.
 
 ## CLI
 
@@ -98,6 +125,16 @@ python -m cloud_av_agent_lab guest-check-security-product-readiness `
   --vm-id win10-huorong `
   --case-id eicar-001__huorong `
   --product huorong
+```
+
+For Windows Defender, use the matching VM profile and product ID:
+
+```powershell
+python -m cloud_av_agent_lab guest-check-security-product-readiness `
+  --config configs/lab.local.toml `
+  --vm-id win10-windows-defender `
+  --case-id eicar-001__windows-defender `
+  --product windows-defender
 ```
 
 Load the last result without rerunning the probe:

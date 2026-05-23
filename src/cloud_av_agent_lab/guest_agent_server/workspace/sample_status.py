@@ -139,6 +139,7 @@ def refresh_sample_status(
             "original_filename": str(metadata.get("original_filename", "")),
             "sha256": str(metadata.get("sha256", "")),
         },
+        product_id=str(state.get("product_id", "")),
     )
     existing_execution = state.get("execution")
     if isinstance(existing_execution, Mapping):

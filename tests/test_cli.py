@@ -412,8 +412,162 @@ class CloudLifecycleCliGuardTests(TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_client.collect_calls, 1)
+        self.assertEqual(fake_client.collect_products, ["huorong"])
         self.assertIn('"message": "collection completed"', stdout.getvalue())
         self.assertIn('"verdict": "intercepted"', stdout.getvalue())
+
+    def test_guest_prepare_case_resolves_windows_defender_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "guest-prepare-case",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-windows-defender",
+                        "--sample-id",
+                        "case-001",
+                        "--product",
+                        "windows-defender",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_client.prepare_products, ["windows-defender"])
+
+    def test_guest_collect_logs_resolves_windows_defender_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "guest-collect-logs",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-windows-defender",
+                        "--case-id",
+                        "case-001__windows-defender",
+                        "--product",
+                        "windows-defender",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_client.collect_products, ["windows-defender"])
+
+    def test_guest_collect_logs_defaults_to_vm_product_for_old_huorong_flow(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "guest-collect-logs",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-huorong",
+                        "--case-id",
+                        "case-001__huorong",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_client.collect_products, ["huorong"])
+
+    def test_guest_collect_logs_rejects_conflicting_explicit_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            stderr = StringIO()
+
+            with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+                main(
+                    [
+                        "guest-collect-logs",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-huorong",
+                        "--case-id",
+                        "case-001__huorong",
+                        "--product",
+                        "windows-defender",
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("does not match", stderr.getvalue())
+
+    def test_guest_collect_logs_rejects_disabled_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.disabled-product.toml"
+            config_path.write_text(
+                _guest_agent_enabled_config().replace(
+                    'id = "windows-defender"\nenabled = true',
+                    'id = "windows-defender"\nenabled = false',
+                ),
+                encoding="utf-8",
+            )
+            stderr = StringIO()
+
+            with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+                main(
+                    [
+                        "guest-collect-logs",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-windows-defender",
+                        "--case-id",
+                        "case-001__windows-defender",
+                        "--product",
+                        "windows-defender",
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("disabled", stderr.getvalue())
+
+    def test_single_run_rejects_unknown_product_locally(self) -> None:
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+            main(["single-run", "--product", "unknown-product", "--dry-run"])
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("invalid choice", stderr.getvalue())
 
     def test_guest_check_security_product_readiness_prints_concise_status(
         self,
@@ -447,10 +601,71 @@ class CloudLifecycleCliGuardTests(TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_client.readiness_calls, 1)
+        self.assertEqual(fake_client.readiness_products, ["huorong"])
         output = stdout.getvalue()
         self.assertIn("Security product readiness:", output)
         self.assertIn("state: ready", output)
         self.assertIn("[ok] huorong_log_db_exists", output)
+
+    def test_guest_check_readiness_resolves_windows_defender_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "guest-check-security-product-readiness",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-windows-defender",
+                        "--case-id",
+                        "case-001__windows-defender",
+                        "--product",
+                        "windows-defender",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_client.readiness_products, ["windows-defender"])
+
+    def test_guest_readiness_status_passes_explicit_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "guest-security-product-readiness-status",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-windows-defender",
+                        "--case-id",
+                        "case-001__windows-defender",
+                        "--product",
+                        "windows-defender",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_client.readiness_status_products, ["windows-defender"])
 
     def test_guest_case_summary_outputs_verdict_and_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1276,13 +1491,17 @@ class _FakeGuestAgentClient:
         self.real_execution_state = real_execution_state
         self.execution_status_states = list(execution_status_states or [])
         self.upload_calls = 0
+        self.prepare_products: list[str] = []
         self.case_status_calls = 0
         self.collect_calls = 0
+        self.collect_products: list[str] = []
         self.summary_calls = 0
         self.export_calls = 0
         self.execution_status_calls = 0
         self.readiness_calls = 0
+        self.readiness_products: list[str] = []
         self.readiness_status_calls = 0
+        self.readiness_status_products: list[str] = []
         self.execute_calls: list[dict[str, object]] = []
         self.execute_called = False
 
@@ -1304,6 +1523,14 @@ class _FakeGuestAgentClient:
                 "upload_state": "uploaded",
                 "workspace": "C:\\CloudAvAgentLab\\cases\\case-001",
             },
+        )
+
+    def prepare_case(self, case: object) -> GuestAgentResponse:
+        self.prepare_products.append(case.product.id)
+        return GuestAgentResponse(
+            status="ok",
+            message="case workspace prepared",
+            data={"case_id": case.id},
         )
 
     def case_status(self, case_id: str) -> GuestAgentResponse:
@@ -1382,6 +1609,7 @@ class _FakeGuestAgentClient:
 
     def collect_logs(self, case_id: str, product_id: str) -> GuestAgentResponse:
         self.collect_calls += 1
+        self.collect_products.append(product_id)
         return GuestAgentResponse(
             status="ok",
             message="collection completed",
@@ -1411,6 +1639,7 @@ class _FakeGuestAgentClient:
         product_id: str,
     ) -> GuestAgentResponse:
         self.readiness_calls += 1
+        self.readiness_products.append(product_id)
         return GuestAgentResponse(
             status="ok",
             message="security product readiness checked",
@@ -1437,8 +1666,10 @@ class _FakeGuestAgentClient:
     def security_product_readiness_status(
         self,
         case_id: str,
+        product_id: str = "",
     ) -> GuestAgentResponse:
         self.readiness_status_calls += 1
+        self.readiness_status_products.append(product_id)
         return GuestAgentResponse(
             status="ok",
             message="security product readiness status loaded",
@@ -1591,6 +1822,7 @@ class _FailingGuestAgentClient:
     def security_product_readiness_status(
         self,
         case_id: str,
+        product_id: str = "",
     ) -> GuestAgentResponse:
         raise self.error
 

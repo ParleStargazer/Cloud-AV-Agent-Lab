@@ -16,15 +16,30 @@ from cloud_av_agent_lab.adapters.guest_agent_client import (
 from cloud_av_agent_lab.adapters.cloud import CloudProviderError, VMOperationResponse
 from cloud_av_agent_lab.adapters.factory import create_cloud_adapter
 from cloud_av_agent_lab.config import ConfigError, load_config
-from cloud_av_agent_lab.core.contracts import LabConfig, TestCase
+from cloud_av_agent_lab.core.contracts import (
+    LabConfig,
+    ProductProfile,
+    TestCase,
+    VmProfile,
+)
 from cloud_av_agent_lab.core.pipeline import TestPipeline
 from cloud_av_agent_lab.core.safety import SafetyError, assert_safe_config
+from cloud_av_agent_lab.guest_agent_server.collectors.registry import (
+    supported_product_log_collectors,
+)
+from cloud_av_agent_lab.guest_agent_server.security_product_readiness import (
+    supported_security_product_readiness_probes,
+)
 from cloud_av_agent_lab.network.client import NetworkClient
 from cloud_av_agent_lab.orchestration import SingleRunOptions, run_single_case
 from cloud_av_agent_lab.orchestration.locks import InstanceLockedError
 from cloud_av_agent_lab.orchestration.prompts import prompt_default
 from cloud_av_agent_lab.orchestration.single_run import SingleRunError
 from cloud_av_agent_lab.orchestration.timeout import NetworkTimeoutProfile
+from cloud_av_agent_lab.product_resolution import (
+    ProductResolutionError,
+    resolve_security_product,
+)
 from cloud_av_agent_lab.reporting.markdown import render_markdown_report
 
 LIFECYCLE_COMMANDS = {
@@ -44,6 +59,7 @@ GUEST_EXECUTION_TERMINAL_STATES = {
     "launch_failed",
     "terminated_or_disappeared",
 }
+SINGLE_RUN_PRODUCT_CHOICES = ("huorong", "windows-defender")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -96,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     guest_prepare.add_argument(
         "--vm-id", required=True, help="VM profile id from config"
+    )
+    guest_prepare.add_argument(
+        "--product",
+        default="",
+        help="optional security product id; defaults to the VM profile product_id",
     )
 
     guest_status = subparsers.add_parser(
@@ -173,8 +194,8 @@ def build_parser() -> argparse.ArgumentParser:
     guest_collect.add_argument("--case-id", required=True, help="prepared case id")
     guest_collect.add_argument(
         "--product",
-        required=True,
-        help="security product id for log collection; currently supported: huorong",
+        default="",
+        help="security product id for log collection; defaults to VM profile product_id",
     )
 
     guest_readiness = subparsers.add_parser(
@@ -188,8 +209,8 @@ def build_parser() -> argparse.ArgumentParser:
     guest_readiness.add_argument("--case-id", required=True, help="prepared case id")
     guest_readiness.add_argument(
         "--product",
-        required=True,
-        help="security product id to check; currently supported: huorong",
+        default="",
+        help="security product id to check; defaults to VM profile product_id",
     )
 
     guest_readiness_status = subparsers.add_parser(
@@ -204,6 +225,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     guest_readiness_status.add_argument(
         "--case-id", required=True, help="prepared case id"
+    )
+    guest_readiness_status.add_argument(
+        "--product",
+        default="",
+        help="optional product id; fails if it conflicts with the prepared case",
     )
 
     guest_execute = subparsers.add_parser(
@@ -315,8 +341,8 @@ def build_parser() -> argparse.ArgumentParser:
     single_run.add_argument(
         "--product",
         default="huorong",
-        choices=["huorong"],
-        help="security product profile; MVP supports huorong",
+        choices=SINGLE_RUN_PRODUCT_CHOICES,
+        help="security product profile",
     )
     single_run.add_argument(
         "--guest-agent-url",
@@ -506,7 +532,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         sample = config.samples.get(args.sample_id)
         if sample is None:
             parser.exit(2, f"error: unknown sample id {args.sample_id!r}\n")
-        product = config.products[vm.product_id]
+        product = _resolve_cli_product(
+            parser,
+            config,
+            vm,
+            explicit_product_id=args.product,
+            purpose="prepare-case product",
+        )
         case = TestCase(
             id=f"{sample.id}__{product.id}",
             sample=sample,
@@ -597,19 +629,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         vm = config.vms.get(args.vm_id)
         if vm is None:
             parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
-        if args.product not in config.products:
-            parser.exit(2, f"error: unknown product id {args.product!r}\n")
-        if vm.product_id != args.product:
-            parser.exit(
-                2,
-                "error: [Local Check] VM profile product_id does not match "
-                f"--product ({vm.product_id!r} != {args.product!r})\n",
-            )
+        product = _resolve_cli_product(
+            parser,
+            config,
+            vm,
+            explicit_product_id=args.product,
+            supported_products=supported_product_log_collectors(),
+            purpose="log collection",
+        )
         _ensure_guest_agent_enabled(parser, config)
         try:
             response = _create_guest_agent_client(config).collect_logs(
                 args.case_id,
-                args.product,
+                product.id,
             )
         except GuestAgentError as exc:
             parser.exit(2, _format_guest_error(exc))
@@ -620,19 +652,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         vm = config.vms.get(args.vm_id)
         if vm is None:
             parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
-        if args.product not in config.products:
-            parser.exit(2, f"error: unknown product id {args.product!r}\n")
-        if vm.product_id != args.product:
-            parser.exit(
-                2,
-                "error: [Local Check] VM profile product_id does not match "
-                f"--product ({vm.product_id!r} != {args.product!r})\n",
-            )
+        product = _resolve_cli_product(
+            parser,
+            config,
+            vm,
+            explicit_product_id=args.product,
+            supported_products=supported_security_product_readiness_probes(),
+            purpose="security product readiness",
+        )
         _ensure_guest_agent_enabled(parser, config)
         try:
             response = _create_guest_agent_client(
                 config
-            ).check_security_product_readiness(args.case_id, args.product)
+            ).check_security_product_readiness(args.case_id, product.id)
         except GuestAgentError as exc:
             parser.exit(2, _format_guest_error(exc))
         _print_security_product_readiness(response.data)
@@ -642,11 +674,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         vm = config.vms.get(args.vm_id)
         if vm is None:
             parser.exit(2, f"error: unknown vm id {args.vm_id!r}\n")
+        product = _resolve_cli_product(
+            parser,
+            config,
+            vm,
+            explicit_product_id=args.product,
+            supported_products=supported_security_product_readiness_probes(),
+            purpose="security product readiness status",
+        )
         _ensure_guest_agent_enabled(parser, config)
         try:
             response = _create_guest_agent_client(
                 config
-            ).security_product_readiness_status(args.case_id)
+            ).security_product_readiness_status(args.case_id, product.id)
         except GuestAgentError as exc:
             parser.exit(2, _format_guest_error(exc))
         _print_security_product_readiness(response.data)
@@ -1051,6 +1091,28 @@ def _ensure_desktop_worker_enabled(
             "[guest_agent.desktop_worker].enabled=true，并确认云端 Control "
             "Agent 启动时已启用 Desktop Worker 状态代理。\n",
         )
+
+
+def _resolve_cli_product(
+    parser: argparse.ArgumentParser,
+    config: LabConfig,
+    vm: VmProfile,
+    *,
+    explicit_product_id: str = "",
+    supported_products: Sequence[str] | None = None,
+    purpose: str,
+) -> ProductProfile:
+    try:
+        return resolve_security_product(
+            config,
+            vm,
+            explicit_product_id=explicit_product_id,
+            supported_products=supported_products,
+            purpose=purpose,
+        )
+    except ProductResolutionError as exc:
+        parser.exit(2, f"error: [Local Check] {exc}\n")
+    raise AssertionError("parser.exit should terminate")
 
 
 def _print_guest_response(response: GuestAgentResponse) -> None:

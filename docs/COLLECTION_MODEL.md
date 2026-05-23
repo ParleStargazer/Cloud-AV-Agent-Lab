@@ -23,14 +23,16 @@ collector. Readiness probes run after `prepare-case` and before upload, do only
 low-intrusion read-only environment checks, and write
 `case_security_product_readiness.json`.
 
-The first probe supports Huorong and is scoped to `log_observability`: it checks
-that the Huorong sysdiag directory and `log.db` exist, copies `log.db` into the
-current case readiness snapshot directory, and reads only copied-file metadata.
-It does not open the live SQLite database, does not parse interception logs,
-does not read sample content, and does not start, stop, repair, or modify the
-security product. `protection_state` is therefore `unknown` even when readiness
-is `ready`; readiness means the log observation path has minimum prerequisites,
-not that real-time protection is confirmed.
+Current probes support `huorong` and `windows-defender`, both scoped to
+`log_observability`. Huorong checks that the sysdiag directory and `log.db`
+exist, copies `log.db` into the current case readiness snapshot directory, and
+reads only copied-file metadata. Windows Defender uses the Windows Event Log
+reader abstraction to check Defender Operational channel observability. These
+probes do not parse interception logs, do not read sample content, and do not
+start, stop, repair, or modify the security product. `protection_state` is
+therefore `unknown` even when readiness is `ready`; readiness means the log
+observation path has minimum prerequisites, not that real-time protection is
+confirmed.
 
 Readiness and collection share `product_id`, but not verdict semantics.
 Unsupported, unknown, partial, missing, or not-ready readiness states must not
@@ -51,6 +53,11 @@ src/cloud_av_agent_lab/guest_agent_server/collectors/
   huorong/
     collector.py
     parser.py
+    schema.py
+  windows_defender/
+    collector.py
+    parser.py
+    reader.py
     schema.py
 ```
 
@@ -77,6 +84,12 @@ Product collectors own only product-specific details: log locations, copy
 strategy, raw field parsing, artifact sensitivity, and conservative evidence
 matching. The rest of the system consumes normalized events and collector
 results; it should not need to know raw product database columns.
+
+The selected `product_id` is resolved once at the CLI/orchestration entrypoint.
+`guest-prepare-case` writes it into `case_state.json`; later readiness and
+collection calls must match that case-bound product. If a caller explicitly
+passes a different product, the server rejects the request instead of silently
+collecting logs for another baseline.
 
 ## Huorong MVP
 

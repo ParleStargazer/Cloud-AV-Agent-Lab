@@ -39,6 +39,7 @@ class RunState:
             "snapshot_id": snapshot_id,
             "region": region,
             "product_id": product_id,
+            "selected_product_id": product_id,
             "sample": {
                 "name": sample_name,
                 "path": sample_path,
