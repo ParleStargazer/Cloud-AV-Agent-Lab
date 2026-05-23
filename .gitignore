@@ -40,6 +40,10 @@ malware/
 *.ps1
 !scripts/build-guest-agent.ps1
 !scripts/build-desktop-worker.ps1
+!scripts/create-avtester-user.ps1
+!scripts/setup-avtester-autologon.ps1
+!scripts/create-guest-agent-task.ps1
+!scripts/create-desktop-worker-task.ps1
 
 .vscode/
 
