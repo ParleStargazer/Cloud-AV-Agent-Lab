@@ -15,6 +15,7 @@ from cloud_av_agent_lab.guest_agent_server.collectors import (
 )
 from cloud_av_agent_lab.guest_agent_server.collectors.windows_defender import (
     OPERATIONAL_CHANNEL,
+    WindowsDefenderLogCollector,
     WindowsEventLogAccessDenied,
     WindowsEventLogChannelNotFound,
     WindowsEventLogQueryFailed,
@@ -125,8 +126,11 @@ class WindowsDefenderReadinessTests(TestCase):
         self.assertIn("no_core_defender_events_returned", payload["reason_codes"])
         self.assertEqual(result.protection_state, "unknown")
 
-    def test_stage_two_does_not_register_collector_or_endpoint(self) -> None:
-        self.assertNotIn(
+    def test_stage_three_registers_collector_but_not_readiness_endpoint(self) -> None:
+        collector = collector_registry.get_product_log_collector("windows-defender")
+
+        self.assertIsInstance(collector, WindowsDefenderLogCollector)
+        self.assertIn(
             "windows-defender",
             collector_registry.supported_product_log_collectors(),
         )
@@ -135,7 +139,7 @@ class WindowsDefenderReadinessTests(TestCase):
             readiness_registry.SUPPORTED_SECURITY_PRODUCT_READINESS_PROBES,
         )
 
-    def test_stage_two_uses_no_shell_or_real_reader_implementation(self) -> None:
+    def test_stage_three_reader_uses_no_shell_or_command_runner(self) -> None:
         from cloud_av_agent_lab.guest_agent_server.collectors.windows_defender import (
             reader as reader_module,
         )
@@ -148,7 +152,8 @@ class WindowsDefenderReadinessTests(TestCase):
         self.assertNotIn("Get-WinEvent", source)
         self.assertNotIn("wevtutil", source)
         self.assertNotIn("shell=True", source)
-        self.assertNotIn("win32evtlog", source)
+        self.assertNotIn("cmd.exe", source)
+        self.assertNotIn("os.system", source)
         self.assertNotIn("ctypes", source)
 
 

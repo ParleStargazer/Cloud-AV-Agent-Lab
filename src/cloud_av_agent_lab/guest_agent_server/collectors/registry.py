@@ -4,11 +4,13 @@ from collections.abc import Callable
 
 from .base import ProductLogCollector
 from .huorong import HuorongLogCollector
+from .windows_defender import WindowsDefenderLogCollector
 
 CollectorFactory = Callable[[], ProductLogCollector]
 
 SUPPORTED_COLLECTORS: dict[str, CollectorFactory] = {
     "huorong": HuorongLogCollector,
+    "windows-defender": WindowsDefenderLogCollector,
 }
 
 

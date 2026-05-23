@@ -8,6 +8,7 @@ from .event_ids import (
     PROTECTION_STATE_CHANGED_EVENT_IDS,
     event_kind_for_id,
 )
+from .collector import WindowsDefenderLogCollector
 from .parser import parse_windows_defender_event_xml
 from .reader import (
     WindowsEventLogAccessDenied,
@@ -35,6 +36,7 @@ __all__ = [
     "PRODUCT_LOG_SOURCE",
     "PROTECTION_STATE_CHANGED_EVENT_IDS",
     "PROVIDER_NAME",
+    "WindowsDefenderLogCollector",
     "WindowsEventLogAccessDenied",
     "WindowsEventLogChannelNotFound",
     "WindowsEventLogError",

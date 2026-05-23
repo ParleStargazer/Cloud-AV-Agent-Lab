@@ -16,6 +16,7 @@ dependencies = [
 guest-agent = [
   "fastapi",
   "httpx",
+  "pywin32; platform_system == 'Windows'",
   "psutil",
   "uvicorn",
   "pydantic",

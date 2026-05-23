@@ -1,10 +1,14 @@
 # Windows Defender Collector Model
 
 This document tracks the Windows Defender / Microsoft Defender Antivirus
-onboarding work. The current implementation includes stage 1 XML parser support
-and stage 2 readiness scaffolding with an injected fake reader in tests. It does
-not read the live Windows Event Log, does not connect to Guest Agent endpoints,
-and is not registered as a product collector yet.
+onboarding work. The current implementation includes XML parser support,
+readiness scaffolding with injected fake-reader tests, and a stage 3 collector
+registered as `product_id = "windows-defender"`.
+
+The collector uses a Windows Event Log reader abstraction. The default real
+reader is optional pywin32-based code loaded only when collection runs on a
+Windows Guest Agent with the `guest-agent` extra installed. Tests use fake
+readers and fixture XML; they do not read the live Windows Event Log.
 
 ## Product ID
 
@@ -35,13 +39,15 @@ The canonical channel string used by the parser schema is:
 Microsoft-Windows-Windows Defender/Operational
 ```
 
-Stage 1 parses exported event XML fixtures only. Later stages may add a Windows
-Event Log reader abstraction and a real collector.
+The parser supports exported event XML fixtures and XML returned by the Windows
+Event Log reader.
 
-## Readiness Stage 2
+## Readiness
 
-Stage 2 defines a reader protocol and a Windows Defender readiness probe, but it
-does not provide a real reader implementation.
+The readiness probe defines the Windows Event Log reader protocol and can be
+constructed with an injected reader and platform provider. Current tests use
+fake readers only. Readiness remains a log observability check; it is not proof
+that Defender real-time protection is currently enabled.
 
 ```python
 class WindowsEventLogReader(Protocol):
@@ -56,9 +62,8 @@ class WindowsEventLogReader(Protocol):
         ...
 ```
 
-The probe is constructed with an injected reader and platform provider. Tests
-use fake readers only. There is intentionally no pywin32, ctypes, PowerShell,
-`wevtutil`, `cmd`, or shell reader in this stage.
+The collector's default real reader uses pywin32 when available. There is still
+no PowerShell, `wevtutil`, `cmd`, shell runner, or ctypes reader in this stage.
 
 Readiness state semantics:
 
@@ -77,6 +82,55 @@ Readiness state semantics:
 Readiness remains scoped to `log_observability`, and `protection_state` remains
 `unknown`. This signal must not be treated as proof that Defender real-time
 protection is enabled.
+
+## Collector Stage 3
+
+The `windows-defender` collector is registered in the product log collector
+registry. It queries the Defender Operational channel through
+`WindowsEventLogReader`, parses the returned XML, and emits normalized evidence.
+The Windows Defender readiness probe is still not registered in the readiness
+registry or exposed through a product-specific readiness endpoint in this stage;
+stage 3 validation should therefore start with direct collection checks before
+full `single-run` interpretation.
+
+Collection event IDs:
+
+```text
+1006  malware detected
+1007  malware action taken
+1116  malware detected
+1117  malware action taken
+1118  malware action failed
+1119  malware action critically failed
+```
+
+Attribution is intentionally conservative:
+
+- `strong`: event timestamp is inside the case window and the event path matches
+  the current case sample/workspace path.
+- `medium`: event timestamp is inside the case window and process id or process
+  name matches the current case execution metadata.
+- `weak`: event timestamp is inside the case window and only the threat name
+  suggests EICAR or Defender evidence.
+- `unattributed`: the event cannot be tied to the current case.
+
+Only `strong` and `medium` attribution can affect the collector verdict.
+`weak` and `unattributed` events remain visible evidence but do not create a
+confident verdict.
+
+Verdict mapping:
+
+- Remediation actions such as quarantine, remove, delete, block, clean, or
+  disinfect with `strong` / `medium` attribution produce `intercepted`.
+- Detection events with `strong` / `medium` attribution produce `detected`.
+- `Allow`, `No action`, or `None` actions produce `detected_only`, not blocked.
+- `1118` / `1119` action failure events produce `detected_with_action_failed`
+  or an inconclusive result, not blocked.
+- Missing or weak evidence remains `unknown` or `not_intercepted` depending on
+  whether any product events were found.
+
+The collector records normalized evidence and metadata only. It does not include
+raw EVTX or binary Event Log snapshots in the default evidence bundle.
 
 ## Core Event IDs
 
@@ -158,9 +212,9 @@ Missing fields are represented as `None`. Unknown structured fields remain in
 
 ## Safety Boundary
 
-The Windows Defender stage 1 parser:
+The Windows Defender collector:
 
-- does not read live Windows Event Logs;
+- reads only Defender Operational event metadata through the reader abstraction;
 - does not call PowerShell, `cmd`, `wevtutil`, or shell commands;
 - does not read uploaded sample bytes;
 - does not execute samples;
@@ -173,6 +227,7 @@ The Windows Defender stage 1 parser:
 
 ## Next Stages
 
-Stage 3 should register the `windows-defender` collector, query the Operational
-channel through the reader, normalize product evidence, and then run a real
-EICAR smoke test on an isolated cloud Windows host.
+The next step is a real isolated-cloud smoke test with EICAR or a harmless
+placeholder file on a Windows Defender Guest Agent. That validation must be run
+manually on the cloud Windows host; local tests remain fake-reader based and do
+not read this machine's Event Log.

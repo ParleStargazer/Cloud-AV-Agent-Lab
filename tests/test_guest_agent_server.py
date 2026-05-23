@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import json
 import hashlib
 import sqlite3
@@ -1437,6 +1438,54 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertIn("available_tables", data["errors"][0])
         self.assertIn("OtherLogTable", data["errors"][0])
 
+    def test_collect_windows_defender_missing_pywin32_returns_failed_payload(
+        self,
+    ) -> None:
+        payload = _prepare_windows_defender_payload()
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=payload,
+        )
+        self.client.post(
+            "/cases/case-001__windows-defender/sample",
+            headers=self._upload_headers(),
+            content=b"EICAR harmless placeholder",
+        )
+        original_import = builtins.__import__
+
+        def missing_pywin32(
+            name: str,
+            globals: object | None = None,
+            locals: object | None = None,
+            fromlist: tuple[object, ...] = (),
+            level: int = 0,
+        ) -> object:
+            if name in {"pywintypes", "win32evtlog"}:
+                raise ImportError("missing optional pywin32")
+            return original_import(name, globals, locals, fromlist, level)
+
+        with (
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.collectors."
+                "windows_defender.reader.platform.system",
+                return_value="Windows",
+            ),
+            patch("builtins.__import__", side_effect=missing_pywin32),
+        ):
+            response = self.client.post(
+                "/cases/case-001__windows-defender/collection/windows-defender",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_state"], "failed")
+        self.assertEqual(data["verdict"], "unknown")
+        self.assertIsNone(data["intercepted"])
+        self.assertIn("pywin32 is required", " ".join(data["errors"]))
+        self.assertNotIn(TOKEN, response.text)
+
     def test_collection_status_reads_case_collection_without_sample_content(
         self,
     ) -> None:
@@ -1835,6 +1884,22 @@ def _prepare_huorong_payload() -> dict[str, object]:
         "id": "huorong",
         "display_name": "Huorong Internet Security",
         "vendor": "Huorong",
+    }
+    return payload
+
+
+def _prepare_windows_defender_payload() -> dict[str, object]:
+    payload = _prepare_payload()
+    payload["case"] = {"id": "case-001__windows-defender"}
+    payload["vm"] = {
+        **payload["vm"],
+        "id": "sg-win10-windows-defender",
+        "product_id": "windows-defender",
+    }
+    payload["product"] = {
+        "id": "windows-defender",
+        "display_name": "Windows Defender",
+        "vendor": "Microsoft",
     }
     return payload
 
