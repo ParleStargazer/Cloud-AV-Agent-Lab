@@ -3,6 +3,7 @@
 
 param(
     [string]$Username = "AvTester",
+
     [Parameter(Mandatory = $true)]
     [string]$Password
 )
@@ -27,24 +28,26 @@ $existingUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
 
 if ($existingUser) {
     Write-Host "User '$Username' already exists. Updating password and enabling account..."
-    Set-LocalUser -Name $Username -Password $SecurePassword
-    Enable-LocalUser -Name $Username
+
+    Set-LocalUser -Name $Username -Password $SecurePassword -ErrorAction Stop
+    Enable-LocalUser -Name $Username -ErrorAction Stop
 } else {
     Write-Host "Creating local user '$Username'..."
+
     New-LocalUser `
         -Name $Username `
         -Password $SecurePassword `
         -FullName "AV Test User" `
-        -Description "Local standard user for antivirus testing environment"
+        -Description "AV test user" `
+        -ErrorAction Stop
 }
 
 Write-Host "Ensuring password does not expire..."
 
-Set-LocalUser -Name $Username -PasswordNeverExpires $true
+Set-LocalUser -Name $Username -PasswordNeverExpires $true -ErrorAction Stop
 
 Write-Host "Ensuring user is a standard user..."
 
-# Add to Users group if not already present.
 try {
     Add-LocalGroupMember -Group "Users" -Member $Username -ErrorAction Stop
     Write-Host "User '$Username' added to Users group."
@@ -52,7 +55,6 @@ try {
     Write-Host "User '$Username' may already be in Users group."
 }
 
-# Make sure the user is not in Administrators group.
 try {
     Remove-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction Stop
     Write-Host "User '$Username' removed from Administrators group."
