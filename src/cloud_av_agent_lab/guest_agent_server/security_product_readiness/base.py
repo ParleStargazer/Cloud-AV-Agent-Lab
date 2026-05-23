@@ -41,6 +41,7 @@ class SecurityProductReadinessResult:
     scope: str
     protection_state: str
     checked_at_utc: str
+    reason_codes: Sequence[str] = field(default_factory=tuple)
     checks: Sequence[SecurityProductReadinessCheck] = field(default_factory=tuple)
     warnings: Sequence[str] = field(default_factory=tuple)
     errors: Sequence[str] = field(default_factory=tuple)
@@ -53,6 +54,7 @@ class SecurityProductReadinessResult:
             "scope": self.scope,
             "protection_state": self.protection_state,
             "checked_at_utc": self.checked_at_utc,
+            "reason_codes": list(self.reason_codes),
             "checks": [check.to_dict() for check in self.checks],
             "warnings": list(self.warnings),
             "errors": list(self.errors),

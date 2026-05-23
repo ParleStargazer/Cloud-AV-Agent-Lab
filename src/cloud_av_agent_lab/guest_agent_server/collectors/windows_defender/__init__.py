@@ -9,6 +9,14 @@ from .event_ids import (
     event_kind_for_id,
 )
 from .parser import parse_windows_defender_event_xml
+from .reader import (
+    WindowsEventLogAccessDenied,
+    WindowsEventLogChannelNotFound,
+    WindowsEventLogError,
+    WindowsEventLogQueryFailed,
+    WindowsEventLogReader,
+    WindowsEventRecord,
+)
 from .schema import (
     OPERATIONAL_CHANNEL,
     PRODUCT_ID,
@@ -27,6 +35,12 @@ __all__ = [
     "PRODUCT_LOG_SOURCE",
     "PROTECTION_STATE_CHANGED_EVENT_IDS",
     "PROVIDER_NAME",
+    "WindowsEventLogAccessDenied",
+    "WindowsEventLogChannelNotFound",
+    "WindowsEventLogError",
+    "WindowsEventLogQueryFailed",
+    "WindowsEventLogReader",
+    "WindowsEventRecord",
     "WindowsDefenderParsedEvent",
     "event_kind_for_id",
     "parse_windows_defender_event_xml",

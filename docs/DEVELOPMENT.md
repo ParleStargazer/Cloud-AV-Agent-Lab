@@ -403,6 +403,28 @@ python -m cloud_av_agent_lab cloud-reboot --config configs/lab.example.toml --vm
 python -m cloud_av_agent_lab cloud-restore-snapshot --config configs/lab.example.toml --vm-id win10-tencent-manager --confirm-instance lhins-replace-tencent-manager --confirm-snapshot snap-clean-tencent-manager
 ```
 
+### Codex Windows 沙箱 tempfile 兼容说明
+
+在 Codex Windows 沙箱内运行全量单元测试时，Python 3.11 的
+`tempfile.mkdtemp()` 会通过 `os.mkdir(path, 0o700)` 创建临时目录。当前
+Codex 受限 token 与 Windows ACL 组合下，这类目录可能创建成功但随后不可写，
+导致 `tempfile.TemporaryDirectory()` 相关测试大量报 `PermissionError`。
+
+当前开发机的 conda 环境中保留了一个本地兼容文件：
+
+```text
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\Lib\site-packages\sitecustomize.py
+```
+
+该文件只在检测到 Codex 沙箱环境变量时生效，用于让临时目录继承父目录 ACL；
+普通 PowerShell / conda 运行不依赖它。它不是项目源码，也不是交付物，不应提交到
+Git。仓库 `.gitignore` 已排除误生成在仓库根目录的 `sitecustomize.py`。如果需要临时
+禁用该兼容逻辑，可设置：
+
+```powershell
+$env:CLOUD_AV_DISABLE_CODEX_TEMPFILE_PATCH = "1"
+```
+
 当前重点测试文件：
 
 - `tests/test_config.py`：配置解析与安全配置。

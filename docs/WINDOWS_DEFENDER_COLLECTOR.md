@@ -1,9 +1,10 @@
 # Windows Defender Collector Model
 
 This document tracks the Windows Defender / Microsoft Defender Antivirus
-onboarding work. The current implementation is stage 1 only: documentation plus
-an XML parser MVP. It does not read the live Windows Event Log, does not connect
-to Guest Agent endpoints, and is not registered as a product collector yet.
+onboarding work. The current implementation includes stage 1 XML parser support
+and stage 2 readiness scaffolding with an injected fake reader in tests. It does
+not read the live Windows Event Log, does not connect to Guest Agent endpoints,
+and is not registered as a product collector yet.
 
 ## Product ID
 
@@ -36,6 +37,46 @@ Microsoft-Windows-Windows Defender/Operational
 
 Stage 1 parses exported event XML fixtures only. Later stages may add a Windows
 Event Log reader abstraction and a real collector.
+
+## Readiness Stage 2
+
+Stage 2 defines a reader protocol and a Windows Defender readiness probe, but it
+does not provide a real reader implementation.
+
+```python
+class WindowsEventLogReader(Protocol):
+    def query(
+        self,
+        channel: str,
+        event_ids: Sequence[int],
+        start_time_utc: datetime | None = None,
+        end_time_utc: datetime | None = None,
+        limit: int = 50,
+    ) -> Sequence[WindowsEventRecord]:
+        ...
+```
+
+The probe is constructed with an injected reader and platform provider. Tests
+use fake readers only. There is intentionally no pywin32, ctypes, PowerShell,
+`wevtutil`, `cmd`, or shell reader in this stage.
+
+Readiness state semantics:
+
+- `ready`: Windows platform, Defender Operational channel is queryable, and the
+  reader returns normally. An empty result still means the channel is
+  observable; it is reported as `ready` with
+  `reason_codes=["no_recent_activity"]`, not as an exception or `not_ready`.
+- `partial`: the channel is queryable, but the returned records do not include
+  core Defender AV event IDs.
+- `not_ready`: Windows platform, but the Defender Operational channel is
+  explicitly missing.
+- `unknown`: access denied, query failed, reader failure, unexpected exception,
+  or invalid reader result.
+- `unsupported`: non-Windows platform.
+
+Readiness remains scoped to `log_observability`, and `protection_state` remains
+`unknown`. This signal must not be treated as proof that Defender real-time
+protection is enabled.
 
 ## Core Event IDs
 
@@ -132,8 +173,6 @@ The Windows Defender stage 1 parser:
 
 ## Next Stages
 
-Stage 2 should add a Windows Event Log reader abstraction and a readiness probe
-using fake readers in tests first. Stage 3 should register the
-`windows-defender` collector, query the Operational channel through the reader,
-normalize product evidence, and then run a real EICAR smoke test on an isolated
-cloud Windows host.
+Stage 3 should register the `windows-defender` collector, query the Operational
+channel through the reader, normalize product evidence, and then run a real
+EICAR smoke test on an isolated cloud Windows host.
