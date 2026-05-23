@@ -127,6 +127,10 @@ python -m cloud_av_agent_lab guest-check-security-product-readiness `
   --product huorong
 ```
 
+`--product` is required for both readiness commands. For the common Huorong
+path, pass `--product huorong`; the help text shows Huorong as the default
+recommendation, but non-interactive commands do not silently infer it.
+
 For Windows Defender, use the matching VM profile and product ID:
 
 ```powershell

@@ -107,9 +107,8 @@ python -m cloud_av_agent_lab guest-prepare-case --config configs/lab.local.toml 
 
 `guest-prepare-case` sends case metadata, VM metadata, product metadata, and the
 sample cloud object URI. It does not send a local file path and does not trigger
-sample download or execution. The command accepts `--product`; if omitted, it
-uses the selected VM profile's `product_id` for backward-compatible Huorong
-flows. Once a case is prepared, the selected product is written to
+sample download or execution. The command requires `--product`; use `huorong`
+for the default Huorong flow or `windows-defender` for Defender. Once a case is prepared, the selected product is written to
 `case_state.json` as `product_id`; later readiness and collection commands must
 use the same product unless a future explicit override is added.
 
@@ -305,10 +304,12 @@ download the redacted guest-reported evidence bundle. The command defaults to a
 real run after one runtime risk confirmation; use `--dry-run` to keep cloud
 lifecycle, Desktop Worker gate, and controlled action requests in dry-run mode.
 
-`--product` can be `huorong` or `windows-defender`. The selected product is
-written into `run_state.json` as `selected_product_id` and into the generated
-case's `case_state.json` as `product_id`; prepare, readiness, collection,
-summary, and evidence all consume that same case-bound product.
+`--product` can be `huorong` or `windows-defender`. In interactive mode, if it
+is omitted, single-run prompts for it before any generated config is written and
+shows `huorong` as the default suggestion. The selected product is written into
+`run_state.json` as `selected_product_id` and into the generated case's
+`case_state.json` as `product_id`; prepare, readiness, collection, summary, and
+evidence all consume that same case-bound product.
 
 The single-run readiness stage records
 `run_state.stages.security_product_readiness`. `ready` is stored as `ok`;

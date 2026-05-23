@@ -166,6 +166,8 @@ class SingleRunTests(TestCase):
                         "eicar",
                         "--sample-path",
                         str(sample_path),
+                        "--product",
+                        "huorong",
                         "--guest-agent-url",
                         "http://127.0.0.1:8080",
                         "--runs-dir",

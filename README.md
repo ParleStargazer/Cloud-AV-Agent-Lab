@@ -120,7 +120,7 @@ python -m cloud_av_agent_lab single-run `
 
 single-run 会在 `prepare-case` 成功后、`upload-sample` 之前自动调用 `security_product_readiness`，把产品日志可观察性写入 `run_state.stages.security_product_readiness` 和云端 case workspace。该阶段目前是 warning-only：`ready` 记录为 `ok`，`partial`、`not_ready`、`unknown`、`unsupported` 或 API 调用失败都只记录 warning 并继续投送样本，不触发 strict mode。后续 evaluator 只把 readiness 用作 `no_detection_observed` 的保守闸门：只有 `ready` 才允许输出未检出，明确检出证据不受影响。
 
-产品选择现在集中在入口解析：`--product` 可显式选择 `huorong` 或 `windows-defender`；未传时沿用所选 VM profile 的 `product_id`，旧 Huorong 配置继续可用。`guest-prepare-case` 会把解析后的 `product_id` 写入云端 `case_state.json`，single-run 同时写入 `run_state.json.selected_product_id`。后续 readiness、collection、summary 和 evidence 都读取同一 case 绑定产品；显式 `--product` 与 case 绑定值冲突时会失败，不会静默跨产品覆盖。
+产品选择现在集中在入口解析：`--product` 可显式选择 `huorong` 或 `windows-defender`。`guest-prepare-case`、`guest-collect-logs`、`guest-check-security-product-readiness` 和 `guest-security-product-readiness-status` 都要求显式传入 `--product`；帮助文本会提示普通 Huorong 流程使用 `huorong`。交互式 `single-run` 会在生成配置前首先询问 product，默认提示为 `huorong`；非交互 single-run 也应显式传入 `--product`。`guest-prepare-case` 会把解析后的 `product_id` 写入云端 `case_state.json`，single-run 同时写入 `run_state.json.selected_product_id`。后续 readiness、collection、summary 和 evidence 都读取同一 case 绑定产品；显式 `--product` 与 case 绑定值冲突时会失败，不会静默跨产品覆盖。
 
 真实触发仍然只允许云端 Guest Agent 执行当前 case 已登记上传文件，且必须满足云端 execution 开关和 token 校验；本地控制面仍不执行样本。single-run 会根据上传轮询结果决定是否触发：只有 `stable` 才请求执行接口；`removed_after_save`、`locked_or_busy` 或未知状态会记录为执行跳过，并继续 collection、summary 和 evidence 导出。若执行接口返回样本已不存在或启动失败这类业务状态，也会作为本轮观察结果继续收集证据，而不是直接中断整个流程。
 

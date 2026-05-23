@@ -476,22 +476,16 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_client.collect_products, ["windows-defender"])
 
-    def test_guest_collect_logs_defaults_to_vm_product_for_old_huorong_flow(
+    def test_guest_collect_logs_requires_explicit_product(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
             config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
-            fake_client = _FakeGuestAgentClient()
+            stderr = StringIO()
 
-            with (
-                patch(
-                    "cloud_av_agent_lab.cli._create_guest_agent_client",
-                    return_value=fake_client,
-                ),
-                redirect_stdout(StringIO()),
-            ):
-                exit_code = main(
+            with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+                main(
                     [
                         "guest-collect-logs",
                         "--config",
@@ -503,8 +497,8 @@ class CloudLifecycleCliGuardTests(TestCase):
                     ]
                 )
 
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(fake_client.collect_products, ["huorong"])
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("--product", stderr.getvalue())
 
     def test_guest_collect_logs_rejects_conflicting_explicit_product(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -814,6 +808,8 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "eicar",
                         "--sample-path",
                         str(sample_path),
+                        "--product",
+                        "huorong",
                         "--guest-agent-url",
                         "http://127.0.0.1:8080",
                         "--runs-dir",
@@ -874,6 +870,8 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "eicar",
                         "--sample-path",
                         str(sample_path),
+                        "--product",
+                        "huorong",
                         "--guest-agent-url",
                         "http://127.0.0.1:8080",
                         "--runs-dir",
@@ -884,6 +882,61 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(exit_code, 0)
         confirm_real.assert_not_called()
         self.assertTrue(run_single.call_args.args[0].dry_run)
+
+    def test_single_run_prompts_product_before_generated_config_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.txt"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            result = SingleRunResult(
+                run_id="run-001",
+                case_id="eicar__windows-defender__run-001",
+                run_dir=root / "runs" / "run-001",
+                run_state_path=root / "runs" / "run-001" / "run_state.json",
+                generated_config_path=root / "runs" / "run-001" / "lab.generated.toml",
+                summary_path=root / "runs" / "run-001" / "case_summary.json",
+                evidence_bundle_path=root / "runs" / "run-001" / "case_evidence.zip",
+                verdict="",
+                confidence="",
+                final_status="completed",
+                cleanup_status="dry_run",
+                emergency_poweroff_status="not_needed",
+            )
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli.run_single_case", return_value=result
+                ) as run_single,
+                patch.object(sys.stdin, "isatty", return_value=True),
+                patch(
+                    "builtins.input",
+                    side_effect=[
+                        "windows-defender",
+                        "lhins-example",
+                        "lhsnap-example",
+                        "ap-singapore",
+                        "eicar",
+                        str(sample_path),
+                        "http://127.0.0.1:8080",
+                    ],
+                ) as input_mock,
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "single-run",
+                        "--dry-run",
+                        "--runs-dir",
+                        str(root / "runs"),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            input_mock.call_args_list[0].args[0],
+            "Security product id [huorong]: ",
+        )
+        self.assertEqual(run_single.call_args.args[0].product_id, "windows-defender")
 
     def test_single_run_missing_input_exits_clearly(self) -> None:
         stderr = StringIO()

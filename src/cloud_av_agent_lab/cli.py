@@ -115,8 +115,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     guest_prepare.add_argument(
         "--product",
-        default="",
-        help="optional security product id; defaults to the VM profile product_id",
+        required=True,
+        help="required security product id; use huorong unless selecting another product",
     )
 
     guest_status = subparsers.add_parser(
@@ -194,8 +194,8 @@ def build_parser() -> argparse.ArgumentParser:
     guest_collect.add_argument("--case-id", required=True, help="prepared case id")
     guest_collect.add_argument(
         "--product",
-        default="",
-        help="security product id for log collection; defaults to VM profile product_id",
+        required=True,
+        help="required security product id for log collection; default recommendation: huorong",
     )
 
     guest_readiness = subparsers.add_parser(
@@ -209,8 +209,8 @@ def build_parser() -> argparse.ArgumentParser:
     guest_readiness.add_argument("--case-id", required=True, help="prepared case id")
     guest_readiness.add_argument(
         "--product",
-        default="",
-        help="security product id to check; defaults to VM profile product_id",
+        required=True,
+        help="required security product id to check; default recommendation: huorong",
     )
 
     guest_readiness_status = subparsers.add_parser(
@@ -228,8 +228,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     guest_readiness_status.add_argument(
         "--product",
-        default="",
-        help="optional product id; fails if it conflicts with the prepared case",
+        required=True,
+        help=(
+            "required product id; default recommendation: huorong; "
+            "fails if it conflicts with the prepared case"
+        ),
     )
 
     guest_execute = subparsers.add_parser(
@@ -340,9 +343,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     single_run.add_argument(
         "--product",
-        default="huorong",
+        default="",
         choices=SINGLE_RUN_PRODUCT_CHOICES,
-        help="security product profile",
+        help="security product profile; prompted when omitted, default prompt: huorong",
     )
     single_run.add_argument(
         "--guest-agent-url",
@@ -911,6 +914,7 @@ def _single_run_options_from_args(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
 ) -> SingleRunOptions:
+    product_id = _single_run_product_or_prompt(parser, args.product)
     instance_id = _value_or_prompt(parser, "Lighthouse instance id", args.instance_id)
     snapshot_id = _value_or_prompt(parser, "Baseline snapshot id", args.snapshot_id)
     region = _value_or_prompt(parser, "Region", args.region, default="ap-singapore")
@@ -929,7 +933,7 @@ def _single_run_options_from_args(
         sample_name=sample_name,
         sample_path=Path(sample_path),
         guest_agent_url=guest_agent_url,
-        product_id=args.product,
+        product_id=product_id,
         desktop_worker_url=args.desktop_worker_url,
         require_desktop_worker=not args.disable_desktop_worker_gate,
         dry_run=args.dry_run,
@@ -946,6 +950,26 @@ def _single_run_options_from_args(
             read_seconds=args.salvage_read_timeout_seconds,
         ),
     )
+
+
+def _single_run_product_or_prompt(
+    parser: argparse.ArgumentParser,
+    value: str,
+) -> str:
+    product_id = _value_or_prompt(
+        parser,
+        "Security product id",
+        value,
+        default="huorong",
+    ).casefold()
+    if product_id not in SINGLE_RUN_PRODUCT_CHOICES:
+        supported = ", ".join(SINGLE_RUN_PRODUCT_CHOICES)
+        parser.exit(
+            2,
+            "error: [Local Check] unsupported security product "
+            f"{product_id!r}; supported products: {supported}\n",
+        )
+    return product_id
 
 
 def _confirm_single_run_real_operation(

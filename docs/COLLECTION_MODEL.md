@@ -86,10 +86,13 @@ matching. The rest of the system consumes normalized events and collector
 results; it should not need to know raw product database columns.
 
 The selected `product_id` is resolved once at the CLI/orchestration entrypoint.
-`guest-prepare-case` writes it into `case_state.json`; later readiness and
-collection calls must match that case-bound product. If a caller explicitly
-passes a different product, the server rejects the request instead of silently
-collecting logs for another baseline.
+Product-aware commands require explicit `--product`, and interactive
+`single-run` prompts for the product before generating its temporary config,
+with `huorong` shown as the default suggestion. `guest-prepare-case` writes the
+resolved product into `case_state.json`; later readiness and collection calls
+must match that case-bound product. If a caller passes a different product, the
+server rejects the request instead of silently collecting logs for another
+baseline.
 
 ## Huorong MVP
 
