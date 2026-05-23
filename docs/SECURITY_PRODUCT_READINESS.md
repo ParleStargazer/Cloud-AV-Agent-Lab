@@ -147,7 +147,8 @@ Load the last result without rerunning the probe:
 python -m cloud_av_agent_lab guest-security-product-readiness-status `
   --config configs/lab.local.toml `
   --vm-id win10-huorong `
-  --case-id eicar-001__huorong
+  --case-id eicar-001__huorong `
+  --product huorong
 ```
 
 Expected concise output:

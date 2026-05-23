@@ -102,7 +102,7 @@ Current harmless commands:
 
 ```powershell
 python -m cloud_av_agent_lab guest-health --config configs/lab.local.toml --vm-id sg-win10
-python -m cloud_av_agent_lab guest-prepare-case --config configs/lab.local.toml --sample-id case-001 --vm-id sg-win10
+python -m cloud_av_agent_lab guest-prepare-case --config configs/lab.local.toml --sample-id case-001 --vm-id sg-win10 --product huorong
 ```
 
 `guest-prepare-case` sends case metadata, VM metadata, product metadata, and the

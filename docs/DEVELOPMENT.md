@@ -350,7 +350,7 @@ single-run 面向普通用户，默认就是完整真实流程：生成配置为
 
 上传后执行不再无条件触发。single-run 会读取上传状态轮询的最终结果：`stable` 才调用 `execute_uploaded_sample` 或 dry-run action；`removed_after_save` 表示文件已被安全产品处理，`locked_or_busy` 表示文件可能正在被安全产品占用，二者都会记录 `execution_action_status = "skipped"` 并继续进入日志收集、summary 和 evidence 导出。若状态查询返回其他未知状态，也按保守策略跳过执行。即使执行接口返回“样本已不存在”或“启动失败”这类业务失败，也会记录为 `not_started` / `launch_failed` 等观察结果，并继续收集证据；只有网络、鉴权、本地配置和云生命周期等基础设施错误才会让 single-run 进入失败分支。
 
-推荐单轮流程已经串联：运行锁、生成配置、实例状态查询、快照回滚/启动、Guest Agent 连续 health OK、Desktop Worker ready gate、settling cooldown、prepare-case、security product readiness warning-only check、upload-sample 与动态状态轮询、受控 action、execution-status 轮询、Huorong collection、case summary、evidence bundle、结尾回滚和 emergency stop 兜底。证据导出在清理前执行；异常分支会短超时尝试 evidence salvage，失败只记录，不阻塞清理。
+推荐单轮流程已经串联：运行锁、生成配置、实例状态查询、快照回滚/启动、Guest Agent 连续 health OK、Desktop Worker ready gate、settling cooldown、prepare-case、security product readiness warning-only check、upload-sample 与动态状态轮询、受控 action、execution-status 轮询、按 `product_id` 路由的 collection、case summary、evidence bundle、结尾回滚和 emergency stop 兜底。证据导出在清理前执行；异常分支会短超时尝试 evidence salvage，失败只记录，不阻塞清理。
 
 `run_state.json` 现在同时保留旧的扁平字段和新的结构化 `stages`：
 `environment`、`delivery`、`security_product_readiness`、`execution`、

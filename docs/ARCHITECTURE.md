@@ -83,18 +83,20 @@ bundle before the Lighthouse baseline snapshot is restored. Defender or
 vendor-log parsing should not be coupled into upload or trigger endpoints.
 
 Security product readiness is a separate case-scoped pre-delivery observation
-stage. The first MVP supports Huorong log observability and writes
-`case_security_product_readiness.json`, `case_state.security_product_readiness`,
-and a `case_report.json` summary. It is read-only: it checks the product log
-directory, copies `log.db` into the case readiness snapshot directory, and reads
-copied-file metadata. It does not parse interception logs, does not read sample
+stage. Current probes are selected by `product_id` through the readiness
+registry and support Huorong and Windows Defender log observability. The result
+writes `case_security_product_readiness.json`,
+`case_state.security_product_readiness`, and a `case_report.json` summary. It is
+read-only: Huorong checks copied `log.db` metadata, while Windows Defender uses
+the Windows Event Log reader abstraction to check Operational channel
+observability. Readiness does not parse interception logs, does not read sample
 bytes, does not modify product services, and does not prove real-time
 protection is enabled. The evaluator uses readiness only to gate the optimistic
 `no_detection_observed` verdict: `ready` is required before claiming no
 detection was observed, while explicit product-log detections still win. The
 evidence exporter may include only the redacted
-`case_security_product_readiness.json` metadata; the copied readiness snapshot
-directory is raw product log material and remains excluded. Collection remains
+`case_security_product_readiness.json` metadata; copied readiness snapshot
+directories are raw product log material and remain excluded. Collection remains
 responsible for product-log detection evidence.
 
 ## Adapter Contracts

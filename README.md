@@ -389,7 +389,7 @@ Evaluation / Evidence Export MVP 在 collection 之后运行。collector 只负�
 
 - 云厂商适配器：实现 `CloudVmAdapter`，对接 Lighthouse 快照恢复、开关机、截图、隔离网络。
 - 客户机适配器：实现 `GuestAutomationAdapter`，在云端 VM 内完成从云对象拉取样本、启动测试、采集日志。
-- 产品配置：为腾讯电脑管家、火绒、360 等维护独立日志路径、UI 标题和告警关键字。
+- 产品扩展：按 `docs/PRODUCT_ONBOARDING.md` 接入新的 readiness probe、collector registry 条目、artifact policy 和产品归因规则，避免在 CLI、evaluator 或 exporter 中写死产品分支。
 - 报告增强：加入人工测试基线对比、误报/漏报复核字段和趋势统计。
 
 ## 本地验证
