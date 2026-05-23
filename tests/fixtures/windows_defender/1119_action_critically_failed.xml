@@ -1,0 +1,19 @@
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+  <System>
+    <Provider Name="Microsoft-Windows-Windows Defender"/>
+    <EventID>1119</EventID>
+    <TimeCreated SystemTime="2026-05-23T04:04:10.0000000Z"/>
+    <EventRecordID>42346</EventRecordID>
+    <Channel>Microsoft-Windows-Windows Defender/Operational</Channel>
+    <Computer>WIN-TEST</Computer>
+  </System>
+  <EventData>
+    <Data Name="Threat Name">Virus:DOS/EICAR_Test_File</Data>
+    <Data Name="Threat ID">2147519003</Data>
+    <Data Name="Path">file:_C:\CloudAvAgentLab\cases\eicar__windows-defender\sample\eicar.txt</Data>
+    <Data Name="Action Name">Remove</Data>
+    <Data Name="Status Code">Critically Failed</Data>
+    <Data Name="Error Code">0x80508023</Data>
+    <Data Name="Error Description">The remediation action failed.</Data>
+  </EventData>
+</Event>

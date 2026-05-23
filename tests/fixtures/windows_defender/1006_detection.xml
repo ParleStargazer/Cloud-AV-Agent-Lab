@@ -1,0 +1,19 @@
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+  <System>
+    <Provider Name="Microsoft-Windows-Windows Defender"/>
+    <EventID>1006</EventID>
+    <TimeCreated SystemTime="2026-05-23T04:02:00.0000000Z"/>
+    <EventRecordID>22345</EventRecordID>
+    <Channel>Microsoft-Windows-Windows Defender/Operational</Channel>
+    <Computer>WIN-TEST</Computer>
+  </System>
+  <EventData>
+    <Data Name="Threat Name">Virus:DOS/EICAR_Test_File</Data>
+    <Data Name="Threat ID">2147519003</Data>
+    <Data Name="Severity">Severe</Data>
+    <Data Name="Category">Virus</Data>
+    <Data Name="Path">file:_C:\CloudAvAgentLab\cases\eicar__windows-defender\sample\eicar.txt</Data>
+    <Data Name="Process Name">C:\Windows\System32\notepad.exe</Data>
+    <Data Name="User">AVLAB\tester</Data>
+  </EventData>
+</Event>

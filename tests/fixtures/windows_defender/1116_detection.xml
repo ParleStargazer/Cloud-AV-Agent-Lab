@@ -1,0 +1,23 @@
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+  <System>
+    <Provider Name="Microsoft-Windows-Windows Defender"/>
+    <EventID>1116</EventID>
+    <TimeCreated SystemTime="2026-05-23T04:01:02.0000000Z"/>
+    <EventRecordID>12345</EventRecordID>
+    <Channel>Microsoft-Windows-Windows Defender/Operational</Channel>
+    <Computer>WIN-TEST</Computer>
+  </System>
+  <EventData>
+    <Data Name="Product Name">Microsoft Defender Antivirus</Data>
+    <Data Name="Threat ID">2147519003</Data>
+    <Data Name="Threat Name">Virus:DOS/EICAR_Test_File</Data>
+    <Data Name="Severity Name">Severe</Data>
+    <Data Name="Category Name">Virus</Data>
+    <Data Name="Path">file:_C:\CloudAvAgentLab\cases\eicar__windows-defender\sample\eicar.txt</Data>
+    <Data Name="Process Name">C:\Windows\explorer.exe</Data>
+    <Data Name="Detection User">NT AUTHORITY\SYSTEM</Data>
+    <Data Name="Action Name">Not Applicable</Data>
+    <Data Name="Status Code">1</Data>
+    <Data Name="Custom Field">kept as raw data</Data>
+  </EventData>
+</Event>

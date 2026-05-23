@@ -1,0 +1,15 @@
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+  <System>
+    <Provider Name="Microsoft-Windows-Windows Defender"/>
+    <EventID>5001</EventID>
+    <TimeCreated SystemTime="2026-05-23T04:03:10.0000000Z"/>
+    <EventRecordID>32346</EventRecordID>
+    <Channel>Microsoft-Windows-Windows Defender/Operational</Channel>
+    <Computer>WIN-TEST</Computer>
+  </System>
+  <EventData>
+    <Data Name="Product Name">Microsoft Defender Antivirus</Data>
+    <Data Name="Feature Name">Real-time Protection</Data>
+    <Data Name="New State">Disabled</Data>
+  </EventData>
+</Event>
