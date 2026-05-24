@@ -59,6 +59,31 @@ class WindowsDefenderReadinessTests(TestCase):
         self.assertIn(5000, reader.calls[0]["event_ids"])
         self.assertEqual(reader.calls[0]["limit"], DEFAULT_QUERY_LIMIT)
 
+    def test_default_reader_factory_is_used_when_reader_not_injected(self) -> None:
+        reader = FakeWindowsEventLogReader(records=[])
+        original_factory = (
+            WindowsDefenderSecurityProductReadinessProbe.DEFAULT_READER_FACTORY
+        )
+        try:
+            WindowsDefenderSecurityProductReadinessProbe.DEFAULT_READER_FACTORY = (
+                staticmethod(lambda: reader)
+            )
+            result = WindowsDefenderSecurityProductReadinessProbe(
+                platform_provider=lambda: "Windows"
+            ).check(
+                SecurityProductReadinessContext(
+                    product_id="windows-defender",
+                    workspace=Path("unused"),
+                )
+            )
+        finally:
+            WindowsDefenderSecurityProductReadinessProbe.DEFAULT_READER_FACTORY = (
+                original_factory
+            )
+
+        self.assertEqual(result.state, "ready")
+        self.assertEqual(reader.calls[0]["channel"], OPERATIONAL_CHANNEL)
+
     def test_fake_reader_empty_records_return_ready_with_no_recent_activity(
         self,
     ) -> None:

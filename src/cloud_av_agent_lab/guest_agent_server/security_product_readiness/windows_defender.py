@@ -14,6 +14,9 @@ from cloud_av_agent_lab.guest_agent_server.collectors.windows_defender import (
     WindowsEventLogReader,
     WindowsEventRecord,
 )
+from cloud_av_agent_lab.guest_agent_server.collectors.windows_defender.reader import (
+    PyWin32WindowsEventLogReader,
+)
 from cloud_av_agent_lab.guest_agent_server.workspace.io import _utc_now
 
 from .base import (
@@ -29,13 +32,14 @@ DEFAULT_QUERY_LIMIT = 50
 
 class WindowsDefenderSecurityProductReadinessProbe:
     product_id = PRODUCT_ID
+    DEFAULT_READER_FACTORY = PyWin32WindowsEventLogReader
 
     def __init__(
         self,
         reader: WindowsEventLogReader | None = None,
         platform_provider: Callable[[], str] | None = None,
     ) -> None:
-        self.reader = reader
+        self.reader = reader if reader is not None else self.DEFAULT_READER_FACTORY()
         self.platform_provider = platform_provider or platform.system
 
     def check(
@@ -74,23 +78,6 @@ class WindowsDefenderSecurityProductReadinessProbe:
                 data={"platform": "Windows"},
             )
         )
-
-        if self.reader is None:
-            checks.append(
-                SecurityProductReadinessCheck(
-                    name="defender_operational_channel_query",
-                    status="failed",
-                    message="Windows Event Log reader is not configured",
-                    data={"channel": OPERATIONAL_CHANNEL},
-                )
-            )
-            return _result(
-                state="unknown",
-                checks=checks,
-                warnings=warnings,
-                errors=["Windows Event Log reader is not configured"],
-                reason_codes=["event_log_reader_not_configured"],
-            )
 
         try:
             records = self.reader.query(
