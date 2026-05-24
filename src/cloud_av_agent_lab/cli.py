@@ -378,7 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
     single_run.add_argument(
         "--guest-ready-timeout-seconds",
         type=float,
-        default=120.0,
+        default=180.0,
         help="maximum seconds to wait for Guest Agent health",
     )
     single_run.add_argument(

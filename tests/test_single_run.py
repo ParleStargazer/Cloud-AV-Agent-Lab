@@ -858,7 +858,7 @@ def _options(
     dry_run: bool = False,
     product_id: str = "huorong",
     salvage_timeout: NetworkTimeoutProfile | None = None,
-    guest_ready_timeout_seconds: float = 120.0,
+    guest_ready_timeout_seconds: float = 180.0,
     guest_ready_successes: int = 2,
 ) -> SingleRunOptions:
     return SingleRunOptions(
