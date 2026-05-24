@@ -71,6 +71,45 @@ SENSITIVE_MESSAGE_RE = re.compile(
     r"(?i)\b(authorization|bearer|token|secret|password|credential|api[_-]?key|"
     r"cloud[_-]?secret)\b(\s*[:=]\s*)?[^\s,;\"']*"
 )
+SINGLE_RUN_PRODUCT_PROFILES: dict[str, dict[str, Any]] = {
+    "huorong": {
+        "display_name": "Huorong Internet Security",
+        "vendor": "Huorong",
+        "log_paths": [
+            r"C:\ProgramData\Huorong\Sysdiag",
+            r"C:\Program Files\Huorong\Sysdiag\log",
+        ],
+        "ui_window_titles": ["Huorong", "火绒"],
+        "detection_keywords": [
+            "blocked",
+            "quarantine",
+            "virus",
+            "trojan",
+            "malware",
+            "拦截",
+            "隔离",
+        ],
+    },
+    "windows-defender": {
+        "display_name": "Microsoft Defender Antivirus",
+        "vendor": "Microsoft",
+        "log_paths": [
+            "Microsoft-Windows-Windows Defender/Operational",
+        ],
+        "ui_window_titles": [
+            "Windows Security",
+            "Microsoft Defender Antivirus",
+        ],
+        "detection_keywords": [
+            "detected",
+            "quarantine",
+            "blocked",
+            "removed",
+            "malware",
+            "threat",
+        ],
+    },
+}
 
 
 class SingleRunError(RuntimeError):
@@ -1260,49 +1299,14 @@ notes = "Generated single-run EICAR or harmless placeholder reference."
 
 
 def _product_profile(product_id: str) -> dict[str, Any]:
-    profiles: dict[str, dict[str, Any]] = {
-        "huorong": {
-            "display_name": "Huorong Internet Security",
-            "vendor": "Huorong",
-            "log_paths": [
-                r"C:\ProgramData\Huorong\Sysdiag",
-                r"C:\Program Files\Huorong\Sysdiag\log",
-            ],
-            "ui_window_titles": ["Huorong", "火绒"],
-            "detection_keywords": [
-                "blocked",
-                "quarantine",
-                "virus",
-                "trojan",
-                "malware",
-                "拦截",
-                "隔离",
-            ],
-        },
-        "windows-defender": {
-            "display_name": "Microsoft Defender Antivirus",
-            "vendor": "Microsoft",
-            "log_paths": [
-                "Microsoft-Windows-Windows Defender/Operational",
-            ],
-            "ui_window_titles": [
-                "Windows Security",
-                "Microsoft Defender Antivirus",
-            ],
-            "detection_keywords": [
-                "detected",
-                "quarantine",
-                "blocked",
-                "removed",
-                "malware",
-                "threat",
-            ],
-        },
-    }
-    profile = profiles.get(product_id)
+    profile = SINGLE_RUN_PRODUCT_PROFILES.get(product_id)
     if profile is None:
         raise SingleRunError(f"single-run does not support product={product_id!r}")
     return profile
+
+
+def supported_single_run_products() -> tuple[str, ...]:
+    return tuple(sorted(SINGLE_RUN_PRODUCT_PROFILES))
 
 
 def _instance_state(response: Any) -> str:

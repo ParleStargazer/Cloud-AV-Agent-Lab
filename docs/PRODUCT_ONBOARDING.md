@@ -48,6 +48,7 @@ tencent-pc-manager
 Use the same `product_id` in:
 
 - VM/product config;
+- the single-run generated-config product profile;
 - readiness probe registry;
 - collector registry;
 - collection artifacts;
@@ -231,6 +232,8 @@ For collection:
 
 Do not add product-specific conditionals to `single_run.py`,
 `evaluation/evaluator.py`, or `evidence/exporter.py` for ordinary onboarding.
+The only ordinary `single_run.py` change should be adding a metadata entry to
+`SINGLE_RUN_PRODUCT_PROFILES`; CLI choices are derived from that profile list.
 
 ## Review Questions
 

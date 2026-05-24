@@ -34,7 +34,10 @@ from cloud_av_agent_lab.network.client import NetworkClient
 from cloud_av_agent_lab.orchestration import SingleRunOptions, run_single_case
 from cloud_av_agent_lab.orchestration.locks import InstanceLockedError
 from cloud_av_agent_lab.orchestration.prompts import prompt_default
-from cloud_av_agent_lab.orchestration.single_run import SingleRunError
+from cloud_av_agent_lab.orchestration.single_run import (
+    SingleRunError,
+    supported_single_run_products,
+)
 from cloud_av_agent_lab.orchestration.timeout import NetworkTimeoutProfile
 from cloud_av_agent_lab.product_resolution import (
     ProductResolutionError,
@@ -59,7 +62,6 @@ GUEST_EXECUTION_TERMINAL_STATES = {
     "launch_failed",
     "terminated_or_disappeared",
 }
-SINGLE_RUN_PRODUCT_CHOICES = ("huorong", "windows-defender")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -344,7 +346,7 @@ def build_parser() -> argparse.ArgumentParser:
     single_run.add_argument(
         "--product",
         default="",
-        choices=SINGLE_RUN_PRODUCT_CHOICES,
+        choices=supported_single_run_products(),
         help="security product profile; prompted when omitted, default prompt: huorong",
     )
     single_run.add_argument(
@@ -962,8 +964,9 @@ def _single_run_product_or_prompt(
         value,
         default="huorong",
     ).casefold()
-    if product_id not in SINGLE_RUN_PRODUCT_CHOICES:
-        supported = ", ".join(SINGLE_RUN_PRODUCT_CHOICES)
+    supported_products = supported_single_run_products()
+    if product_id not in supported_products:
+        supported = ", ".join(supported_products)
         parser.exit(
             2,
             "error: [Local Check] unsupported security product "
