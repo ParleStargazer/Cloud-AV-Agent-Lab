@@ -1721,6 +1721,7 @@ class GuestAgentServerTests(unittest.TestCase):
                 headers=self._headers(),
             )
 
+        workspace = self.workdir / "cases" / "case-001__huorong"
         response = self.client.get(
             "/cases/case-001__huorong/summary",
             headers=self._headers(),
@@ -1734,9 +1735,14 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(summary["verdict"], "detected_or_blocked")
         self.assertEqual(summary["confidence"], "high")
         self.assertGreaterEqual(len(summary["reasons"]), 1)
-        workspace = self.workdir / "cases" / "case-001__huorong"
         self.assertTrue((workspace / "case_summary.json").is_file())
         self.assertTrue((workspace / "case_summary.md").is_file())
+        self.assertNotIn(str(workspace), response.text)
+        self.assertIn("<case_workspace>", response.text)
+        self.assertNotIn(
+            str(workspace),
+            (workspace / "case_summary.json").read_text(encoding="utf-8"),
+        )
         self.assertNotIn(TOKEN, response.text)
         self.assertNotIn("EICAR harmless placeholder", response.text)
 

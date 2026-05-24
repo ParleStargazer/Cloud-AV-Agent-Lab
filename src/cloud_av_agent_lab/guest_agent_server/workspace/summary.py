@@ -6,6 +6,7 @@ from typing import Any
 
 from cloud_av_agent_lab.evaluation import evaluate_case, render_summary_markdown
 from cloud_av_agent_lab.evidence import build_evidence_bundle
+from cloud_av_agent_lab.evidence.redaction import RedactionContext, redact_json_value
 
 from .errors import WorkspaceNotFoundError
 from .io import _read_json_file, _read_recent_events
@@ -37,7 +38,7 @@ def write_case_summary(workspace: Path, max_events: int = 20) -> dict[str, Any]:
         events=events,
         max_timeline_events=max_events,
     )
-    payload = summary.to_dict()
+    payload = _redact_summary_payload(summary.to_dict(), workspace)
     (workspace / "case_summary.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -47,6 +48,14 @@ def write_case_summary(workspace: Path, max_events: int = 20) -> dict[str, Any]:
         encoding="utf-8",
     )
     return payload
+
+
+def _redact_summary_payload(payload: dict[str, Any], workspace: Path) -> dict[str, Any]:
+    redacted = redact_json_value(
+        payload,
+        RedactionContext(case_workspace=str(workspace.resolve())),
+    )
+    return redacted if isinstance(redacted, dict) else payload
 
 
 def export_case_evidence_bundle(

@@ -134,6 +134,50 @@ Verdict mapping:
 The collector records normalized evidence and metadata only. It does not include
 raw EVTX or binary Event Log snapshots in the default evidence bundle.
 
+## Smoke Test Sign-Off
+
+2026-05-24: Windows Defender EICAR smoke test passed in an isolated
+Lighthouse Windows environment. This was a real `single-run` smoke test, not a
+read-only collection-only check.
+
+Run:
+
+```text
+runs/20260524-183317_eicar__windows-defender
+```
+
+Key results:
+
+- `product_id = "windows-defender"` was selected and persisted through the run.
+- Security product readiness returned `ready` for `log_observability`;
+  `protection_state` remained `unknown`.
+- Upload observation ended in `removed_after_save`.
+- Execution was skipped as `skipped_removed_after_save`, because the uploaded
+  file was already gone before controlled execution.
+- Collection finished with `collection_state = "collected"`.
+- Normalized evidence contained Defender Operational events:
+  - `1116` detected `Virus:DOS/EICAR_Test_File`;
+  - `1117` action taken / quarantine for `Virus:DOS/EICAR_Test_File`.
+- Both evidence records had `attribution = "strong"` with
+  `matched_on = ["time_window", "path"]`.
+- Case summary verdict was `detected_or_blocked` with `high` confidence.
+- Cleanup finished with `cleanup_status = "restored"`.
+
+Evidence bundle checks:
+
+- raw EVTX was not included;
+- uploaded sample bytes were not included;
+- token values, cloud credentials, and `configs/real.toml` were not included;
+- only `sample/sample.json` metadata was included under `sample/`;
+- `case_security_product_readiness.json` was included as redacted readiness
+  metadata.
+
+The run root `case_summary.json` previously exposed the cloud-side case
+workspace path in product-log evidence. The summary generation path now applies
+the shared text redaction model so externally copied summary JSON uses
+`<case_workspace>` consistently. This does not change the evidence bundle
+allowlist or raw artifact policy.
+
 ## Core Event IDs
 
 The first parser MVP classifies these event IDs:
@@ -229,7 +273,8 @@ The Windows Defender collector:
 
 ## Next Stages
 
-The next step is a real isolated-cloud smoke test with EICAR or a harmless
-placeholder file on a Windows Defender Guest Agent. That validation must be run
-manually on the cloud Windows host; local tests remain fake-reader based and do
-not read this machine's Event Log.
+The Windows Defender EICAR smoke test is now complete. Future work can focus on
+repeatability improvements, additional attribution fields, or onboarding a
+third product through the existing product profile / readiness probe /
+collector / docs / tests path. Local tests remain fake-reader based and do not
+read this machine's Event Log.
