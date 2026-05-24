@@ -141,6 +141,22 @@ bundle after global text redaction and is categorized as
 `security-product-readiness/`, such as Huorong `log.db`, `log.db-wal`, and
 `log.db-shm`, remain excluded and are not treated as default evidence.
 
+## Planned 360 Onboarding
+
+The next planned product candidate is 360. It should follow the same product
+onboarding path as Huorong and Windows Defender: choose one stable `product_id`,
+add a low-risk readiness probe, add a product collector, register both through
+the existing registries, and keep evaluator / evidence exporter behavior
+schema-driven.
+
+The expected implementation shape is closer to Huorong than Windows Defender:
+copy product log files into the current case workspace, parse the copied files
+read-only, emit normalized evidence, and keep raw product logs out of the
+default redacted evidence bundle. The actual log path, file format, table /
+record schema, timestamp fields, action semantics, and attribution fields must
+be audited before implementation; Huorong assumptions should not be hard-coded
+for 360 without that check.
+
 ## Unified Event Timeline
 
 `case_collection.json` contains a unified event timeline. It merges Guest Agent

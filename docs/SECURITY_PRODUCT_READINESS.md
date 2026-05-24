@@ -95,7 +95,9 @@ The result is also summarized in:
   warnings.
 - `not_ready`: the log directory or `log.db` is missing.
 - `unknown`: core copy/stat checks failed or there was not enough information.
-- `unsupported`: no readiness probe exists for the requested product.
+- `unsupported`: the product or current platform is not supported by the
+  selected readiness probe. Unknown product IDs should normally fail earlier in
+  product resolution instead of being silently treated as a supported product.
 
 For both current probes, `scope = "log_observability"` and `protection_state =
 "unknown"`. This is deliberate: readiness does not confirm real-time protection
