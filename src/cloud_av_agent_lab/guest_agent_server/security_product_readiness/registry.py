@@ -8,10 +8,12 @@ from .base import (
     SecurityProductReadinessResult,
 )
 from .huorong import HuorongSecurityProductReadinessProbe
+from .qihoo_360 import Qihoo360SecurityProductReadinessProbe
 from .windows_defender import WindowsDefenderSecurityProductReadinessProbe
 
 SUPPORTED_SECURITY_PRODUCT_READINESS_PROBES = {
     "huorong": HuorongSecurityProductReadinessProbe,
+    "qihoo-360": Qihoo360SecurityProductReadinessProbe,
     "windows-defender": WindowsDefenderSecurityProductReadinessProbe,
 }
 

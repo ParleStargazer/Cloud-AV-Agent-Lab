@@ -1,8 +1,8 @@
 # Qihoo 360 Collector Model
 
 This document tracks the 360 Security Guard / 360safe onboarding work. The
-current implementation covers stage 1 parser support and stage 2 baseline /
-delta helpers for `360safe.Summary.dat` snapshots.
+current implementation covers stage 1 parser support, stage 2 baseline / delta
+helpers, and a stage 3 readiness probe for `360safe.Summary.dat` snapshots.
 
 ## Product ID
 
@@ -98,9 +98,34 @@ match without a case path is limited to `medium`; the known EICAR SHA-256 is
 explicitly downweighted with `eicar_hash_is_reused_across_cases` when the case
 path is not matched.
 
+## Readiness Probe Stage
+
+Stage 3 adds:
+
+```text
+src/cloud_av_agent_lab/guest_agent_server/security_product_readiness/qihoo_360.py
+```
+
+The readiness probe is registered for product id `qihoo-360`. It only verifies
+log observability:
+
+- non-Windows platforms return `unsupported`;
+- Windows with no discoverable `360safe.Summary.dat` returns `not_ready`;
+- readable SQLite with queryable `FI` and `FQ` tables returns `ready`;
+- an empty `FQ` table still returns `ready` with `summary_records_empty`;
+- missing optional `360safe.Summary.union1` still returns `ready` with
+  `union_metadata_missing`;
+- SQLite/header/schema/query/access errors return `unknown`.
+
+The probe does not determine whether 360 real-time protection is enabled.
+`protection_state` remains `unknown`.
+
+Readiness does not copy raw artifacts into the case workspace. Snapshot copying
+and stability metadata remain collector-stage responsibilities.
+
 ## Safety Boundary
 
-The current stage 1/2 implementation:
+The current stage 1/2/3 implementation:
 
 - reads only SQLite snapshot metadata;
 - does not read uploaded sample bytes;
@@ -109,15 +134,15 @@ The current stage 1/2 implementation:
 - does not add allowlists or exclusions;
 - does not use PowerShell, `cmd`, `wevtutil`, external SQLite CLIs, or shell
   commands;
-- does not register a live collector or readiness probe;
+- does not register a live collector;
+- registers only the read-only `qihoo-360` readiness probe;
 - does not call Guest Agent endpoints;
 - does not touch `configs/real.toml`;
 - does not trigger Tencent Cloud APIs.
 
 ## Next Stages
 
-Next stages should add a read-only readiness probe, then a collector that copies
-`360safe.Summary.dat` into the case
-workspace before parsing it. Raw SQLite snapshots, WAL/SHM files, quarantine
-files, and uploaded sample bytes must remain excluded from the default redacted
-evidence bundle.
+Next stages should add a collector that copies `360safe.Summary.dat` into the
+case workspace before parsing it. Raw SQLite snapshots, WAL/SHM files,
+quarantine files, and uploaded sample bytes must remain excluded from the
+default redacted evidence bundle.
