@@ -7,9 +7,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cloud_av_agent_lab.guest_agent_server.collectors import (
-    registry as collector_registry,
-)
 from cloud_av_agent_lab.guest_agent_server.collectors.qihoo_360 import (
     Qihoo360SQLiteError,
     SUMMARY_DATABASE_NAME,
@@ -155,7 +152,7 @@ class Qihoo360ReadinessTests(unittest.TestCase):
             readiness_registry.supported_security_product_readiness_probes(),
         )
 
-    def test_stage_three_does_not_register_collector_or_create_raw_artifact(
+    def test_readiness_does_not_create_raw_artifact(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -177,7 +174,6 @@ class Qihoo360ReadinessTests(unittest.TestCase):
             )
 
         self.assertEqual(result.state, "ready")
-        self.assertIsNone(collector_registry.get_product_log_collector("qihoo-360"))
         self.assertFalse((workspace / "security-product-readiness").exists())
 
     def test_probe_source_has_no_shell_or_command_runner(self) -> None:

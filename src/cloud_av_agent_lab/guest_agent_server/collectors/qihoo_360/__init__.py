@@ -12,6 +12,7 @@ from .baseline import (
     filter_qihoo360_delta_events,
     read_qihoo360_summary_baseline,
 )
+from .collector import Qihoo360LogCollector
 from .parser import decode_qihoo360_text, parse_qihoo360_fc_blob
 from .schema import (
     PRODUCT_ID,
@@ -39,6 +40,7 @@ __all__ = [
     "Qihoo360Attribution",
     "Qihoo360DeltaFilter",
     "Qihoo360FileIndexRecord",
+    "Qihoo360LogCollector",
     "Qihoo360ParsedEvent",
     "Qihoo360SQLiteError",
     "Qihoo360SummaryBaseline",

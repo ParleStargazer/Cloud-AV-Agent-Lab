@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 
 from cloud_av_agent_lab.guest_agent_server.collectors.base import CollectionWindow
-from cloud_av_agent_lab.guest_agent_server.collectors import registry
 from cloud_av_agent_lab.guest_agent_server.collectors.qihoo_360 import (
     attribution as qihoo_attribution_module,
 )
@@ -98,8 +97,7 @@ class Qihoo360BaselineTests(unittest.TestCase):
         self.assertEqual(delta.candidate_fq_ids, ())
         self.assertIn("summary_db_reset_or_rotated", delta.warnings)
 
-    def test_phase_two_does_not_register_collector_or_add_shell_paths(self) -> None:
-        self.assertIsNone(registry.get_product_log_collector("qihoo-360"))
+    def test_baseline_and_attribution_add_no_shell_paths(self) -> None:
         source = inspect.getsource(qihoo_baseline_module) + inspect.getsource(
             qihoo_attribution_module
         )

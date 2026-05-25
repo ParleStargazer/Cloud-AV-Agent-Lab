@@ -2,7 +2,8 @@
 
 This document tracks the 360 Security Guard / 360safe onboarding work. The
 current implementation covers stage 1 parser support, stage 2 baseline / delta
-helpers, and a stage 3 readiness probe for `360safe.Summary.dat` snapshots.
+helpers, a stage 3 readiness probe, and a stage 4 collector MVP for
+`360safe.Summary.dat` snapshots.
 
 ## Product ID
 
@@ -123,9 +124,52 @@ The probe does not determine whether 360 real-time protection is enabled.
 Readiness does not copy raw artifacts into the case workspace. Snapshot copying
 and stability metadata remain collector-stage responsibilities.
 
+## Collector MVP Stage
+
+Stage 4 adds:
+
+```text
+src/cloud_av_agent_lab/guest_agent_server/collectors/qihoo_360/collector.py
+```
+
+The collector is registered for product id `qihoo-360`. It performs a
+best-effort snapshot copy into:
+
+```text
+<case_workspace>/collection/qihoo-360/raw/360safe.Summary.dat
+<case_workspace>/collection/qihoo-360/raw/360safe.Summary.union1  # optional
+```
+
+Before and after copying `Summary.dat`, the collector records source size and
+mtime. If those values change, it records `snapshot_may_be_changing` as a
+warning and continues with the copied snapshot rather than failing.
+
+Collection semantics:
+
+- missing `Summary.dat` returns `collection_state = not_collected` and
+  `reason = product_log_not_found`;
+- unreadable/corrupt/schema-invalid Summary snapshots return
+  `collection_state = failed`;
+- readable Summary snapshots with no current-case evidence return
+  `collection_state = collected`, `verdict = unknown`, and
+  `reason = no_relevant_qihoo360_events_for_case`;
+- strong/medium attribution plus a quarantine path under `C:\$360Section`
+  returns `verdict = intercepted`;
+- strong/medium attribution plus `threat_name` without confirmed quarantine
+  returns `verdict = detected`;
+- weak or unattributed evidence remains `verdict = unknown`.
+
+`@205` remains `raw_action_text`; the collector does not interpret it as
+restored, allowed, blocked, or quarantined.
+
+Raw `Summary.dat`, optional `union1`, WAL/SHM, quarantine files, and uploaded
+sample bytes are not included in the default redacted evidence bundle. The
+collector declares raw snapshots as artifacts with `include_in_evidence=false`
+and `redaction_state=raw_blocked`.
+
 ## Safety Boundary
 
-The current stage 1/2/3 implementation:
+The current stage 1/2/3/4 implementation:
 
 - reads only SQLite snapshot metadata;
 - does not read uploaded sample bytes;
@@ -134,7 +178,7 @@ The current stage 1/2/3 implementation:
 - does not add allowlists or exclusions;
 - does not use PowerShell, `cmd`, `wevtutil`, external SQLite CLIs, or shell
   commands;
-- does not register a live collector;
+- registers only the read-only metadata `qihoo-360` collector;
 - registers only the read-only `qihoo-360` readiness probe;
 - does not call Guest Agent endpoints;
 - does not touch `configs/real.toml`;
@@ -142,7 +186,7 @@ The current stage 1/2/3 implementation:
 
 ## Next Stages
 
-Next stages should add a collector that copies `360safe.Summary.dat` into the
-case workspace before parsing it. Raw SQLite snapshots, WAL/SHM files,
-quarantine files, and uploaded sample bytes must remain excluded from the
-default redacted evidence bundle.
+Next stages should wire product binding / CLI / config validation around the
+existing registry support, then run an isolated EICAR smoke test. Raw SQLite
+snapshots, WAL/SHM files, quarantine files, and uploaded sample bytes must
+remain excluded from the default redacted evidence bundle.

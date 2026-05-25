@@ -6,7 +6,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cloud_av_agent_lab.guest_agent_server.collectors import registry
 from cloud_av_agent_lab.guest_agent_server.collectors.qihoo_360 import (
     Qihoo360SQLiteError,
     parse_qihoo360_fc_blob,
@@ -150,8 +149,7 @@ class Qihoo360SQLiteReaderTests(unittest.TestCase):
             with self.assertRaisesRegex(Qihoo360SQLiteError, "missing required tables"):
                 read_qihoo360_summary_database(db_path)
 
-    def test_phase_one_does_not_register_collector_or_add_shell_paths(self) -> None:
-        self.assertIsNone(registry.get_product_log_collector("qihoo-360"))
+    def test_parser_adds_no_shell_paths(self) -> None:
         source = inspect.getsource(qihoo_parser_module) + inspect.getsource(
             qihoo_sqlite_reader_module
         )
