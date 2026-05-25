@@ -1,8 +1,8 @@
 # Qihoo 360 Collector Model
 
 This document tracks the 360 Security Guard / 360safe onboarding work. The
-current implementation is stage 1 only: a parser MVP for `360safe.Summary.dat`
-snapshots.
+current implementation covers stage 1 parser support and stage 2 baseline /
+delta helpers for `360safe.Summary.dat` snapshots.
 
 ## Product ID
 
@@ -27,7 +27,7 @@ The parser reads only a copied or fixture `360safe.Summary.dat` SQLite snapshot.
 It does not discover live product logs, copy live files, register a collector,
 or call Guest Agent endpoints.
 
-Supported stage 1 files:
+Supported parser files:
 
 ```text
 src/cloud_av_agent_lab/guest_agent_server/collectors/qihoo_360/schema.py
@@ -69,9 +69,38 @@ that the file was restored, allowed, blocked, or quarantined from that text.
 when the value looks parseable. FILETIME-like values are marked with low time
 confidence because the reference material shows an offset ambiguity.
 
+## Baseline And Delta Stage
+
+Stage 2 adds internal helpers only:
+
+```text
+src/cloud_av_agent_lab/guest_agent_server/collectors/qihoo_360/baseline.py
+src/cloud_av_agent_lab/guest_agent_server/collectors/qihoo_360/attribution.py
+```
+
+`baseline.py` can read a `360safe.Summary.dat` snapshot and record:
+
+```text
+summary_dat_size
+summary_dat_mtime_utc
+max_fq_id
+known_fq_ids
+```
+
+Delta filtering selects only `FQ.ID > baseline.max_fq_id`. If the current
+maximum FQ ID is lower than the baseline maximum, the helper records
+`summary_db_reset_or_rotated` and marks baseline delta as unusable instead of
+making a confident attribution.
+
+`attribution.py` provides conservative event attribution for later collector
+use. A current case sample path match can produce `strong` attribution. A hash
+match without a case path is limited to `medium`; the known EICAR SHA-256 is
+explicitly downweighted with `eicar_hash_is_reused_across_cases` when the case
+path is not matched.
+
 ## Safety Boundary
 
-The stage 1 parser:
+The current stage 1/2 implementation:
 
 - reads only SQLite snapshot metadata;
 - does not read uploaded sample bytes;
@@ -81,13 +110,14 @@ The stage 1 parser:
 - does not use PowerShell, `cmd`, `wevtutil`, external SQLite CLIs, or shell
   commands;
 - does not register a live collector or readiness probe;
+- does not call Guest Agent endpoints;
 - does not touch `configs/real.toml`;
 - does not trigger Tencent Cloud APIs.
 
 ## Next Stages
 
-Next stages should add baseline / delta support, then a read-only readiness
-probe, then a collector that copies `360safe.Summary.dat` into the case
+Next stages should add a read-only readiness probe, then a collector that copies
+`360safe.Summary.dat` into the case
 workspace before parsing it. Raw SQLite snapshots, WAL/SHM files, quarantine
 files, and uploaded sample bytes must remain excluded from the default redacted
 evidence bundle.
