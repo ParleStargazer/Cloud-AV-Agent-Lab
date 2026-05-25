@@ -21,12 +21,16 @@ class ConfigTests(TestCase):
 
         self.assertEqual(len(cases), 8)
         self.assertIn("windows-defender", config.products)
+        self.assertIn("qihoo-360", config.products)
         self.assertIn("win10-windows-defender", config.vms)
+        self.assertIn("win10-qihoo-360", config.vms)
         self.assertTrue(config.products["windows-defender"].enabled)
+        self.assertTrue(config.products["qihoo-360"].enabled)
         self.assertEqual(
             config.vms["win10-windows-defender"].product_id,
             "windows-defender",
         )
+        self.assertEqual(config.vms["win10-qihoo-360"].product_id, "qihoo-360")
         self.assertEqual(cases[0].sample.id, "case-001")
         self.assertIn(cases[0].product.id, config.products)
         self.assertFalse(config.network.proxy.enabled)

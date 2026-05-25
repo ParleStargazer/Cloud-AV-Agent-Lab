@@ -2,8 +2,9 @@
 
 This document tracks the 360 Security Guard / 360safe onboarding work. The
 current implementation covers stage 1 parser support, stage 2 baseline / delta
-helpers, a stage 3 readiness probe, and a stage 4 collector MVP for
-`360safe.Summary.dat` snapshots.
+helpers, a stage 3 readiness probe, a stage 4 collector MVP for
+`360safe.Summary.dat` snapshots, and stage 5 product binding for CLI,
+configuration validation, and `single-run`.
 
 ## Product ID
 
@@ -167,9 +168,33 @@ sample bytes are not included in the default redacted evidence bundle. The
 collector declares raw snapshots as artifacts with `include_in_evidence=false`
 and `redaction_state=raw_blocked`.
 
+## Product Binding Stage
+
+Stage 5 wires the existing product model without adding new collector behavior.
+`qihoo-360` is now selectable through the same product resolution path used by
+Huorong and Windows Defender:
+
+- `guest-prepare-case --product qihoo-360` resolves the configured product and
+  writes `case_state.product_id = qihoo-360` through the normal prepare-case
+  payload;
+- `guest-check-security-product-readiness --product qihoo-360` and
+  `guest-security-product-readiness-status --product qihoo-360` route through
+  the readiness registry;
+- `guest-collect-logs --product qihoo-360` routes through the collector
+  registry;
+- `single-run --product qihoo-360` generates a non-sensitive temporary config
+  with the Qihoo 360 product profile and carries the same product id through
+  prepare, readiness, upload, collection, summary, and evidence export.
+
+The existing local product guards still apply: unknown products, disabled
+products, and explicit products that conflict with the selected VM profile are
+rejected before collection or readiness calls are made. The generated
+`lab.generated.toml` contains product metadata only; tokens and cloud secrets
+remain environment-variable only.
+
 ## Safety Boundary
 
-The current stage 1/2/3/4 implementation:
+The current stage 1/2/3/4/5 implementation:
 
 - reads only SQLite snapshot metadata;
 - does not read uploaded sample bytes;
@@ -180,13 +205,13 @@ The current stage 1/2/3/4 implementation:
   commands;
 - registers only the read-only metadata `qihoo-360` collector;
 - registers only the read-only `qihoo-360` readiness probe;
-- does not call Guest Agent endpoints;
+- adds product binding for existing Guest Agent CLI endpoints without adding
+  new endpoint behavior;
 - does not touch `configs/real.toml`;
 - does not trigger Tencent Cloud APIs.
 
 ## Next Stages
 
-Next stages should wire product binding / CLI / config validation around the
-existing registry support, then run an isolated EICAR smoke test. Raw SQLite
+Next stage is an isolated EICAR smoke test on a Qihoo 360 baseline. Raw SQLite
 snapshots, WAL/SHM files, quarantine files, and uploaded sample bytes must
 remain excluded from the default redacted evidence bundle.

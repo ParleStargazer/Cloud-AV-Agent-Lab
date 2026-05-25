@@ -446,6 +446,36 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_client.prepare_products, ["windows-defender"])
 
+    def test_guest_prepare_case_resolves_qihoo_360_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "guest-prepare-case",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-qihoo-360",
+                        "--sample-id",
+                        "case-001",
+                        "--product",
+                        "qihoo-360",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_client.prepare_products, ["qihoo-360"])
+
     def test_guest_collect_logs_resolves_windows_defender_product(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
@@ -475,6 +505,36 @@ class CloudLifecycleCliGuardTests(TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_client.collect_products, ["windows-defender"])
+
+    def test_guest_collect_logs_resolves_qihoo_360_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "guest-collect-logs",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-qihoo-360",
+                        "--case-id",
+                        "case-001__qihoo-360",
+                        "--product",
+                        "qihoo-360",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_client.collect_products, ["qihoo-360"])
 
     def test_guest_collect_logs_requires_explicit_product(
         self,
@@ -631,6 +691,36 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_client.readiness_products, ["windows-defender"])
 
+    def test_guest_check_readiness_resolves_qihoo_360_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "guest-check-security-product-readiness",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-qihoo-360",
+                        "--case-id",
+                        "case-001__qihoo-360",
+                        "--product",
+                        "qihoo-360",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_client.readiness_products, ["qihoo-360"])
+
     def test_guest_readiness_status_passes_explicit_product(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
@@ -660,6 +750,36 @@ class CloudLifecycleCliGuardTests(TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_client.readiness_status_products, ["windows-defender"])
+
+    def test_guest_readiness_status_resolves_qihoo_360_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "lab.guest-agent-enabled.toml"
+            config_path.write_text(_guest_agent_enabled_config(), encoding="utf-8")
+            fake_client = _FakeGuestAgentClient()
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli._create_guest_agent_client",
+                    return_value=fake_client,
+                ),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "guest-security-product-readiness-status",
+                        "--config",
+                        str(config_path),
+                        "--vm-id",
+                        "win10-qihoo-360",
+                        "--case-id",
+                        "case-001__qihoo-360",
+                        "--product",
+                        "qihoo-360",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_client.readiness_status_products, ["qihoo-360"])
 
     def test_guest_case_summary_outputs_verdict_and_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -882,6 +1002,62 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(exit_code, 0)
         confirm_real.assert_not_called()
         self.assertTrue(run_single.call_args.args[0].dry_run)
+
+    def test_single_run_accepts_qihoo_360_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.txt"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            result = SingleRunResult(
+                run_id="run-001",
+                case_id="eicar__qihoo-360__run-001",
+                run_dir=root / "runs" / "run-001",
+                run_state_path=root / "runs" / "run-001" / "run_state.json",
+                generated_config_path=root / "runs" / "run-001" / "lab.generated.toml",
+                summary_path=root / "runs" / "run-001" / "case_summary.json",
+                evidence_bundle_path=root / "runs" / "run-001" / "case_evidence.zip",
+                verdict="",
+                confidence="",
+                final_status="completed",
+                cleanup_status="dry_run",
+                emergency_poweroff_status="not_needed",
+            )
+
+            with (
+                patch(
+                    "cloud_av_agent_lab.cli.run_single_case", return_value=result
+                ) as run_single,
+                patch(
+                    "cloud_av_agent_lab.cli._confirm_single_run_real_operation"
+                ) as confirm_real,
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "single-run",
+                        "--dry-run",
+                        "--instance-id",
+                        "lhins-example",
+                        "--snapshot-id",
+                        "lhsnap-example",
+                        "--region",
+                        "ap-singapore",
+                        "--sample-name",
+                        "eicar",
+                        "--sample-path",
+                        str(sample_path),
+                        "--product",
+                        "qihoo-360",
+                        "--guest-agent-url",
+                        "http://127.0.0.1:8080",
+                        "--runs-dir",
+                        str(root / "runs"),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        confirm_real.assert_not_called()
+        self.assertEqual(run_single.call_args.args[0].product_id, "qihoo-360")
 
     def test_single_run_prompts_product_before_generated_config_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

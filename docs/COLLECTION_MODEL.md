@@ -141,21 +141,19 @@ bundle after global text redaction and is categorized as
 `security-product-readiness/`, such as Huorong `log.db`, `log.db-wal`, and
 `log.db-shm`, remain excluded and are not treated as default evidence.
 
-## Planned 360 Onboarding
+## Qihoo 360 Onboarding
 
-The next planned product candidate is 360. It should follow the same product
-onboarding path as Huorong and Windows Defender: choose one stable `product_id`,
-add a low-risk readiness probe, add a product collector, register both through
-the existing registries, and keep evaluator / evidence exporter behavior
-schema-driven.
+Qihoo 360 now follows the same product onboarding path as Huorong and Windows
+Defender. It uses the stable `product_id` `qihoo-360`, has a low-risk readiness
+probe, has a product collector registered through the existing registry, and is
+selectable through the shared CLI / `single-run` product resolution flow.
 
-The expected implementation shape is closer to Huorong than Windows Defender:
-copy product log files into the current case workspace, parse the copied files
+Its implementation shape is closer to Huorong than Windows Defender: copy the
+product log snapshot into the current case workspace, parse the copied file
 read-only, emit normalized evidence, and keep raw product logs out of the
-default redacted evidence bundle. The actual log path, file format, table /
-record schema, timestamp fields, action semantics, and attribution fields must
-be audited before implementation; Huorong assumptions should not be hard-coded
-for 360 without that check.
+default redacted evidence bundle. The collector keeps Qihoo-specific table /
+record schema, timestamp fields, action semantics, and attribution rules inside
+`collectors/qihoo_360/`; Huorong assumptions are not hard-coded for 360.
 
 ## Unified Event Timeline
 

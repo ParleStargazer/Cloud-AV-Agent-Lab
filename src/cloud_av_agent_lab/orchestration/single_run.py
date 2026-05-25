@@ -109,6 +109,24 @@ SINGLE_RUN_PRODUCT_PROFILES: dict[str, dict[str, Any]] = {
             "threat",
         ],
     },
+    "qihoo-360": {
+        "display_name": "360 Total Security",
+        "vendor": "Qihoo 360",
+        "log_paths": [
+            r"C:\ProgramData\360safe\logs",
+            r"C:\Program Files (x86)\360\360Safe\logs",
+        ],
+        "ui_window_titles": ["360 Total Security", "360安全卫士"],
+        "detection_keywords": [
+            "blocked",
+            "quarantine",
+            "virus",
+            "trojan",
+            "malware",
+            "拦截",
+            "隔离",
+        ],
+    },
 }
 
 
