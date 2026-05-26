@@ -36,6 +36,7 @@ from cloud_av_agent_lab.guest_agent_server.workspace import (
     read_case_summary,
     read_case_status,
     record_worker_execution_observed,
+    record_worker_execution_state_file,
     record_worker_execution_started,
     run_case_action,
     save_uploaded_sample,
@@ -685,6 +686,17 @@ def _run_desktop_worker_execute_action(
         expected_sha256=worker_payload["expected_sha256"],
         ttl_seconds=60.0,
     )
-    worker_response = desktop_worker_client.execute(worker_payload)
+    try:
+        worker_response = desktop_worker_client.execute(worker_payload)
+    except DesktopWorkerClientError:
+        _record_worker_state_file_best_effort(workdir_path, case_id)
+        raise
     record_worker_execution_started(workdir_path, case_id, worker_response.data)
     return worker_response.data
+
+
+def _record_worker_state_file_best_effort(workdir_path: Path, case_id: str) -> None:
+    try:
+        record_worker_execution_state_file(workdir_path, case_id)
+    except (WorkspaceError, OSError, ValueError):
+        return

@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 import hashlib
+import json
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
@@ -189,6 +190,51 @@ class DesktopWorkerTests(TestCase):
             / "worker_execution_state.json"
         )
         self.assertTrue(state_path.exists())
+
+    def test_execute_launch_failure_records_safe_os_error_details(self) -> None:
+        case_id, sample_id, sha256 = _prepare_worker_case(self.workdir)
+        lease = _lease(case_id, sample_id, "run-1", sha256)
+        launch_error = OSError(
+            13,
+            "Operation did not complete successfully because the file contains "
+            "a virus or potentially unwanted software.",
+        )
+        launch_error.winerror = 225  # type: ignore[attr-defined]
+
+        with patch(
+            "cloud_av_agent_lab.desktop_worker.execution.subprocess.Popen",
+            side_effect=launch_error,
+        ):
+            response = self.client.post(
+                "/execute",
+                headers=self._headers(),
+                json={
+                    "case_id": case_id,
+                    "sample_id": sample_id,
+                    "run_id": "run-1",
+                    "expected_sha256": sha256,
+                    "execution_lease": lease,
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("reason_code=blocked_by_security_product", response.text)
+        self.assertIn("winerror=225", response.text)
+        state_path = (
+            self.workdir
+            / "cases"
+            / case_id
+            / "worker-state"
+            / "worker_execution_state.json"
+        )
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["state"], "launch_failed")
+        self.assertEqual(
+            state["error_details"]["reason_code"],
+            "blocked_by_security_product",
+        )
+        self.assertEqual(state["error_details"]["winerror"], 225)
+        self.assertTrue(state["sample_path_under_case"])
 
     def test_execute_starts_registered_batch_with_fixed_cmd_template(self) -> None:
         case_id, sample_id, sha256 = _prepare_worker_case(

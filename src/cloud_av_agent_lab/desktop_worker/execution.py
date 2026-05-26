@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from cloud_av_agent_lab.core.execution_modes import resolve_execution_mode
+from cloud_av_agent_lab.core.os_error_details import (
+    format_os_error_details,
+    safe_os_error_details,
+)
 from cloud_av_agent_lab.desktop_worker.lease import (
     ExecutionLeaseError,
     verify_execution_lease,
@@ -223,6 +227,7 @@ class WorkerExecutionRegistry:
             )
         except OSError as exc:
             failed_at = _utc_now()
+            error_details = safe_os_error_details(exc)
             state = _base_worker_execution_state(
                 request=request,
                 context=context,
@@ -232,10 +237,12 @@ class WorkerExecutionRegistry:
                 started_at="",
                 observed_at=failed_at,
             )
-            state["error"] = type(exc).__name__
+            state["error"] = error_details["type"]
+            state["error_details"] = error_details
             _write_worker_state(workspace, state)
             raise WorkerExecutionError(
-                f"uploaded sample failed to start: {type(exc).__name__}"
+                "uploaded sample failed to start: "
+                + format_os_error_details(error_details)
             ) from exc
 
         with self.lock:

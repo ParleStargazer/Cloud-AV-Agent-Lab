@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from cloud_av_agent_lab.core.execution_modes import resolve_execution_mode
+from cloud_av_agent_lab.core.os_error_details import (
+    format_os_error_details,
+    safe_os_error_details,
+)
 
 from .errors import WorkspaceError, WorkspaceNotFoundError
 from .io import (
@@ -249,6 +253,50 @@ def record_worker_execution_observed(
     )
 
 
+def record_worker_execution_state_file(
+    workdir: str | Path,
+    case_id: str,
+) -> dict[str, Any] | None:
+    safe_id = safe_case_id(case_id)
+    workspace = _case_workspace(workdir, safe_id)
+    if not workspace.is_dir():
+        raise WorkspaceNotFoundError(
+            "case workspace does not exist; run guest-prepare-case first"
+        )
+    state_path = workspace / "worker-state" / "worker_execution_state.json"
+    if not state_path.exists():
+        return None
+    worker_execution = _read_json_file(state_path)
+    if not isinstance(worker_execution, Mapping):
+        return None
+    execution_state = str(
+        worker_execution.get("state") or worker_execution.get("status") or "unknown"
+    )
+    if execution_state == "not_started":
+        return None
+    event_type = (
+        "execution_launch_failed"
+        if execution_state == "launch_failed"
+        else "execution_observed"
+    )
+    message = (
+        "Desktop Worker launch failure recorded from worker state"
+        if execution_state == "launch_failed"
+        else "Desktop Worker execution status recorded from worker state"
+    )
+    return _record_worker_execution(
+        workdir=workdir,
+        case_id=safe_id,
+        payload={
+            "execution_state": execution_state,
+            "worker_execution": worker_execution,
+        },
+        event_type=event_type,
+        phase="execution_observed",
+        message=message,
+    )
+
+
 def _execute_uploaded_sample(
     workspace: Path,
     case_id: str,
@@ -299,6 +347,7 @@ def _execute_uploaded_sample(
             close_fds=True,
         )
     except OSError as exc:
+        error_details = safe_os_error_details(exc)
         state = dict(context["state"])
         execution = {
             "enabled": True,
@@ -314,7 +363,8 @@ def _execute_uploaded_sample(
             "exit_code": None,
             "children": [],
             "observation_count": 0,
-            "error": type(exc).__name__,
+            "error": error_details["type"],
+            "error_details": error_details,
         }
         state["phase"] = "execution_observed"
         state["execution"] = execution
@@ -326,11 +376,15 @@ def _execute_uploaded_sample(
             case_id=case_id,
             sample_id=context["sample_id"],
             message="uploaded sample failed to start",
-            data={"error": type(exc).__name__, "sample_path_under_case": True},
+            data={
+                "error": error_details["type"],
+                "error_details": error_details,
+                "sample_path_under_case": True,
+            },
         )
         write_case_report(workspace)
         raise WorkspaceError(
-            f"uploaded sample failed to start: {type(exc).__name__}"
+            "uploaded sample failed to start: " + format_os_error_details(error_details)
         ) from exc
 
     started_at = _utc_now()
@@ -702,8 +756,18 @@ def _record_worker_execution(
                 payload.get("exit_code") or worker_execution.get("exit_code")
             ),
             "children": children,
+            "error": str(
+                payload.get("error")
+                or worker_execution.get("error")
+                or execution.get("error", "")
+            ),
         }
     )
+    error_details = payload.get("error_details") or worker_execution.get(
+        "error_details"
+    )
+    if isinstance(error_details, Mapping):
+        execution["error_details"] = dict(error_details)
     if payload.get("started_at_utc") or worker_execution.get("started_at_utc"):
         execution["started_at_utc"] = str(
             payload.get("started_at_utc") or worker_execution.get("started_at_utc")
@@ -733,6 +797,10 @@ def _record_worker_execution(
         "hash_verified": execution.get("hash_verified", False),
         "low_intrusion_observation": True,
     }
+    if execution.get("error"):
+        event_data["error"] = execution.get("error")
+    if isinstance(execution.get("error_details"), Mapping):
+        event_data["error_details"] = dict(execution["error_details"])
     append_event(
         workspace,
         event_type=event_type,

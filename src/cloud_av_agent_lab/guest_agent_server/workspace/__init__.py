@@ -9,6 +9,7 @@ from .execution import (
     prepare_worker_execute_request,
     read_case_execution_status,
     record_worker_execution_observed,
+    record_worker_execution_state_file,
     record_worker_execution_started,
 )
 from .paths import safe_case_id, safe_original_filename
@@ -45,6 +46,7 @@ __all__ = [
     "read_case_status",
     "refresh_sample_status",
     "record_worker_execution_observed",
+    "record_worker_execution_state_file",
     "record_worker_execution_started",
     "run_case_action",
     "safe_case_id",

@@ -598,10 +598,16 @@ def _run_single_case_locked(
                     execution_result["status"],
                 )
             elif delay_seconds > 0:
+                reason = (
+                    "launch failure"
+                    if execution_state == "launch_failed"
+                    else "execution exit"
+                )
                 LOGGER.info(
                     "post-execution collection delay started after "
-                    "execution exit: %.0fs to allow security product action "
+                    "%s: %.0fs to allow security product action "
                     "and log flush",
+                    reason,
                     delay_seconds,
                 )
                 sleep(delay_seconds)
@@ -1254,13 +1260,9 @@ def _nonfatal_remote_execution_state(error: GuestAgentError) -> str:
 def _should_wait_after_execution_for_collection(
     execution_result: dict[str, str],
 ) -> bool:
-    if execution_result.get("status") != "observed":
+    if execution_result.get("status") not in {"observed", "not_started"}:
         return False
-    return execution_result.get("execution_state") in {
-        "exited_cleanly",
-        "exited_with_error",
-        "terminated_or_disappeared",
-    }
+    return execution_result.get("execution_state") in TERMINAL_EXECUTION_STATES
 
 
 def _poll_execution_status(

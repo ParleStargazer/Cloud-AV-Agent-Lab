@@ -916,6 +916,112 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(state["execution"]["execution_via"], "desktop_worker")
         self.assertEqual(state["execution"]["run_id"], "run-1")
 
+    def test_action_execute_records_desktop_worker_launch_failure_state(self) -> None:
+        client = TestClient(
+            create_app(
+                workdir=self.workdir,
+                token=TOKEN,
+                upload_token=UPLOAD_TOKEN,
+                execution_enabled=True,
+                execution_token=EXECUTION_TOKEN,
+                desktop_worker_enabled=True,
+                desktop_worker_token="worker-token",
+                desktop_worker_expected_user="avtest",
+                app_version="test-version",
+            )
+        )
+        upload_headers = self._upload_headers()
+        upload_headers["X-Original-Filename"] = "proof.exe"
+        client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=upload_headers,
+            content=b"MZ harmless placeholder",
+        )
+        workspace = self.workdir / "cases" / "case-001__tencent-pc-manager"
+        worker_state_dir = workspace / "worker-state"
+        worker_state_dir.mkdir()
+        (worker_state_dir / "worker_execution_state.json").write_text(
+            json.dumps(
+                {
+                    "state": "launch_failed",
+                    "sample_id": "case-001",
+                    "run_id": "run-1",
+                    "expected_sha256": "0" * 64,
+                    "handler_id": "pe_executable",
+                    "execution_mode": "direct_process",
+                    "sample_path_under_case": True,
+                    "hash_verified": True,
+                    "worker_pid": 111,
+                    "worker_session_id": 1,
+                    "last_observed_at_utc": "2026-05-26T00:00:00Z",
+                    "error": "OSError",
+                    "error_details": {
+                        "type": "OSError",
+                        "reason_code": "blocked_by_security_product",
+                        "errno": 13,
+                        "winerror": 225,
+                        "strerror": "blocked",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with (
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.health",
+                return_value=DesktopWorkerStatus(
+                    ready=True,
+                    data={
+                        "worker_pid": 111,
+                        "worker_session_id": 1,
+                        "interactive_session": True,
+                        "desktop_session_state": "active",
+                        "username": "avtest",
+                        "busy": False,
+                    },
+                ),
+            ),
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.execute",
+                side_effect=DesktopWorkerClientError(
+                    "Desktop Worker execute returned HTTP 400: uploaded sample "
+                    "failed to start: OSError "
+                    "reason_code=blocked_by_security_product",
+                    status_code=400,
+                    source="remote",
+                ),
+            ),
+        ):
+            response = client.post(
+                "/cases/case-001__tencent-pc-manager/actions",
+                headers=self._execution_headers(),
+                json={
+                    "action": "execute_uploaded_sample",
+                    "sample_id": "case-001",
+                    "expected_sha256": "0" * 64,
+                    "run_id": "run-1",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        state = json.loads((workspace / "case_state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["execution"]["state"], "launch_failed")
+        self.assertEqual(state["execution"]["execution_via"], "desktop_worker")
+        self.assertEqual(
+            state["execution"]["error_details"]["reason_code"],
+            "blocked_by_security_product",
+        )
+        event_types = [
+            event["event_type"] for event in _read_events(workspace / "events.jsonl")
+        ]
+        self.assertIn("execution_launch_failed", event_types)
+
     def test_action_execute_uploaded_sample_starts_registered_file(self) -> None:
         client = self._execution_client()
         upload_headers = self._upload_headers()
@@ -1207,6 +1313,8 @@ class GuestAgentServerTests(unittest.TestCase):
         data = status_response.json()["data"]
         self.assertEqual(data["execution_state"], "launch_failed")
         workspace = self.workdir / "cases" / "case-001__tencent-pc-manager"
+        state = json.loads((workspace / "case_state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["execution"]["error_details"]["type"], "OSError")
         event_types = [
             event["event_type"] for event in _read_events(workspace / "events.jsonl")
         ]

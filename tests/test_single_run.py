@@ -686,6 +686,44 @@ class SingleRunTests(TestCase):
                 45.0,
             )
 
+    def test_single_run_waits_after_launch_failure_before_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.exe"
+            sample_path.write_bytes(b"MZ harmless placeholder")
+            sleeps: list[float] = []
+            client = FakeGuestClient(
+                status_upload_state="stable",
+                execute_error=GuestAgentError(
+                    "Guest Agent action failed: Desktop Worker execute returned "
+                    "HTTP 400: uploaded sample failed to start: OSError "
+                    "reason_code=blocked_by_security_product",
+                    status_code=400,
+                    source="remote",
+                ),
+            )
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    post_execution_collection_delay_seconds=45.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertIn(45.0, sleeps)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_state["execution_action_status"], "not_started")
+            self.assertEqual(run_state["execution_action_state"], "launch_failed")
+            run_log = (result.run_dir / "run.log").read_text(encoding="utf-8")
+            self.assertIn(
+                "post-execution collection delay started after launch failure: 45s",
+                run_log,
+            )
+
     def test_powershell_script_is_recognized_but_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
