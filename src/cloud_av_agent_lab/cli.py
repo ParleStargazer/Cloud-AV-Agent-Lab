@@ -412,6 +412,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="execution-status poll interval after real action request",
     )
     single_run.add_argument(
+        "--post-execution-collection-delay-seconds",
+        type=float,
+        default=45.0,
+        help=(
+            "seconds to wait after sample execution exits before product log collection"
+        ),
+    )
+    single_run.add_argument(
         "--salvage-connect-timeout-seconds",
         type=float,
         default=2.0,
@@ -947,6 +955,9 @@ def _single_run_options_from_args(
         settling_cooldown_seconds=args.settling_cooldown_seconds,
         execution_poll_timeout_seconds=args.execution_poll_timeout_seconds,
         execution_poll_interval_seconds=args.execution_poll_interval_seconds,
+        post_execution_collection_delay_seconds=(
+            args.post_execution_collection_delay_seconds
+        ),
         salvage_timeout=NetworkTimeoutProfile(
             connect_seconds=args.salvage_connect_timeout_seconds,
             read_seconds=args.salvage_read_timeout_seconds,

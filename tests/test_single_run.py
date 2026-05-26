@@ -626,6 +626,66 @@ class SingleRunTests(TestCase):
                 "script_via_cmd",
             )
 
+    def test_single_run_waits_after_execution_exit_before_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.bat"
+            sample_path.write_text("echo harmless", encoding="utf-8")
+            sleeps: list[float] = []
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    post_execution_collection_delay_seconds=45.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: FakeGuestClient(),
+                sleep=sleeps.append,
+            )
+
+            self.assertIn(45.0, sleeps)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                run_state["stages"]["collection"][
+                    "post_execution_collection_delay_seconds"
+                ],
+                45.0,
+            )
+            run_log = (result.run_dir / "run.log").read_text(encoding="utf-8")
+            self.assertIn(
+                "post-execution collection delay started after execution exit: 45s",
+                run_log,
+            )
+
+    def test_single_run_does_not_wait_when_execution_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.ps1"
+            sample_path.write_text("Write-Output harmless", encoding="utf-8")
+            sleeps: list[float] = []
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    post_execution_collection_delay_seconds=45.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: FakeGuestClient(),
+                sleep=sleeps.append,
+            )
+
+            self.assertNotIn(45.0, sleeps)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_state["execution_action_status"], "skipped")
+            self.assertEqual(
+                run_state["stages"]["collection"][
+                    "post_execution_collection_delay_seconds"
+                ],
+                45.0,
+            )
+
     def test_powershell_script_is_recognized_but_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -974,6 +1034,7 @@ def _options(
     salvage_timeout: NetworkTimeoutProfile | None = None,
     guest_ready_timeout_seconds: float = 180.0,
     guest_ready_successes: int = 2,
+    post_execution_collection_delay_seconds: float = 45.0,
 ) -> SingleRunOptions:
     return SingleRunOptions(
         instance_id="lhins-example",
@@ -992,5 +1053,8 @@ def _options(
         upload_initial_wait_seconds=0,
         upload_poll_interval_seconds=0.1,
         upload_poll_timeout_seconds=0.1,
+        post_execution_collection_delay_seconds=(
+            post_execution_collection_delay_seconds
+        ),
         salvage_timeout=salvage_timeout or NetworkTimeoutProfile(2, 5),
     )

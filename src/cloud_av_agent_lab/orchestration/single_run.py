@@ -48,6 +48,7 @@ DEFAULT_UPLOAD_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS = 30.0
 DEFAULT_EXECUTION_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_EXECUTION_POLL_TIMEOUT_SECONDS = 60.0
+DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS = 45.0
 TERMINAL_EXECUTION_STATES = {
     "exited_cleanly",
     "exited_with_error",
@@ -161,6 +162,9 @@ class SingleRunOptions:
     upload_poll_timeout_seconds: float = DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS
     execution_poll_interval_seconds: float = DEFAULT_EXECUTION_POLL_INTERVAL_SECONDS
     execution_poll_timeout_seconds: float = DEFAULT_EXECUTION_POLL_TIMEOUT_SECONDS
+    post_execution_collection_delay_seconds: float = (
+        DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS
+    )
     cloud_poll_timeout_seconds: float = 600.0
     cloud_poll_interval_seconds: float = 5.0
     lock_ttl_seconds: float = 7200.0
@@ -571,6 +575,43 @@ def _run_single_case_locked(
             if execution_result["status"] in {"skipped", "not_started"}:
                 state.add_warning("execution", execution_result["reason"])
                 warning_count += 1
+
+        with state.step("post_execution_collection_delay"):
+            delay_seconds = max(options.post_execution_collection_delay_seconds, 0.0)
+            state.mark_stage(
+                "collection",
+                "post_execution_collection_delay_seconds",
+                delay_seconds,
+            )
+            execution_state = execution_result["execution_state"]
+            if options.dry_run:
+                LOGGER.info(
+                    "post-execution collection delay skipped for dry-run "
+                    "(configured %.0fs)",
+                    delay_seconds,
+                )
+            elif not _should_wait_after_execution_for_collection(execution_result):
+                LOGGER.info(
+                    "post-execution collection delay skipped: "
+                    "execution_state=%s action_status=%s",
+                    execution_state,
+                    execution_result["status"],
+                )
+            elif delay_seconds > 0:
+                LOGGER.info(
+                    "post-execution collection delay started after "
+                    "execution exit: %.0fs to allow security product action "
+                    "and log flush",
+                    delay_seconds,
+                )
+                sleep(delay_seconds)
+                LOGGER.info(
+                    "post-execution collection delay finished; continue log collection"
+                )
+            else:
+                LOGGER.info(
+                    "post-execution collection delay disabled; continue log collection"
+                )
 
         with state.step("collect_logs"):
             lock.heartbeat()
@@ -1208,6 +1249,18 @@ def _nonfatal_remote_execution_state(error: GuestAgentError) -> str:
         if marker.casefold() in text:
             return execution_state
     return ""
+
+
+def _should_wait_after_execution_for_collection(
+    execution_result: dict[str, str],
+) -> bool:
+    if execution_result.get("status") != "observed":
+        return False
+    return execution_result.get("execution_state") in {
+        "exited_cleanly",
+        "exited_with_error",
+        "terminated_or_disappeared",
+    }
 
 
 def _poll_execution_status(

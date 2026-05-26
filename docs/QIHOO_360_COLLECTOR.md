@@ -162,6 +162,14 @@ Collection semantics:
   returns `verdict = detected`;
 - weak or unattributed evidence remains `verdict = unknown`.
 
+Qihoo 360 may show a user prompt during batch-script execution and only write
+`Summary.dat` after the default action, such as quarantine, is selected or
+times out. For `single-run`, collection is therefore delayed until after the
+controlled execution observer has seen the root process exit, then waits 45
+seconds by default before calling the collector. This delay belongs to
+orchestration timing; the collector itself still only performs a point-in-time
+read-only snapshot and parsing pass.
+
 `@205` remains `raw_action_text`; the collector does not interpret it as
 restored, allowed, blocked, or quarantined.
 
