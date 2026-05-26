@@ -277,6 +277,7 @@ class GuestAgentClient:
         expected_sha256: str = "",
         dry_run: bool = True,
         run_id: str = "",
+        handler_id: str = "",
     ) -> GuestAgentResponse:
         action = (
             "dry_run_execute_uploaded_sample" if dry_run else "execute_uploaded_sample"
@@ -287,6 +288,8 @@ class GuestAgentClient:
         }
         if run_id:
             payload["run_id"] = run_id
+        if handler_id:
+            payload["handler_id"] = handler_id
         return self.case_action(
             case_id=case_id,
             action=action,

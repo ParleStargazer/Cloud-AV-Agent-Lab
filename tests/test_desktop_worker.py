@@ -169,6 +169,7 @@ class DesktopWorkerTests(TestCase):
         data = response.json()["data"]
         self.assertEqual(data["execution_state"], "running")
         self.assertEqual(data["root_pid"], 4321)
+        self.assertEqual(data["handler_id"], "pe_executable")
         args, kwargs = popen.call_args
         self.assertEqual(len(args[0]), 1)
         self.assertTrue(args[0][0].endswith("proof.exe"))
@@ -188,6 +189,153 @@ class DesktopWorkerTests(TestCase):
             / "worker_execution_state.json"
         )
         self.assertTrue(state_path.exists())
+
+    def test_execute_starts_registered_batch_with_fixed_cmd_template(self) -> None:
+        case_id, sample_id, sha256 = _prepare_worker_case(
+            self.workdir,
+            original_filename="eicar.bat",
+            content=b"@echo off\r\necho harmless\r\n",
+        )
+        lease = _lease(case_id, sample_id, "run-1", sha256)
+
+        with patch(
+            "cloud_av_agent_lab.desktop_worker.execution.subprocess.Popen"
+        ) as popen:
+            popen.return_value.pid = 4321
+            response = self.client.post(
+                "/execute",
+                headers=self._headers(),
+                json={
+                    "case_id": case_id,
+                    "sample_id": sample_id,
+                    "run_id": "run-1",
+                    "expected_sha256": sha256,
+                    "handler_id": "batch_script",
+                    "execution_lease": lease,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["handler_id"], "batch_script")
+        self.assertEqual(data["execution_mode"], "script_via_cmd")
+        self.assertEqual(data["interpreter"], r"C:\Windows\System32\cmd.exe")
+        self.assertFalse(data["client_supplied_command"])
+        self.assertFalse(data["client_supplied_args"])
+        self.assertFalse(data["client_supplied_path"])
+        self.assertTrue(data["hash_verified"])
+        args, kwargs = popen.call_args
+        self.assertEqual(
+            args[0],
+            [
+                r"C:\Windows\System32\cmd.exe",
+                "/d",
+                "/c",
+                "call",
+                str(self.workdir / "cases" / case_id / "sample" / "eicar.bat"),
+            ],
+        )
+        self.assertFalse(kwargs["shell"])
+
+    def test_execute_starts_registered_cmd_with_batch_handler(self) -> None:
+        case_id, sample_id, sha256 = _prepare_worker_case(
+            self.workdir,
+            original_filename="eicar.cmd",
+            content=b"@echo off\r\necho harmless\r\n",
+        )
+        lease = _lease(case_id, sample_id, "run-1", sha256)
+
+        with patch(
+            "cloud_av_agent_lab.desktop_worker.execution.subprocess.Popen"
+        ) as popen:
+            popen.return_value.pid = 4321
+            response = self.client.post(
+                "/execute",
+                headers=self._headers(),
+                json={
+                    "case_id": case_id,
+                    "sample_id": sample_id,
+                    "run_id": "run-1",
+                    "expected_sha256": sha256,
+                    "handler_id": "batch_script",
+                    "execution_lease": lease,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["handler_id"], "batch_script")
+        self.assertTrue(popen.call_args.args[0][-1].endswith("eicar.cmd"))
+
+    def test_powershell_script_is_recognized_but_disabled(self) -> None:
+        case_id, sample_id, sha256 = _prepare_worker_case(
+            self.workdir,
+            original_filename="sample.ps1",
+            content=b"Write-Output harmless\r\n",
+        )
+        lease = _lease(case_id, sample_id, "run-1", sha256)
+
+        response = self.client.post(
+            "/execute",
+            headers=self._headers(),
+            json={
+                "case_id": case_id,
+                "sample_id": sample_id,
+                "run_id": "run-1",
+                "expected_sha256": sha256,
+                "handler_id": "powershell_script",
+                "execution_lease": lease,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("execution_handler_disabled", response.text)
+
+    def test_unknown_extension_is_unsupported(self) -> None:
+        case_id, sample_id, sha256 = _prepare_worker_case(
+            self.workdir,
+            original_filename="sample.bin",
+            content=b"harmless",
+        )
+        lease = _lease(case_id, sample_id, "run-1", sha256)
+
+        response = self.client.post(
+            "/execute",
+            headers=self._headers(),
+            json={
+                "case_id": case_id,
+                "sample_id": sample_id,
+                "run_id": "run-1",
+                "expected_sha256": sha256,
+                "handler_id": "unsupported",
+                "execution_lease": lease,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("unsupported_file_type", response.text)
+
+    def test_handler_id_must_match_registered_sample_type(self) -> None:
+        case_id, sample_id, sha256 = _prepare_worker_case(
+            self.workdir,
+            original_filename="proof.exe",
+        )
+        lease = _lease(case_id, sample_id, "run-1", sha256)
+
+        response = self.client.post(
+            "/execute",
+            headers=self._headers(),
+            json={
+                "case_id": case_id,
+                "sample_id": sample_id,
+                "run_id": "run-1",
+                "expected_sha256": sha256,
+                "handler_id": "batch_script",
+                "execution_lease": lease,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("handler_id does not match", response.text)
 
     def test_execution_status_reports_registered_process_exit(self) -> None:
         case_id, sample_id, sha256 = _prepare_worker_case(self.workdir)
@@ -220,10 +368,14 @@ class DesktopWorkerTests(TestCase):
         self.assertEqual(data["exit_code"], 0)
 
 
-def _prepare_worker_case(workdir: Path) -> tuple[str, str, str]:
+def _prepare_worker_case(
+    workdir: Path,
+    *,
+    original_filename: str = "proof.exe",
+    content: bytes = b"MZ harmless desktop worker placeholder",
+) -> tuple[str, str, str]:
     case_id = "case-001__huorong"
     sample_id = "case-001"
-    content = b"MZ harmless desktop worker placeholder"
     sha256 = hashlib.sha256(content).hexdigest()
     prepare_case_workspace(
         workdir,
@@ -240,7 +392,7 @@ def _prepare_worker_case(workdir: Path) -> tuple[str, str, str]:
         content=content,
         sample_id=sample_id,
         sha256=sha256,
-        original_filename="proof.exe",
+        original_filename=original_filename,
     )
     return case_id, sample_id, sha256
 

@@ -21,6 +21,7 @@ from cloud_av_agent_lab.adapters.guest_agent_client import (
 )
 from cloud_av_agent_lab.config import load_config
 from cloud_av_agent_lab.core.contracts import LabConfig, TestCase
+from cloud_av_agent_lab.core.execution_modes import resolve_execution_mode
 from cloud_av_agent_lab.core.safety import assert_safe_config
 from cloud_av_agent_lab.evaluation import render_summary_markdown
 from cloud_av_agent_lab.network.client import NetworkClient
@@ -64,6 +65,9 @@ NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS = {
     "uploaded sample is missing before execution": "sample_missing_before_execution",
     "expected_sha256 does not match": "sha256_mismatch",
     "desktop worker only executes registered .exe files": "unsupported_file_type",
+    "execution handler is disabled": "execution_handler_disabled",
+    "unsupported_file_type": "unsupported_file_type",
+    "handler_id does not match": "execution_handler_mismatch",
     "uploaded sample failed to start": "launch_failed",
     "execute_uploaded_sample requires a previously uploaded sample": "not_uploaded",
 }
@@ -530,6 +534,7 @@ def _run_single_case_locked(
                 run_id=run_id,
                 sample_id=sample_id,
                 expected_sha256=sha256,
+                stored_filename=options.sample_path.name,
                 upload_state=upload_state,
                 dry_run=options.dry_run,
                 poll_interval_seconds=options.execution_poll_interval_seconds,
@@ -553,6 +558,16 @@ def _run_single_case_locked(
                 execution_result.get("error_status_code"),
             )
             state.mark_stage("execution", "via", execution_result.get("via", ""))
+            state.mark_stage(
+                "execution",
+                "handler_id",
+                execution_result.get("handler_id", ""),
+            )
+            state.mark_stage(
+                "execution",
+                "execution_mode",
+                execution_result.get("execution_mode", ""),
+            )
             if execution_result["status"] in {"skipped", "not_started"}:
                 state.add_warning("execution", execution_result["reason"])
                 warning_count += 1
@@ -1062,6 +1077,7 @@ def _execute_after_upload_observation(
     run_id: str,
     sample_id: str,
     expected_sha256: str,
+    stored_filename: str,
     upload_state: str,
     dry_run: bool,
     poll_interval_seconds: float,
@@ -1083,6 +1099,27 @@ def _execute_after_upload_observation(
             "error_source": "none",
             "error_status_code": None,
             "via": "",
+            "handler_id": "",
+            "execution_mode": "",
+        }
+
+    decision = resolve_execution_mode(stored_filename)
+    if not decision.enabled:
+        execution_state = decision.reason_code or "execution_handler_disabled"
+        reason = (
+            "execution skipped because handler "
+            f"{decision.handler_id} is not enabled for {stored_filename}"
+        )
+        LOGGER.warning("%s", reason)
+        return {
+            "status": "skipped",
+            "execution_state": execution_state,
+            "reason": reason,
+            "error_source": "none",
+            "error_status_code": None,
+            "via": "",
+            "handler_id": decision.handler_id,
+            "execution_mode": decision.execution_mode,
         }
 
     try:
@@ -1092,6 +1129,7 @@ def _execute_after_upload_observation(
             expected_sha256=expected_sha256,
             dry_run=dry_run,
             run_id=run_id,
+            handler_id=decision.handler_id,
         )
     except GuestAgentError as exc:
         execution_state = _nonfatal_remote_execution_state(exc)
@@ -1107,6 +1145,8 @@ def _execute_after_upload_observation(
                 "via": "desktop_worker"
                 if "desktop worker" in str(exc).casefold()
                 else "",
+                "handler_id": decision.handler_id,
+                "execution_mode": decision.execution_mode,
             }
         raise
 
@@ -1120,6 +1160,8 @@ def _execute_after_upload_observation(
             "error_source": "none",
             "error_status_code": None,
             "via": str(execute_response.data.get("execution_via", "")),
+            "handler_id": decision.handler_id,
+            "execution_mode": decision.execution_mode,
         }
     if execution_state not in {"running", "execution_started"}:
         reason = f"execution action returned {execution_state}; polling skipped"
@@ -1131,6 +1173,8 @@ def _execute_after_upload_observation(
             "error_source": "remote",
             "error_status_code": None,
             "via": str(execute_response.data.get("execution_via", "")),
+            "handler_id": decision.handler_id,
+            "execution_mode": decision.execution_mode,
         }
 
     final_response = _poll_execution_status(
@@ -1151,6 +1195,8 @@ def _execute_after_upload_observation(
             final_response.data.get("execution_via")
             or execute_response.data.get("execution_via", "")
         ),
+        "handler_id": decision.handler_id,
+        "execution_mode": decision.execution_mode,
     }
 
 

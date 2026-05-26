@@ -33,14 +33,19 @@ lease bound to `case_id`, `sample_id`, `run_id`, and `expected_sha256`. Worker
 rejects expired, mismatched, reused, or concurrent leases fail-closed.
 
 Worker derives the sample path from shared case metadata; the caller never
-passes a path. The first implementation only supports `.exe` files. It verifies
-metadata and sha256, confirms the path is under
-`<workdir>\cases\<case_id>\sample\`, and starts the file with
-`subprocess.Popen([sample_path], shell=False, cwd=sample_dir)`. Standard streams
-are redirected to `DEVNULL`, Windows uses `CREATE_NO_WINDOW`, `close_fds=True`
-is set, and a minimal allowlisted environment is passed so tokens, cloud
-secrets, proxy variables, and real config paths are not inherited by the child
-process.
+passes a path. Worker resolves a narrow execution handler from the registered
+`stored_filename`: `.exe` uses `pe_executable`, `.bat`/`.cmd` uses
+`batch_script`, `.ps1` is recognized as `powershell_script` but disabled by
+default, and unknown suffixes are rejected as `unsupported_file_type`. It
+verifies metadata and sha256, confirms the path is under
+`<workdir>\cases\<case_id>\sample\`, and starts only the resolved handler.
+`.exe` uses `subprocess.Popen([sample_path], shell=False, cwd=sample_dir)`;
+`.bat`/`.cmd` uses the fixed `C:\Windows\System32\cmd.exe /d /c call
+<sample_path>` template with `shell=False`. Clients cannot provide cmd, shell,
+arguments, interpreter, or path fields. Standard streams are redirected to
+`DEVNULL`, Windows uses `CREATE_NO_WINDOW`, `close_fds=True` is set, and a
+minimal allowlisted environment is passed so tokens, cloud secrets, proxy
+variables, and real config paths are not inherited by the child process.
 
 The Worker must not be exposed to the network:
 

@@ -112,7 +112,9 @@ The readiness probe is registered for product id `qihoo-360`. It only verifies
 log observability:
 
 - non-Windows platforms return `unsupported`;
-- Windows with no discoverable `360safe.Summary.dat` returns `not_ready`;
+- Windows with no discoverable `360safe.Summary.dat` returns `not_ready` with
+  `summary_dat_not_found`; this can simply mean no quarantine/detection summary
+  has been created yet, not that 360 is definitely absent or disabled;
 - readable SQLite with queryable `FI` and `FQ` tables returns `ready`;
 - an empty `FQ` table still returns `ready` with `summary_records_empty`;
 - missing optional `360safe.Summary.union1` still returns `ready` with

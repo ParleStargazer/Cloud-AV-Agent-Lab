@@ -908,6 +908,7 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(forwarded["case_id"], "case-001__tencent-pc-manager")
         self.assertEqual(forwarded["sample_id"], "case-001")
         self.assertEqual(forwarded["run_id"], "run-1")
+        self.assertEqual(forwarded["handler_id"], "pe_executable")
         self.assertIn("execution_lease", forwarded)
         self.assertNotIn("worker-token", response.text)
         workspace = self.workdir / "cases" / "case-001__tencent-pc-manager"
@@ -966,6 +967,7 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(state["execution"]["root_pid"], 4321)
         self.assertEqual(state["execution"]["state"], "running")
         self.assertEqual(state["execution"]["stored_filename"], "proof.exe")
+        self.assertEqual(state["execution"]["handler_id"], "pe_executable")
         self.assertTrue(state["execution"]["sample_path_under_case"])
         events = _read_events(workspace / "events.jsonl")
         execution_events = [
@@ -974,6 +976,48 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(len(execution_events), 1)
         self.assertEqual(execution_events[0]["data"]["pid"], 4321)
         self.assertIn("started_at_utc", execution_events[0]["data"])
+
+    def test_action_execute_uploaded_batch_uses_fixed_cmd_template(self) -> None:
+        client = self._execution_client()
+        upload_headers = self._upload_headers()
+        upload_headers["X-Original-Filename"] = "eicar.bat"
+        client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        content = b"@echo off\r\necho harmless\r\n"
+        sha256 = hashlib.sha256(content).hexdigest()
+        client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=upload_headers | {"X-Sample-Sha256": sha256},
+            content=content,
+        )
+
+        with patch(
+            "cloud_av_agent_lab.guest_agent_server.workspace.execution.subprocess.Popen"
+        ) as popen:
+            popen.return_value.pid = 4321
+            response = client.post(
+                "/cases/case-001__tencent-pc-manager/actions",
+                headers=self._execution_headers(),
+                json={
+                    "action": "execute_uploaded_sample",
+                    "sample_id": "case-001",
+                    "expected_sha256": sha256,
+                    "handler_id": "batch_script",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["handler_id"], "batch_script")
+        self.assertEqual(data["execution_mode"], "script_via_cmd")
+        args, kwargs = popen.call_args
+        self.assertEqual(args[0][0], r"C:\Windows\System32\cmd.exe")
+        self.assertEqual(args[0][1:4], ["/d", "/c", "call"])
+        self.assertTrue(args[0][4].endswith("eicar.bat"))
+        self.assertFalse(kwargs["shell"])
 
     def test_execution_status_observes_running_root_process(self) -> None:
         client = self._execution_client()

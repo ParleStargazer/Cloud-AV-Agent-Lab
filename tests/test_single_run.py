@@ -37,7 +37,7 @@ class SingleRunTests(TestCase):
     def test_single_run_generates_artifacts_and_releases_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sample_path = root / "eicar.txt"
+            sample_path = root / "eicar.exe"
             sample_path.write_text("harmless placeholder", encoding="utf-8")
             client = FakeGuestClient()
             adapter = FakeCloudAdapter()
@@ -131,7 +131,7 @@ class SingleRunTests(TestCase):
     def test_cli_single_run_entry_executes_readiness_before_upload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sample_path = root / "eicar.txt"
+            sample_path = root / "eicar.exe"
             sample_path.write_text("harmless placeholder", encoding="utf-8")
             client = FakeGuestClient()
             captured: dict[str, SingleRunResult] = {}
@@ -198,7 +198,7 @@ class SingleRunTests(TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sample_path = root / "eicar.txt"
+            sample_path = root / "eicar.exe"
             sample_path.write_text("harmless placeholder", encoding="utf-8")
             client = FakeGuestClient()
 
@@ -232,7 +232,7 @@ class SingleRunTests(TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sample_path = root / "eicar.txt"
+            sample_path = root / "eicar.exe"
             sample_path.write_text("harmless placeholder", encoding="utf-8")
             client = FakeGuestClient()
 
@@ -261,7 +261,7 @@ class SingleRunTests(TestCase):
     def test_single_run_dry_run_generates_mock_config_and_dry_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sample_path = root / "sample.bin"
+            sample_path = root / "sample.exe"
             sample_path.write_bytes(b"harmless")
             client = FakeGuestClient()
 
@@ -338,7 +338,7 @@ class SingleRunTests(TestCase):
     def test_single_run_readiness_api_failure_is_warning_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sample_path = root / "sample.bin"
+            sample_path = root / "sample.exe"
             sample_path.write_bytes(b"harmless")
             client = FakeGuestClient(
                 readiness_error=GuestAgentError(
@@ -426,7 +426,7 @@ class SingleRunTests(TestCase):
     def test_single_run_fails_before_delivery_when_worker_not_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sample_path = root / "sample.bin"
+            sample_path = root / "sample.exe"
             sample_path.write_bytes(b"harmless")
             client = FakeGuestClient(
                 worker_ready=False,
@@ -454,7 +454,7 @@ class SingleRunTests(TestCase):
     def test_collection_remote_failure_continues_to_summary_and_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sample_path = root / "sample.bin"
+            sample_path = root / "sample.exe"
             sample_path.write_bytes(b"harmless")
             client = FakeGuestClient(fail_collect=True)
 
@@ -493,7 +493,7 @@ class SingleRunTests(TestCase):
     def test_removed_after_save_skips_execution_but_continues_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sample_path = root / "sample.bin"
+            sample_path = root / "sample.exe"
             sample_path.write_bytes(b"harmless")
             client = FakeGuestClient(status_upload_state="removed_after_save")
 
@@ -522,7 +522,7 @@ class SingleRunTests(TestCase):
     def test_locked_or_busy_skips_execution_but_continues_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sample_path = root / "sample.bin"
+            sample_path = root / "sample.exe"
             sample_path.write_bytes(b"harmless")
             client = FakeGuestClient(status_upload_state="locked_or_busy")
 
@@ -546,7 +546,7 @@ class SingleRunTests(TestCase):
     def test_nonfatal_execute_error_continues_to_collection_and_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sample_path = root / "sample.bin"
+            sample_path = root / "sample.exe"
             sample_path.write_bytes(b"harmless")
             client = FakeGuestClient(
                 execute_error=GuestAgentError(
@@ -578,7 +578,7 @@ class SingleRunTests(TestCase):
     def test_worker_busy_execute_error_is_nonfatal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            sample_path = root / "sample.bin"
+            sample_path = root / "sample.exe"
             sample_path.write_bytes(b"harmless")
             client = FakeGuestClient(
                 execute_error=GuestAgentError(
@@ -599,6 +599,86 @@ class SingleRunTests(TestCase):
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
             self.assertEqual(run_state["execution_action_state"], "worker_busy")
             self.assertEqual(run_state["evidence_export_status"], "saved")
+
+    def test_batch_script_uses_batch_handler(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.bat"
+            sample_path.write_text("echo harmless", encoding="utf-8")
+            client = FakeGuestClient(status_upload_state="stable")
+
+            result = run_single_case(
+                _options(root, sample_path),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(client.execute_handler_ids, ["batch_script"])
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                run_state["stages"]["execution"]["handler_id"],
+                "batch_script",
+            )
+            self.assertEqual(
+                run_state["stages"]["execution"]["execution_mode"],
+                "script_via_cmd",
+            )
+
+    def test_powershell_script_is_recognized_but_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.ps1"
+            sample_path.write_text("Write-Output harmless", encoding="utf-8")
+            client = FakeGuestClient(status_upload_state="stable")
+
+            result = run_single_case(
+                _options(root, sample_path),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            self.assertEqual(client.execute_handler_ids, [])
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_state["execution_action_status"], "skipped")
+            self.assertEqual(
+                run_state["execution_action_state"],
+                "execution_handler_disabled",
+            )
+            self.assertEqual(
+                run_state["stages"]["execution"]["handler_id"],
+                "powershell_script",
+            )
+
+    def test_unknown_execution_type_is_skipped_before_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.bin"
+            sample_path.write_bytes(b"harmless")
+            client = FakeGuestClient(status_upload_state="stable")
+
+            result = run_single_case(
+                _options(root, sample_path),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            self.assertEqual(client.execute_handler_ids, [])
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_state["execution_action_status"], "skipped")
+            self.assertEqual(
+                run_state["execution_action_state"],
+                "unsupported_file_type",
+            )
+            self.assertEqual(
+                run_state["stages"]["execution"]["handler_id"],
+                "unsupported",
+            )
 
 
 class SingleRunLockTests(TestCase):
@@ -708,6 +788,7 @@ class FakeGuestClient:
         self.worker_status_calls = 0
         self.export_timeouts: list[float | None] = []
         self.execute_dry_runs: list[bool] = []
+        self.execute_handler_ids: list[str] = []
         self.calls: list[str] = []
         self.prepare_products: list[str] = []
         self.readiness_products: list[str] = []
@@ -802,10 +883,12 @@ class FakeGuestClient:
         expected_sha256: str = "",
         dry_run: bool = True,
         run_id: str = "",
+        handler_id: str = "",
     ) -> GuestAgentResponse:
         if self.execute_error is not None:
             raise self.execute_error
         self.execute_dry_runs.append(dry_run)
+        self.execute_handler_ids.append(handler_id)
         if not dry_run:
             return GuestAgentResponse(
                 status="ok",

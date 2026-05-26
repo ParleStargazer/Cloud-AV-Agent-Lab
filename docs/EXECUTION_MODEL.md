@@ -90,8 +90,12 @@ anything state-changing:
 - The action is recorded in `events.jsonl` and summarized in case metadata.
 - Failures are explicit and do not fall back to arbitrary command execution.
 - The Desktop Worker receives only `case_id`, `sample_id`, `run_id`,
-  `expected_sha256`, and `execution_lease`.
-- Worker accepts only `.exe` files in the first implementation.
+  `expected_sha256`, `handler_id`, and `execution_lease`.
+- Worker derives the execution handler from the registered `sample.json`
+  filename and rejects mismatches.
+- Current handlers are `pe_executable` for `.exe`, `batch_script` for
+  `.bat`/`.cmd`, disabled `powershell_script` for `.ps1`, and
+  `unsupported` for other suffixes.
 - Worker uses a minimal allowlisted environment and strips project tokens,
   cloud secrets, proxy variables, and real config paths before launching the
   child process.
@@ -117,13 +121,17 @@ or execute the sample.
 `execute_uploaded_sample` still performs Control Agent metadata checks and
 records `execution_requested`, but the actual `subprocess.Popen` happens inside
 Desktop Worker. Worker derives the registered sample path from shared case
-metadata, verifies the file still exists, confirms sha256, ensures the file is
-below `<workdir>\cases\<case_id>\sample\`, and starts it with
-`subprocess.Popen([sample_path], shell=False, cwd=sample_dir)`. Standard input,
-standard output, and standard error are redirected to `subprocess.DEVNULL`; on
-Windows the process is started with `CREATE_NO_WINDOW`, and file descriptors are
-closed. Worker writes `worker-state/worker_execution_state.json`; Control Agent
-syncs the returned status into `case_state.json`, `events.jsonl`, and reports.
+metadata, verifies the file still exists, confirms sha256, resolves the handler,
+ensures the file is below `<workdir>\cases\<case_id>\sample\`, and starts it
+with a fixed handler template. `.exe` uses `subprocess.Popen([sample_path],
+shell=False, cwd=sample_dir)`. `.bat`/`.cmd` uses the fixed interpreter
+`C:\Windows\System32\cmd.exe` with fixed arguments `/d /c call <sample_path>`;
+the client still cannot supply a command, arguments, interpreter, shell flag, or
+path. Standard input, standard output, and standard error are redirected to
+`subprocess.DEVNULL`; on Windows the process is started with `CREATE_NO_WINDOW`,
+and file descriptors are closed. Worker writes
+`worker-state/worker_execution_state.json`; Control Agent syncs the returned
+status into `case_state.json`, `events.jsonl`, and reports.
 
 After a real trigger, `guest-execute-sample --real-action` polls
 `GET /cases/{case_id}/execution-status` every 2 seconds by default for up to 60

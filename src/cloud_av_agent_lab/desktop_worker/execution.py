@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from cloud_av_agent_lab.core.execution_modes import resolve_execution_mode
 from cloud_av_agent_lab.desktop_worker.lease import (
     ExecutionLeaseError,
     verify_execution_lease,
@@ -29,6 +30,7 @@ from cloud_av_agent_lab.guest_agent_server.workspace.paths import (
 
 ALLOWED_EXECUTE_FIELDS = {
     "case_id",
+    "handler_id",
     "sample_id",
     "run_id",
     "expected_sha256",
@@ -66,6 +68,7 @@ CHILD_ENV_ALLOWLIST = {
     "USERPROFILE",
     "WINDIR",
 }
+FIXED_CMD_EXE = Path(r"C:\Windows\System32\cmd.exe")
 CHILD_ENV_DENYLIST = {
     "ALL_PROXY",
     "CLOUD_AV_DESKTOP_WORKER_TOKEN",
@@ -202,12 +205,13 @@ class WorkerExecutionRegistry:
         actual_sha256: str,
     ) -> dict[str, Any]:
         workspace = context["workspace"]
-        sample_path = context["sample_path"]
         sample_dir = context["sample_dir"]
+        decision = context["execution_mode"]
+        command = _execution_command(context)
         started_at = _utc_now()
         try:
             process = subprocess.Popen(  # noqa: S603
-                [str(sample_path)],
+                command,
                 cwd=str(sample_dir),
                 shell=False,
                 stdin=subprocess.DEVNULL,
@@ -259,6 +263,13 @@ class WorkerExecutionRegistry:
             "started_at_utc": started_at,
             "sample_path_under_case": True,
             "execution_via": "desktop_worker",
+            "handler_id": decision.handler_id,
+            "execution_mode": decision.execution_mode,
+            "interpreter": _interpreter_for(decision.handler_id),
+            "client_supplied_command": False,
+            "client_supplied_args": False,
+            "client_supplied_path": False,
+            "hash_verified": actual_sha256 == request["expected_sha256"],
             "worker_pid": os.getpid(),
             "worker_session_id": current_process_session_id(),
         }
@@ -361,8 +372,11 @@ def _validate_execute_payload(payload: Mapping[str, Any]) -> dict[str, str]:
         "run_id": str(payload.get("run_id", "")).strip(),
         "expected_sha256": str(payload.get("expected_sha256", "")).strip(),
         "execution_lease": str(payload.get("execution_lease", "")).strip(),
+        "handler_id": str(payload.get("handler_id", "")).strip(),
     }
-    missing = [key for key, value in request.items() if not value]
+    missing = [
+        key for key, value in request.items() if not value and key != "handler_id"
+    ]
     if missing:
         raise WorkerExecutionError(
             "execute payload is missing required fields: " + ", ".join(missing)
@@ -401,8 +415,17 @@ def _execution_context(
         sample_metadata.get("stored_filename")
         or sample_metadata.get("original_filename")
     )
-    if Path(stored_filename).suffix.casefold() != ".exe":
-        raise WorkerExecutionError("Desktop Worker only executes registered .exe files")
+    decision = resolve_execution_mode(stored_filename)
+    requested_handler = str(request.get("handler_id", "")).strip()
+    if requested_handler and requested_handler != decision.handler_id:
+        raise WorkerExecutionError(
+            "handler_id does not match the registered uploaded sample type"
+        )
+    if not decision.enabled:
+        reason = decision.reason_code or "execution_handler_disabled"
+        raise WorkerExecutionError(
+            f"execution handler is disabled or unsupported: {reason}"
+        )
     sample_dir = (workspace / "sample").resolve()
     sample_path = (sample_dir / stored_filename).resolve()
     if not _is_relative_to(sample_path, sample_dir):
@@ -417,6 +440,7 @@ def _execution_context(
         "sample_dir": sample_dir,
         "sample_path": sample_path,
         "stored_filename": stored_filename,
+        "execution_mode": decision,
     }
 
 
@@ -481,10 +505,31 @@ def _base_worker_execution_state(
         "actual_sha256": actual_sha256,
         "expected_sha256_match": actual_sha256 == request["expected_sha256"],
         "stored_filename": str(context["stored_filename"]),
+        "handler_id": context["execution_mode"].handler_id,
+        "execution_mode": context["execution_mode"].execution_mode,
+        "interpreter": _interpreter_for(context["execution_mode"].handler_id),
+        "client_supplied_command": False,
+        "client_supplied_args": False,
+        "client_supplied_path": False,
+        "hash_verified": actual_sha256 == request["expected_sha256"],
         "sample_path_under_case": True,
         "execution_via": "desktop_worker",
         "low_intrusion_observation": True,
     }
+
+
+def _execution_command(context: Mapping[str, Any]) -> list[str]:
+    sample_path = context["sample_path"]
+    decision = context["execution_mode"]
+    if decision.handler_id == "batch_script":
+        return [str(FIXED_CMD_EXE), "/d", "/c", "call", str(sample_path)]
+    return [str(sample_path)]
+
+
+def _interpreter_for(handler_id: str) -> str:
+    if handler_id == "batch_script":
+        return str(FIXED_CMD_EXE)
+    return ""
 
 
 def _write_worker_state(workspace: Path, state: Mapping[str, Any]) -> None:

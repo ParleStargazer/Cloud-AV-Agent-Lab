@@ -25,6 +25,10 @@ READINESS_WARNING = (
     "Qihoo 360 readiness verifies log observability only; it does not prove "
     "real-time protection is enabled."
 )
+SUMMARY_NOT_FOUND_MESSAGE = (
+    "360safe.Summary.dat was not found. This may mean no 360 "
+    "quarantine/detection summary has been created yet."
+)
 
 
 class Qihoo360SecurityProductReadinessProbe:
@@ -77,7 +81,7 @@ class Qihoo360SecurityProductReadinessProbe:
                 SecurityProductReadinessCheck(
                     name="qihoo360_summary_dat_discovered",
                     status="failed",
-                    message="360safe Summary.dat was not found",
+                    message=SUMMARY_NOT_FOUND_MESSAGE,
                     data={"filename": SUMMARY_DATABASE_NAME},
                 )
             )
@@ -85,7 +89,7 @@ class Qihoo360SecurityProductReadinessProbe:
                 state="not_ready",
                 checks=checks,
                 warnings=warnings,
-                errors=["360safe Summary.dat was not found"],
+                errors=[SUMMARY_NOT_FOUND_MESSAGE],
                 reason_codes=["summary_dat_not_found"],
             )
 

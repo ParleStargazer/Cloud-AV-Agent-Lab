@@ -780,12 +780,14 @@ class GuestAgentClientTests(TestCase):
             case_id="case-001__tencent-pc-manager",
             sample_id="case-001",
             dry_run=False,
+            handler_id="batch_script",
         )
 
         self.assertEqual(response.data["execution_state"], "execution_disabled")
         call = network.calls[0]
         self.assertEqual(call["timeout_seconds"], 9)
         self.assertEqual(call["payload"]["action"], "execute_uploaded_sample")
+        self.assertEqual(call["payload"]["handler_id"], "batch_script")
         headers = call["headers"]
         self.assertIsInstance(headers, dict)
         self.assertEqual(headers["Authorization"], "Bearer agent-secret")

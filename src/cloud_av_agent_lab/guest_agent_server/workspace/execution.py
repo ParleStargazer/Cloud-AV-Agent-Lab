@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from cloud_av_agent_lab.core.execution_modes import resolve_execution_mode
+
 from .errors import WorkspaceError, WorkspaceNotFoundError
 from .io import (
     _case_sample_id,
@@ -50,9 +52,11 @@ FORBIDDEN_WORKER_ACTION_FIELDS = {
 ALLOWED_WORKER_ACTION_FIELDS = {
     "action",
     "expected_sha256",
+    "handler_id",
     "run_id",
     "sample_id",
 }
+FIXED_CMD_EXE = Path(r"C:\Windows\System32\cmd.exe")
 
 
 @dataclass
@@ -168,6 +172,15 @@ def prepare_worker_execute_request(
     if not expected_sha256:
         expected_sha256 = str(context["sample_metadata"].get("sha256", "")).strip()
     run_id = str(payload.get("run_id") or safe_id).strip()
+    decision = context["execution_mode"]
+    requested_handler = str(payload.get("handler_id", "")).strip()
+    if requested_handler and requested_handler != decision.handler_id:
+        raise WorkspaceError(
+            "handler_id does not match the registered uploaded sample type"
+        )
+    if not decision.enabled:
+        reason = decision.reason_code or "execution_handler_disabled"
+        raise WorkspaceError(f"execution handler is disabled or unsupported: {reason}")
     append_event(
         workspace,
         event_type="execution_requested",
@@ -179,6 +192,8 @@ def prepare_worker_execute_request(
             "sample_path_under_case": True,
             "expected_sha256_match": context["expected_sha256_match"],
             "execution_via": "desktop_worker",
+            "handler_id": decision.handler_id,
+            "execution_mode": decision.execution_mode,
         },
     )
     return {
@@ -186,6 +201,7 @@ def prepare_worker_execute_request(
         "sample_id": str(context["sample_id"]),
         "run_id": run_id,
         "expected_sha256": expected_sha256,
+        "handler_id": decision.handler_id,
     }
 
 
@@ -242,6 +258,10 @@ def _execute_uploaded_sample(
     context = _uploaded_sample_execution_context(workspace, payload)
     sample_path = context["sample_path"]
     sample_dir = context["sample_dir"]
+    decision = context["execution_mode"]
+    if not decision.enabled:
+        reason = decision.reason_code or "execution_handler_disabled"
+        raise WorkspaceError(f"execution handler is disabled or unsupported: {reason}")
     expected_sha256 = str(payload.get("expected_sha256", "")).strip()
     requested_at = _utc_now()
     append_event(
@@ -269,7 +289,7 @@ def _execute_uploaded_sample(
 
     try:
         process = subprocess.Popen(  # noqa: S603
-            [str(sample_path)],
+            _execution_command(context),
             cwd=str(sample_dir),
             shell=False,
             stdin=subprocess.DEVNULL,
@@ -328,6 +348,12 @@ def _execute_uploaded_sample(
         "expected_sha256": expected_sha256,
         "expected_sha256_match": context["expected_sha256_match"],
         "stored_filename": sample_path.name,
+        "handler_id": decision.handler_id,
+        "execution_mode": decision.execution_mode,
+        "interpreter": _interpreter_for(decision.handler_id),
+        "client_supplied_command": False,
+        "client_supplied_args": False,
+        "client_supplied_path": False,
         "cwd": str(sample_dir),
         "sample_path_under_case": True,
         "started_at_utc": started_at,
@@ -348,6 +374,8 @@ def _execute_uploaded_sample(
             "pid": process.pid,
             "started_at_utc": started_at,
             "sample_path_under_case": True,
+            "handler_id": decision.handler_id,
+            "execution_mode": decision.execution_mode,
         },
     )
     write_case_report(workspace)
@@ -361,6 +389,12 @@ def _execute_uploaded_sample(
         "expected_sha256": expected_sha256,
         "started_at_utc": started_at,
         "sample_path_under_case": True,
+        "handler_id": decision.handler_id,
+        "execution_mode": decision.execution_mode,
+        "interpreter": _interpreter_for(decision.handler_id),
+        "client_supplied_command": False,
+        "client_supplied_args": False,
+        "client_supplied_path": False,
     }
 
 
@@ -389,6 +423,7 @@ def _uploaded_sample_execution_context(
         sample_metadata.get("stored_filename")
         or sample_metadata.get("original_filename")
     )
+    decision = resolve_execution_mode(stored_filename)
     sample_dir = (workspace / "sample").resolve()
     sample_path = (sample_dir / stored_filename).resolve()
     if not _is_relative_to(sample_path, sample_dir):
@@ -399,10 +434,26 @@ def _uploaded_sample_execution_context(
         "sample_id": sample_id,
         "sample_dir": sample_dir,
         "sample_path": sample_path,
+        "stored_filename": stored_filename,
+        "execution_mode": decision,
         "expected_sha256_match": not expected_sha256
         or not recorded_sha256
         or expected_sha256 == recorded_sha256,
     }
+
+
+def _execution_command(context: Mapping[str, Any]) -> list[str]:
+    sample_path = context["sample_path"]
+    decision = context["execution_mode"]
+    if decision.handler_id == "batch_script":
+        return [str(FIXED_CMD_EXE), "/d", "/c", "call", str(sample_path)]
+    return [str(sample_path)]
+
+
+def _interpreter_for(handler_id: str) -> str:
+    if handler_id == "batch_script":
+        return str(FIXED_CMD_EXE)
+    return ""
 
 
 def _observe_execution(
@@ -611,6 +662,36 @@ def _record_worker_execution(
                 or worker_execution.get("run_id")
                 or execution.get("run_id", "")
             ),
+            "handler_id": str(
+                payload.get("handler_id")
+                or worker_execution.get("handler_id")
+                or execution.get("handler_id", "")
+            ),
+            "execution_mode": str(
+                payload.get("execution_mode")
+                or worker_execution.get("execution_mode")
+                or execution.get("execution_mode", "")
+            ),
+            "interpreter": str(
+                payload.get("interpreter")
+                or worker_execution.get("interpreter")
+                or execution.get("interpreter", "")
+            ),
+            "client_supplied_command": bool(
+                payload.get("client_supplied_command")
+                or worker_execution.get("client_supplied_command")
+            ),
+            "client_supplied_args": bool(
+                payload.get("client_supplied_args")
+                or worker_execution.get("client_supplied_args")
+            ),
+            "client_supplied_path": bool(
+                payload.get("client_supplied_path")
+                or worker_execution.get("client_supplied_path")
+            ),
+            "hash_verified": bool(
+                payload.get("hash_verified") or worker_execution.get("hash_verified")
+            ),
             "sample_path_under_case": bool(
                 payload.get("sample_path_under_case")
                 or worker_execution.get("sample_path_under_case")
@@ -643,6 +724,13 @@ def _record_worker_execution(
         "worker_pid": payload.get("worker_pid") or worker_execution.get("worker_pid"),
         "worker_session_id": payload.get("worker_session_id")
         or worker_execution.get("worker_session_id"),
+        "handler_id": execution.get("handler_id", ""),
+        "execution_mode": execution.get("execution_mode", ""),
+        "interpreter": execution.get("interpreter", ""),
+        "client_supplied_command": execution.get("client_supplied_command", False),
+        "client_supplied_args": execution.get("client_supplied_args", False),
+        "client_supplied_path": execution.get("client_supplied_path", False),
+        "hash_verified": execution.get("hash_verified", False),
         "low_intrusion_observation": True,
     }
     append_event(
