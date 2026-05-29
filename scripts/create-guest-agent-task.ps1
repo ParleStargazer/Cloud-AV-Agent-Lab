@@ -3,7 +3,8 @@
 
 param(
     [string]$WorkspaceRoot = "C:\CloudAvAgentLab",
-    [switch]$EnableExecutionActions
+    [switch]$EnableExecutionActions,
+    [switch]$DisableExecutionActions
 )
 
 $TaskName = "Start-CloudAvAgentLab"
@@ -24,8 +25,10 @@ $StartAgentScript = Join-Path $WorkspaceRoot "StartAgent.ps1"
 
 $StartAgentArguments = "-ExecutionPolicy Bypass -File `"$StartAgentScript`""
 
-if ($EnableExecutionActions) {
-    $StartAgentArguments = "$StartAgentArguments -EnableExecutionActions"
+if ($DisableExecutionActions) {
+    $StartAgentArguments = "$StartAgentArguments -DisableExecutionActions"
+} elseif ($EnableExecutionActions) {
+    Write-Host "Execution actions are enabled by StartAgent.ps1 by default; -EnableExecutionActions is accepted for compatibility."
 }
 
 if (-not (Test-Path -LiteralPath $StartAgentScript)) {

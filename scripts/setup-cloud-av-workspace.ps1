@@ -50,8 +50,15 @@ Deployment notes:
 
 - Copy the full contents of scripts\pack\dist\agent-suite\bin into C:\CloudAvAgentLab\bin.
 - Scheduled tasks call StartAgent.ps1 and StartDesktopWorker.ps1.
-- Edit the startup scripts on this VM if you need to set environment variables
-  before launching guest-agent.exe or desktop-worker.exe.
+- Edit StartAgent.ps1 on this VM and configure:
+  CLOUD_AV_GUEST_AGENT_TOKEN
+  CLOUD_AV_GUEST_AGENT_UPLOAD_TOKEN
+  CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN
+  CLOUD_AV_DESKTOP_WORKER_TOKEN
+- Edit StartDesktopWorker.ps1 on this VM and configure:
+  CLOUD_AV_DESKTOP_WORKER_TOKEN
+- StartAgent.ps1 enables controlled execution actions by default. Use
+  -DisableExecutionActions only for diagnostic runs that must not execute.
 - Keep real tokens out of source control, logs, reports, and evidence bundles.
 - Do not place samples, secrets, configs\real.toml, or evidence bundles in this workspace root.
 "@
@@ -80,18 +87,23 @@ function Write-StartupScriptIfMissing {
 
 $AgentScriptContent = @'
 param(
-    [switch]$EnableExecutionActions
+    # Controlled execution actions are enabled by default for single-run.
+    # -EnableExecutionActions is kept for compatibility with older deployment
+    # commands. Use -DisableExecutionActions for diagnostic no-execute runs.
+    [switch]$EnableExecutionActions,
+    [switch]$DisableExecutionActions
 )
 
 $ErrorActionPreference = "Stop"
 
-# Optional: configure VM-local environment variables here before starting the
-# service. Do not copy real tokens back into the repository.
+# Required: configure VM-local environment variables here before starting the
+# service, or set the same names as machine-level environment variables. Do not
+# copy real tokens back into the repository.
 #
-# $env:CLOUD_AV_GUEST_AGENT_TOKEN = "replace-on-cloud-vm"
-# $env:CLOUD_AV_GUEST_AGENT_UPLOAD_TOKEN = "replace-on-cloud-vm"
-# $env:CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN = "replace-on-cloud-vm"
-# $env:CLOUD_AV_DESKTOP_WORKER_TOKEN = "replace-on-cloud-vm"
+# $env:CLOUD_AV_GUEST_AGENT_TOKEN = "replace-with-agent-token"
+# $env:CLOUD_AV_GUEST_AGENT_UPLOAD_TOKEN = "replace-with-upload-token"
+# $env:CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN = "replace-with-execution-token"
+# $env:CLOUD_AV_DESKTOP_WORKER_TOKEN = "replace-with-worker-token"
 
 $WorkspaceRoot = $PSScriptRoot
 $BinDirectory = Join-Path $WorkspaceRoot "bin"
@@ -111,7 +123,7 @@ $Arguments = @(
     "--desktop-worker-expected-user", "AvTester-Admin"
 )
 
-if ($EnableExecutionActions) {
+if (-not $DisableExecutionActions) {
     $Arguments += @(
         "--enable-execution-actions",
         "--execution-token-env", "CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
@@ -125,10 +137,11 @@ exit $LASTEXITCODE
 $DesktopWorkerScriptContent = @'
 $ErrorActionPreference = "Stop"
 
-# Optional: configure VM-local environment variables here before starting the
-# worker. Do not copy real tokens back into the repository.
+# Required: configure the VM-local Desktop Worker token here before starting the
+# worker, or set the same name as a machine-level environment variable. Do not
+# copy real tokens back into the repository.
 #
-# $env:CLOUD_AV_DESKTOP_WORKER_TOKEN = "replace-on-cloud-vm"
+# $env:CLOUD_AV_DESKTOP_WORKER_TOKEN = "replace-with-worker-token"
 
 $WorkspaceRoot = $PSScriptRoot
 $BinDirectory = Join-Path $WorkspaceRoot "bin"

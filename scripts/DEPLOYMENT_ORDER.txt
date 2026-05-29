@@ -56,7 +56,18 @@ Recommended order for a clean Windows Lighthouse instance:
 
 6. Configure required Windows environment variables on the cloud VM
    Recommended for this project stage: edit the generated startup scripts on
-   the VM and configure VM-local environment variables there:
+   the VM and configure VM-local environment variables there.
+
+   In StartAgent.ps1, configure all four tokens:
+
+     CLOUD_AV_GUEST_AGENT_TOKEN
+     CLOUD_AV_GUEST_AGENT_UPLOAD_TOKEN
+     CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN
+     CLOUD_AV_DESKTOP_WORKER_TOKEN
+
+   In StartDesktopWorker.ps1, configure the same worker token:
+
+     CLOUD_AV_DESKTOP_WORKER_TOKEN
 
      C:\CloudAvAgentLab\StartAgent.ps1
      C:\CloudAvAgentLab\StartDesktopWorker.ps1
@@ -74,10 +85,11 @@ Recommended order for a clean Windows Lighthouse instance:
    StartDesktopWorker.ps1 when the AvTester-Admin account logs on and stays
    bound to localhost.
 
-   If this VM is used for controlled execution tests, create the Guest Agent
-   task with execution actions explicitly enabled:
+   StartAgent.ps1 enables controlled execution actions by default. If a
+   diagnostic run must start the agent without execution actions, create the
+   task with:
 
-     .\scripts\create-guest-agent-task.ps1 -EnableExecutionActions
+     .\scripts\create-guest-agent-task.ps1 -DisableExecutionActions
 
 8. Reboot and verify
    After reboot, confirm:

@@ -86,7 +86,11 @@ Manual deployment steps:
 5. Extract or copy every file to `C:\CloudAvAgentLab\bin\`.
 6. Review `C:\CloudAvAgentLab\StartAgent.ps1` and
    `C:\CloudAvAgentLab\StartDesktopWorker.ps1`; configure VM-local environment
-   variables there if you do not want to rely on machine-level variables.
+   variables there. `StartAgent.ps1` should define
+   `CLOUD_AV_GUEST_AGENT_TOKEN`, `CLOUD_AV_GUEST_AGENT_UPLOAD_TOKEN`,
+   `CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN`, and
+   `CLOUD_AV_DESKTOP_WORKER_TOKEN`. `StartDesktopWorker.ps1` should define the
+   same `CLOUD_AV_DESKTOP_WORKER_TOKEN` value.
 7. Set machine-level token environment variables on the cloud instance if you
    do not configure them in the startup scripts:
 
@@ -106,9 +110,10 @@ Manual deployment steps:
 Open a new terminal after setting the machine-level variable so the process can
 see it.
 
-Controlled execution is optional and must stay disabled unless you are manually
-validating a harmless uploaded executable in the cloud guest. To enable that
-path, set a third machine-level token:
+The generated `StartAgent.ps1` enables controlled execution actions by default
+for single-run. Keep a separate execution token configured on the cloud guest;
+use `-DisableExecutionActions` only for diagnostic runs that must not execute
+uploaded samples. If you prefer machine-level variables, set a third token:
 
 ```powershell
 [Environment]::SetEnvironmentVariable(
@@ -153,13 +158,12 @@ cd C:\CloudAvAgentLab
 .\StartAgent.ps1
 ```
 
-That command keeps controlled execution disabled. For a cloud-side manual
-validation with an EICAR or harmless executable only, start the agent with the
-explicit execution switch:
+That command starts Control Agent with controlled execution actions enabled by
+default. For a diagnostic no-execute run, use:
 
 ```powershell
 cd C:\CloudAvAgentLab
-.\StartAgent.ps1 -EnableExecutionActions
+.\StartAgent.ps1 -DisableExecutionActions
 ```
 
 From the local control plane, configure:
@@ -278,7 +282,8 @@ path ownership but does not start a process.
 To request a real cloud-side execution of the registered harmless upload, all of
 the following must be true:
 
-- the cloud agent was started with `--enable-execution-actions`;
+- the cloud agent was started by the generated `StartAgent.ps1` without
+  `-DisableExecutionActions`;
 - the cloud instance has `CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN` set;
 - local config has `[guest_agent.execution].enabled = true`;
 - the local shell has the matching execution token environment variable.

@@ -64,7 +64,8 @@ Trigger is a controlled case action, not a general command runner. The default
 CLI request is `dry_run_execute_uploaded_sample`, which validates metadata and
 path ownership without launching a process. A real trigger requires local
 `[guest_agent.execution].enabled = true`, a matching execution token, and a
-cloud agent started with `--enable-execution-actions`. The server resolves the
+cloud agent started by the generated `StartAgent.ps1` without
+`-DisableExecutionActions`. The server resolves the
 file from `sample.json`, rejects arbitrary paths or shell arguments, verifies
 that the file is still under `<workdir>\cases\<case_id>\sample\`, signs a
 short-lived execution lease, and forwards the action to Desktop Worker. Worker

@@ -85,6 +85,13 @@ place to configure VM-local environment variables.
 $env:CLOUD_AV_DESKTOP_WORKER_TOKEN = "replace-with-worker-token"
 ```
 
+Configure the same worker token in both generated startup scripts:
+
+- `C:\CloudAvAgentLab\StartAgent.ps1`, so Control Agent can call Worker over
+  localhost;
+- `C:\CloudAvAgentLab\StartDesktopWorker.ps1`, so Worker can verify incoming
+  requests.
+
 Do not write this token to configs, logs, reports, events, summary, or evidence
 bundles.
 

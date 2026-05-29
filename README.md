@@ -355,7 +355,7 @@ python -m cloud_av_agent_lab guest-execution-status `
 
 `guest-upload-sample` 会在上传成功后自动等待 10 秒，并每 2 秒轮询一次状态，最多观察 30 秒。`guest-execute-sample` 默认是 dry-run，只验证 metadata、sha256 和路径归属，不启动进程。
 
-如需在云端手动验证无害命令 exe 的真实触发，需要先用 `--enable-execution-actions` 启动云端 Guest Agent，并在云端和本地都设置 `CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN`；本地配置也必须设置 `[guest_agent.execution].enabled = true`。满足这些条件后，才可以显式传入 `--real-action`：
+如需在云端手动验证无害命令 exe 的真实触发，推荐使用生成的 `StartAgent.ps1` 启动云端 Guest Agent；该启动脚本默认开启受控执行动作。云端和本地都必须设置 `CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN`，本地配置也必须设置 `[guest_agent.execution].enabled = true`。满足这些条件后，才可以显式传入 `--real-action`：
 
 ```powershell
 $env:CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN="replace-with-execution-token"
