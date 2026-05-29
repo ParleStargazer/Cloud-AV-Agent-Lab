@@ -3,8 +3,9 @@
 This document tracks the 360 Security Guard / 360safe onboarding work. The
 current implementation covers stage 1 parser support, stage 2 baseline / delta
 helpers, a stage 3 readiness probe, a stage 4 collector MVP for
-`360safe.Summary.dat` snapshots, and stage 5 product binding for CLI,
-configuration validation, and `single-run`.
+`360safe.Summary.dat` snapshots, stage 5 product binding for CLI,
+configuration validation, and `single-run`, plus a cloud-isolated `single-run`
+smoke validation.
 
 ## Product ID
 
@@ -225,8 +226,33 @@ The current stage 1/2/3/4/5 implementation:
 - does not touch `configs/real.toml`;
 - does not trigger Tencent Cloud APIs.
 
-## Next Stages
+## Smoke Validation Status
 
-Next stage is an isolated EICAR smoke test on a Qihoo 360 baseline. Raw SQLite
-snapshots, WAL/SHM files, quarantine files, and uploaded sample bytes must
-remain excluded from the default redacted evidence bundle.
+2026-05-29: Qihoo 360 MVP is considered integrated and smoke-validated in a
+cloud-isolated Lighthouse Windows environment. The final validation used the
+administrator Desktop Worker account and confirmed:
+
+- `product_id = qihoo-360` flows through `single-run`;
+- Desktop Worker runs under the dedicated administrator account
+  `AvTester-Admin`;
+- controlled execution can start the current case sample without exposing
+  arbitrary path, command, argument, shell, or PowerShell input;
+- Qihoo 360 writes a `Summary.dat` quarantine summary after execution;
+- normalized evidence includes `av_quarantined` for
+  `木马:Win32/TrojanDownloader.Generic.HoMAUHAA`;
+- the unified timeline shows execution observation, product-log quarantine,
+  collection start, and collection finish in chronological order after UTC+8
+  timestamp normalization;
+- attribution is strong through the current case sample path and threat name;
+- summary verdict is `detected_or_blocked` with high confidence;
+- cleanup restore completes;
+- raw SQLite snapshots, WAL/SHM files, q3q quarantine files, uploaded sample
+  bytes, tokens, cloud secrets, and `configs/real.toml` remain excluded from
+  the default redacted evidence bundle.
+
+Future Qihoo 360 work should be treated as hardening rather than MVP
+enablement: broader 360 version coverage, product-specific collection delay
+tuning, more sample-type smoke tests, and additional evidence fields if future
+logs require them. Raw SQLite snapshots, WAL/SHM files, quarantine files, and
+uploaded sample bytes must remain excluded from the default redacted evidence
+bundle.

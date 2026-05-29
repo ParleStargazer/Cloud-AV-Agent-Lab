@@ -146,7 +146,11 @@ bundle after global text redaction and is categorized as
 Qihoo 360 now follows the same product onboarding path as Huorong and Windows
 Defender. It uses the stable `product_id` `qihoo-360`, has a low-risk readiness
 probe, has a product collector registered through the existing registry, and is
-selectable through the shared CLI / `single-run` product resolution flow.
+selectable through the shared CLI / `single-run` product resolution flow. The
+MVP has been smoke-validated in a cloud-isolated Windows Lighthouse run using
+the administrator Desktop Worker account: Qihoo 360 produced a `Summary.dat`
+quarantine record, the collector emitted normalized `av_quarantined` evidence,
+and evaluation produced a conservative `detected_or_blocked / high` summary.
 
 Its implementation shape is closer to Huorong than Windows Defender: copy the
 product log snapshot into the current case workspace, parse the copied file
@@ -154,6 +158,9 @@ read-only, emit normalized evidence, and keep raw product logs out of the
 default redacted evidence bundle. The collector keeps Qihoo-specific table /
 record schema, timestamp fields, action semantics, and attribution rules inside
 `collectors/qihoo_360/`; Huorong assumptions are not hard-coded for 360.
+FILETIME-like Qihoo timestamps are normalized from UTC+8 local wall-clock time
+to UTC while preserving an explicit parser warning, so time-window attribution
+can align with the unified case timeline without hiding the assumption.
 
 ## Unified Event Timeline
 
