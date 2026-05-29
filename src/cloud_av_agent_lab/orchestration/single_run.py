@@ -1386,7 +1386,7 @@ base_url = {_toml_string(options.desktop_worker_url)}
 token_env = "CLOUD_AV_DESKTOP_WORKER_TOKEN"
 timeout_seconds = 5
 required_for_execution = true
-expected_user = ""
+expected_user = "Administrator"
 require_interactive_session = true
 
 [[products]]

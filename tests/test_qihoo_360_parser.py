@@ -30,11 +30,11 @@ class Qihoo360ParserTests(unittest.TestCase):
             _text_field("@204", "木马"),
             _text_field("@205", "恢复文件"),
             _text_field("@206", "134241831817950000"),
-            _text_field("@208", r"C:\Users\AvTester\Desktop\eicar.com"),
-            _text_field("@209", r"C:\Users\AvTester\Desktop\eicar.com"),
+            _text_field("@208", r"C:\Users\Administrator\Desktop\eicar.com"),
+            _text_field("@209", r"C:\Users\Administrator\Desktop\eicar.com"),
             _container(
                 "@101",
-                _text_field("@500", r"C:\Users\AvTester\Desktop\eicar.com"),
+                _text_field("@500", r"C:\Users\Administrator\Desktop\eicar.com"),
                 _text_field("@501", "68"),
                 _text_field("@502", r"C:\$360Section\360.example.q3q"),
                 _text_field("@510", "44D88612FEA8A8F36DE82E1278ABB02F"),
@@ -59,7 +59,10 @@ class Qihoo360ParserTests(unittest.TestCase):
         self.assertEqual(parsed.event_time_raw, "134241831817950000")
         self.assertTrue(parsed.observed_at_utc.endswith("Z"))
         self.assertEqual(parsed.time_confidence, "low")
-        self.assertEqual(parsed.file_path, r"C:\Users\AvTester\Desktop\eicar.com")
+        self.assertEqual(
+            parsed.file_path,
+            r"C:\Users\Administrator\Desktop\eicar.com",
+        )
         self.assertEqual(parsed.file_size, 68)
         self.assertEqual(parsed.quarantine_path, r"C:\$360Section\360.example.q3q")
         self.assertEqual(parsed.md5, "44d88612fea8a8f36de82e1278abb02f")
@@ -120,7 +123,10 @@ class Qihoo360SQLiteReaderTests(unittest.TestCase):
         self.assertEqual(len(summary.events), 1)
         event = summary.events[0]
         self.assertEqual(event.source_row_id, 1)
-        self.assertEqual(event.file_path, r"C:\Users\AvTester\Desktop\eicar.com")
+        self.assertEqual(
+            event.file_path,
+            r"C:\Users\Administrator\Desktop\eicar.com",
+        )
         self.assertEqual(event.file_size, 68)
         self.assertEqual(event.quarantine_path, r"C:\$360Section\360.example.q3q")
         self.assertEqual(
@@ -177,7 +183,7 @@ def _write_summary_db(path: Path, fc_blob: bytes) -> None:
             'INSERT INTO "FI" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             (
                 1,
-                r"C:\Users\AvTester\Desktop\eicar.com".encode("utf-8"),
+                r"C:\Users\Administrator\Desktop\eicar.com".encode("utf-8"),
                 r"C:\$360Section\360.example.q3q".encode("utf-8"),
                 b"44d88612fea8a8f36de82e1278abb02f",
                 b"3395856ce81f2b7382dee72602f798b642f14140",

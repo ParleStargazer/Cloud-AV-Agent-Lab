@@ -84,7 +84,7 @@ python -m cloud_av_agent_lab.guest_agent_server.main `
   --workdir C:\CloudAvAgentLab `
   --enable-desktop-worker `
   --desktop-worker-url http://127.0.0.1:8001 `
-  --desktop-worker-expected-user avtest
+  --desktop-worker-expected-user Administrator
 ```
 
 `/worker/status` returns `desktop_worker_ready=false` when the Worker is
@@ -95,8 +95,8 @@ session, or running under an unexpected user.
 
 The future baseline snapshot should contain:
 
-- a low-privilege test user;
-- automatic login for that user;
+- a dedicated administrator account;
+- automatic login for that administrator account;
 - Desktop Worker startup on user login;
 - Control Agent startup as Session 0 service or scheduled task;
 - target security product initialized in the desktop session.

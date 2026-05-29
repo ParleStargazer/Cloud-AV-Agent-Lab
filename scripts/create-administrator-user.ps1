@@ -1,8 +1,8 @@
-# Create-AvTester.ps1
+# Create-AdministratorUser.ps1
 # Run this script as Administrator.
 
 param(
-    [string]$Username = "AvTester",
+    [string]$Username = "Administrator",
 
     [Parameter(Mandatory = $true)]
     [string]$Password
@@ -37,8 +37,8 @@ if ($existingUser) {
     New-LocalUser `
         -Name $Username `
         -Password $SecurePassword `
-        -FullName "AV Test User" `
-        -Description "AV test user" `
+        -FullName "Cloud AV Administrator" `
+        -Description "Cloud AV Agent Lab administrator account" `
         -ErrorAction Stop
 }
 
@@ -46,7 +46,7 @@ Write-Host "Ensuring password does not expire..."
 
 Set-LocalUser -Name $Username -PasswordNeverExpires $true -ErrorAction Stop
 
-Write-Host "Ensuring user is a standard user..."
+Write-Host "Ensuring user is an administrator..."
 
 try {
     Add-LocalGroupMember -Group "Users" -Member $Username -ErrorAction Stop
@@ -56,10 +56,10 @@ try {
 }
 
 try {
-    Remove-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction Stop
-    Write-Host "User '$Username' removed from Administrators group."
+    Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction Stop
+    Write-Host "User '$Username' added to Administrators group."
 } catch {
-    Write-Host "User '$Username' is not in Administrators group or removal is not needed."
+    Write-Host "User '$Username' may already be in Administrators group."
 }
 
-Write-Host "Done. Local user '$Username' is ready."
+Write-Host "Done. Administrator account '$Username' is ready."

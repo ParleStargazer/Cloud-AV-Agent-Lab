@@ -64,7 +64,7 @@ class GuestAgentDesktopWorkerConfig:
     token_env: str = "CLOUD_AV_DESKTOP_WORKER_TOKEN"
     timeout_seconds: float = 5.0
     required_for_execution: bool = True
-    expected_user: str = ""
+    expected_user: str = "Administrator"
     require_interactive_session: bool = True
 
 

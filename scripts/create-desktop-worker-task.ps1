@@ -2,7 +2,7 @@
 # Run this script as Administrator.
 
 $TaskName = "Start-Worker"
-$TargetUser = "AvTester"
+$TargetUser = "Administrator"
 
 Write-Host "Checking administrator privileges..."
 
@@ -18,16 +18,16 @@ Write-Host "Preparing scheduled task configuration..."
 
 $Action = New-ScheduledTaskAction `
     -Execute "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
-    -Argument '-ExecutionPolicy Bypass -File "C:\Users\AvTester\desktop-worker\Start-worker.ps1"' `
-    -WorkingDirectory "C:\Users\AvTester\desktop-worker"
+    -Argument '-ExecutionPolicy Bypass -File "C:\Users\Administrator\desktop-worker\Start-worker.ps1"' `
+    -WorkingDirectory "C:\Users\Administrator\desktop-worker"
 
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
 
-# Run only when AvTester is logged on, so the worker starts in the interactive desktop session.
+# Run only when Administrator is logged on, so the worker starts in the interactive desktop session.
 $Principal = New-ScheduledTaskPrincipal `
     -UserId $TargetUser `
     -LogonType Interactive `
-    -RunLevel Limited
+    -RunLevel Highest
 
 $Settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
@@ -56,6 +56,6 @@ Register-ScheduledTask `
     -Trigger $Trigger `
     -Principal $Principal `
     -Settings $Settings `
-    -Description "Start Desktop Worker when AvTester logs on."
+    -Description "Start Desktop Worker when Administrator logs on."
 
 Write-Host "Scheduled task '$TaskName' created successfully."

@@ -119,7 +119,7 @@ def _load_guest_agent_config(data: dict[str, Any]) -> GuestAgentConfig:
             required_for_execution=bool(
                 desktop_worker.get("required_for_execution", True)
             ),
-            expected_user=str(desktop_worker.get("expected_user", "")),
+            expected_user=str(desktop_worker.get("expected_user", "Administrator")),
             require_interactive_session=bool(
                 desktop_worker.get("require_interactive_session", True)
             ),

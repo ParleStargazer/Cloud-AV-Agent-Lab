@@ -194,7 +194,7 @@ def _event_blob(threat_name: str) -> bytes:
     return _container(
         "@100",
         _text_field("@203", threat_name),
-        _text_field("@500", r"C:\Users\AvTester\Desktop\eicar.txt"),
+        _text_field("@500", r"C:\Users\Administrator\Desktop\eicar.txt"),
         _text_field("@513", EICAR_SHA256),
     )
 

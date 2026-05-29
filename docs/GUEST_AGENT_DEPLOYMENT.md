@@ -205,7 +205,7 @@ On the cloud instance, set a separate worker token:
 )
 ```
 
-Start Desktop Worker from the interactive test user session:
+Start Desktop Worker from the interactive administrator account session:
 
 ```powershell
 cd C:\CloudAvAgentLab\desktop-worker
@@ -222,7 +222,7 @@ cd C:\CloudAvAgentLab\guest-agent
   --workdir C:\CloudAvAgentLab `
   --enable-desktop-worker `
   --desktop-worker-url http://127.0.0.1:8001 `
-  --desktop-worker-expected-user avtest
+  --desktop-worker-expected-user Administrator
 ```
 
 From the local control plane, enable `[guest_agent.desktop_worker]` and query:
