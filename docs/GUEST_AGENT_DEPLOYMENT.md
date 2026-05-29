@@ -73,6 +73,8 @@ C:\CloudAvAgentLab\
     desktop-worker.exe
     _internal\
   cases\
+  StartAgent.ps1
+  StartDesktopWorker.ps1
 ```
 
 Manual deployment steps:
@@ -82,7 +84,11 @@ Manual deployment steps:
 3. Compress or copy `scripts\pack\dist\agent-suite\bin`.
 4. Upload the archive to the Lighthouse Windows instance over RDP.
 5. Extract or copy every file to `C:\CloudAvAgentLab\bin\`.
-6. Set machine-level token environment variables on the cloud instance:
+6. Review `C:\CloudAvAgentLab\StartAgent.ps1` and
+   `C:\CloudAvAgentLab\StartDesktopWorker.ps1`; configure VM-local environment
+   variables there if you do not want to rely on machine-level variables.
+7. Set machine-level token environment variables on the cloud instance if you
+   do not configure them in the startup scripts:
 
 ```powershell
 [Environment]::SetEnvironmentVariable(
@@ -121,7 +127,7 @@ control-plane access from your local workstation, the agent must listen on the
 cloud network interface:
 
 ```powershell
-C:\CloudAvAgentLab\bin\guest-agent.exe --host 0.0.0.0 --port 8080 --workdir C:\CloudAvAgentLab
+C:\CloudAvAgentLab\StartAgent.ps1
 ```
 
 Before remote access, allow the port in Windows Firewall, for example:
@@ -143,8 +149,8 @@ the port to the expected control-plane source IP.
 Run in the foreground first:
 
 ```powershell
-cd C:\CloudAvAgentLab\bin
-.\guest-agent.exe --host 0.0.0.0 --port 8080 --workdir C:\CloudAvAgentLab
+cd C:\CloudAvAgentLab
+.\StartAgent.ps1
 ```
 
 That command keeps controlled execution disabled. For a cloud-side manual
@@ -152,14 +158,8 @@ validation with an EICAR or harmless executable only, start the agent with the
 explicit execution switch:
 
 ```powershell
-cd C:\CloudAvAgentLab\bin
-.\guest-agent.exe `
-  --host 0.0.0.0 `
-  --port 8080 `
-  --workdir C:\CloudAvAgentLab `
-  --enable-execution-actions `
-  --execution-token-env CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN `
-  --execution-timeout-seconds 30
+cd C:\CloudAvAgentLab
+.\StartAgent.ps1 -EnableExecutionActions
 ```
 
 From the local control plane, configure:
@@ -215,21 +215,15 @@ On the cloud instance, set a separate worker token:
 Start Desktop Worker from the interactive administrator account session:
 
 ```powershell
-cd C:\CloudAvAgentLab\bin
-.\desktop-worker.exe --host 127.0.0.1 --port 8001 --workdir C:\CloudAvAgentLab
+cd C:\CloudAvAgentLab
+.\StartDesktopWorker.ps1
 ```
 
 Then start Control Agent with Worker status proxy enabled:
 
 ```powershell
-cd C:\CloudAvAgentLab\bin
-.\guest-agent.exe `
-  --host 0.0.0.0 `
-  --port 8080 `
-  --workdir C:\CloudAvAgentLab `
-  --enable-desktop-worker `
-  --desktop-worker-url http://127.0.0.1:8001 `
-  --desktop-worker-expected-user Administrator
+cd C:\CloudAvAgentLab
+.\StartAgent.ps1
 ```
 
 From the local control plane, enable `[guest_agent.desktop_worker]` and query:

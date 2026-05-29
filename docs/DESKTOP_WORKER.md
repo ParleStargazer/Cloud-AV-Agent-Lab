@@ -50,7 +50,7 @@ variables, and real config paths are not inherited by the child process.
 The Worker must not be exposed to the network:
 
 ```powershell
-C:\CloudAvAgentLab\bin\desktop-worker.exe --host 127.0.0.1 --port 8001
+C:\CloudAvAgentLab\StartDesktopWorker.ps1
 ```
 
 `--host 0.0.0.0` is intentionally rejected.
@@ -58,10 +58,7 @@ C:\CloudAvAgentLab\bin\desktop-worker.exe --host 127.0.0.1 --port 8001
 Use the same shared workdir as Control Agent:
 
 ```powershell
-C:\CloudAvAgentLab\bin\desktop-worker.exe `
-  --host 127.0.0.1 `
-  --port 8001 `
-  --workdir C:\CloudAvAgentLab
+C:\CloudAvAgentLab\StartDesktopWorker.ps1
 ```
 
 The recommended deployment layout is:
@@ -73,10 +70,14 @@ C:\CloudAvAgentLab\
     desktop-worker.exe
     _internal\
   cases\
+  StartAgent.ps1
+  StartDesktopWorker.ps1
 ```
 
 Both executables live under `C:\CloudAvAgentLab\bin` and share the PyInstaller
-`_internal` directory. `C:\CloudAvAgentLab` remains the shared workdir.
+`_internal` directory. `C:\CloudAvAgentLab` remains the shared workdir. Startup
+scripts in the workspace root launch the executables and are the recommended
+place to configure VM-local environment variables.
 
 ## Environment Variables
 
@@ -92,13 +93,7 @@ bundles.
 Control Agent can proxy Worker readiness by enabling:
 
 ```powershell
-C:\CloudAvAgentLab\bin\guest-agent.exe `
-  --host 0.0.0.0 `
-  --port 8080 `
-  --workdir C:\CloudAvAgentLab `
-  --enable-desktop-worker `
-  --desktop-worker-url http://127.0.0.1:8001 `
-  --desktop-worker-expected-user Administrator
+C:\CloudAvAgentLab\StartAgent.ps1
 ```
 
 `/worker/status` returns `desktop_worker_ready=false` when the Worker is

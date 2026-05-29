@@ -3,8 +3,7 @@
 
 param(
     [string]$WorkspaceRoot = "C:\CloudAvAgentLab",
-    [string]$TargetUser = "Administrator",
-    [int]$Port = 8001
+    [string]$TargetUser = "Administrator"
 )
 
 $TaskName = "Start-Worker"
@@ -21,18 +20,18 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 Write-Host "Preparing scheduled task configuration..."
 
-$BinDirectory = Join-Path $WorkspaceRoot "bin"
-$DesktopWorkerExe = Join-Path $BinDirectory "desktop-worker.exe"
+$StartDesktopWorkerScript = Join-Path $WorkspaceRoot "StartDesktopWorker.ps1"
 
-if (-not (Test-Path -LiteralPath $DesktopWorkerExe)) {
-    Write-Error "Desktop Worker executable not found: $DesktopWorkerExe"
+if (-not (Test-Path -LiteralPath $StartDesktopWorkerScript)) {
+    Write-Error "Desktop Worker startup script not found: $StartDesktopWorkerScript"
+    Write-Error "Run scripts\setup-cloud-av-workspace.ps1 first, then edit StartDesktopWorker.ps1 if needed."
     exit 1
 }
 
 $Action = New-ScheduledTaskAction `
-    -Execute $DesktopWorkerExe `
-    -Argument "--host 127.0.0.1 --port $Port --workdir `"$WorkspaceRoot`"" `
-    -WorkingDirectory $BinDirectory
+    -Execute "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
+    -Argument "-ExecutionPolicy Bypass -File `"$StartDesktopWorkerScript`"" `
+    -WorkingDirectory $WorkspaceRoot
 
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
 

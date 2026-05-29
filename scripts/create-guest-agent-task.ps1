@@ -3,7 +3,6 @@
 
 param(
     [string]$WorkspaceRoot = "C:\CloudAvAgentLab",
-    [int]$Port = 8080,
     [switch]$EnableExecutionActions
 )
 
@@ -21,24 +20,24 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 Write-Host "Preparing scheduled task configuration..."
 
-$BinDirectory = Join-Path $WorkspaceRoot "bin"
-$GuestAgentExe = Join-Path $BinDirectory "guest-agent.exe"
+$StartAgentScript = Join-Path $WorkspaceRoot "StartAgent.ps1"
 
-$GuestAgentArguments = "--host 0.0.0.0 --port $Port --workdir `"$WorkspaceRoot`" --enable-desktop-worker --desktop-worker-url http://127.0.0.1:8001 --desktop-worker-expected-user Administrator"
+$StartAgentArguments = "-ExecutionPolicy Bypass -File `"$StartAgentScript`""
 
 if ($EnableExecutionActions) {
-    $GuestAgentArguments = "$GuestAgentArguments --enable-execution-actions --execution-token-env CLOUD_AV_GUEST_AGENT_EXECUTION_TOKEN"
+    $StartAgentArguments = "$StartAgentArguments -EnableExecutionActions"
 }
 
-if (-not (Test-Path -LiteralPath $GuestAgentExe)) {
-    Write-Error "Guest Agent executable not found: $GuestAgentExe"
+if (-not (Test-Path -LiteralPath $StartAgentScript)) {
+    Write-Error "Guest Agent startup script not found: $StartAgentScript"
+    Write-Error "Run scripts\setup-cloud-av-workspace.ps1 first, then edit StartAgent.ps1 if needed."
     exit 1
 }
 
 $Action = New-ScheduledTaskAction `
-    -Execute $GuestAgentExe `
-    -Argument $GuestAgentArguments `
-    -WorkingDirectory $BinDirectory
+    -Execute "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
+    -Argument $StartAgentArguments `
+    -WorkingDirectory $WorkspaceRoot
 
 $Trigger = New-ScheduledTaskTrigger -AtStartup
 

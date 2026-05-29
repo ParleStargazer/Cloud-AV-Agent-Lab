@@ -26,6 +26,8 @@ Recommended order for a clean Windows Lighthouse instance:
      C:\CloudAvAgentLab\
        bin\
        cases\
+       StartAgent.ps1
+       StartDesktopWorker.ps1
        README_WORKSPACE.txt
 
 4. Build the unified agent suite locally
@@ -50,8 +52,14 @@ Recommended order for a clean Windows Lighthouse instance:
      C:\CloudAvAgentLab\bin\
 
 6. Configure required Windows environment variables on the cloud VM
-   Set machine-level tokens for Guest Agent, upload, execution, and Desktop
-   Worker as needed. Do not write tokens to config files, logs, or evidence.
+   Recommended for this project stage: edit the generated startup scripts on
+   the VM and configure VM-local environment variables there:
+
+     C:\CloudAvAgentLab\StartAgent.ps1
+     C:\CloudAvAgentLab\StartDesktopWorker.ps1
+
+   You may also use machine-level environment variables if preferred. Do not
+   copy real tokens back into the repository, logs, reports, or evidence.
 
 7. Create scheduled tasks
    Run from an elevated PowerShell on the cloud VM:
@@ -59,8 +67,9 @@ Recommended order for a clean Windows Lighthouse instance:
      .\scripts\create-guest-agent-task.ps1
      .\scripts\create-desktop-worker-task.ps1
 
-   Guest Agent runs as SYSTEM at startup. Desktop Worker runs when the
-   Administrator account logs on and stays bound to localhost.
+   Guest Agent runs StartAgent.ps1 as SYSTEM at startup. Desktop Worker runs
+   StartDesktopWorker.ps1 when the Administrator account logs on and stays
+   bound to localhost.
 
    If this VM is used for controlled execution tests, create the Guest Agent
    task with execution actions explicitly enabled:
