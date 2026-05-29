@@ -57,8 +57,12 @@ class Qihoo360ParserTests(unittest.TestCase):
         self.assertEqual(parsed.threat_category, "木马")
         self.assertEqual(parsed.raw_action_text, "恢复文件")
         self.assertEqual(parsed.event_time_raw, "134241831817950000")
-        self.assertTrue(parsed.observed_at_utc.endswith("Z"))
-        self.assertEqual(parsed.time_confidence, "low")
+        self.assertEqual(parsed.observed_at_utc, "2026-05-25T03:46:21.795000Z")
+        self.assertEqual(parsed.time_confidence, "medium")
+        self.assertIn(
+            "field_206_filetime_local_utc_plus_8_assumed",
+            parsed.parse_warnings,
+        )
         self.assertEqual(
             parsed.file_path,
             r"C:\Users\Administrator\Desktop\eicar.com",
@@ -95,6 +99,18 @@ class Qihoo360ParserTests(unittest.TestCase):
 
         self.assertEqual(parsed.threat_name, "")
         self.assertIn("field_203_length_exceeds_blob", parsed.parse_warnings)
+
+    def test_filetime_like_field_is_normalized_from_local_wall_clock(self) -> None:
+        blob = _container("@100", _text_field("@206", "134245659575750000"))
+
+        parsed = parse_qihoo360_fc_blob(blob)
+
+        self.assertEqual(parsed.observed_at_utc, "2026-05-29T14:05:57.575000Z")
+        self.assertEqual(parsed.time_confidence, "medium")
+        self.assertIn(
+            "field_206_filetime_local_utc_plus_8_assumed",
+            parsed.parse_warnings,
+        )
 
 
 class Qihoo360SQLiteReaderTests(unittest.TestCase):

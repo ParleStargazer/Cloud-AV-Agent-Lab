@@ -15,6 +15,7 @@ TYPE_SENTINEL = 0x0B
 CONTAINER_FLAG = 0x01
 LEAF_FLAG = 0x00
 FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
+QIHOO_FILETIME_LOCAL_OFFSET = timedelta(hours=8)
 
 
 @dataclass(frozen=True)
@@ -210,9 +211,10 @@ def _parse_event_time(raw_value: str) -> tuple[str, str, str]:
         return "", "unknown", "field_206_time_non_positive"
     try:
         if numeric_value > 10_000_000_000_000_000:
-            observed = FILETIME_EPOCH + timedelta(microseconds=numeric_value / 10)
-            confidence = "low"
-            warning = "field_206_filetime_like_low_confidence"
+            filetime_like = FILETIME_EPOCH + timedelta(microseconds=numeric_value / 10)
+            observed = filetime_like - QIHOO_FILETIME_LOCAL_OFFSET
+            confidence = "medium"
+            warning = "field_206_filetime_local_utc_plus_8_assumed"
         else:
             observed = datetime.fromtimestamp(numeric_value, timezone.utc)
             confidence = "medium"

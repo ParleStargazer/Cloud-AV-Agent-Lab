@@ -68,8 +68,13 @@ preserved as lists.
 that the file was restored, allowed, blocked, or quarantined from that text.
 
 `@206` is stored as `event_time_raw`; best-effort `observed_at_utc` is filled
-when the value looks parseable. FILETIME-like values are marked with low time
-confidence because the reference material shows an offset ambiguity.
+when the value looks parseable. Current field evidence indicates Qihoo 360
+stores FILETIME-like values as local wall-clock time. The parser normalizes
+those values from UTC+8 to UTC, marks time confidence as `medium`, and keeps the
+warning `field_206_filetime_local_utc_plus_8_assumed` so later review can see
+the timezone assumption. Time-window attribution remains supporting evidence;
+case path, hash, baseline delta, and product action evidence are still used for
+the conservative verdict.
 
 ## Baseline And Delta Stage
 
