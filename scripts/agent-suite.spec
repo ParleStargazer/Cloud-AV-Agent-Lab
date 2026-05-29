@@ -1,19 +1,40 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+import sys
 from pathlib import Path
 
 
 repo_root = Path.cwd()
 src_root = repo_root / "src"
+guest_agent_script = src_root / "cloud_av_agent_lab" / "guest_agent_server" / "main.py"
+desktop_worker_script = src_root / "cloud_av_agent_lab" / "desktop_worker" / "main.py"
+conda_runtime_dlls = (
+    "ffi.dll",
+    "libbz2.dll",
+    "libcrypto-3-x64.dll",
+    "libexpat.dll",
+    "liblzma.dll",
+    "libssl-3-x64.dll",
+    "sqlite3.dll",
+)
+
+
+def conda_runtime_binaries():
+    library_bin = Path(sys.prefix) / "Library" / "bin"
+    return [
+        (str(library_bin / dll_name), ".")
+        for dll_name in conda_runtime_dlls
+        if (library_bin / dll_name).exists()
+    ]
 
 a = Analysis(
     [
-        str(src_root / "cloud_av_agent_lab" / "guest_agent_server" / "main.py"),
-        str(src_root / "cloud_av_agent_lab" / "desktop_worker" / "main.py"),
+        str(guest_agent_script),
+        str(desktop_worker_script),
     ],
     pathex=[str(src_root)],
-    binaries=[],
+    binaries=conda_runtime_binaries(),
     datas=[],
     hiddenimports=[],
     hookspath=[],
@@ -25,10 +46,20 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+
+def runtime_hook_scripts():
+    return [script for script in a.scripts if "pyi_rth_" in script[0]]
+
+
+def scripts_for_entrypoint(entrypoint, name):
+    selected = []
+    selected.extend(runtime_hook_scripts())
+    selected.append((name, str(entrypoint), "PYSOURCE"))
+    return selected
+
 guest_agent = EXE(
     pyz,
-    a.scripts[0],
-    [],
+    scripts_for_entrypoint(guest_agent_script, "guest_agent_main"),
     exclude_binaries=True,
     name="guest-agent",
     debug=False,
@@ -40,8 +71,7 @@ guest_agent = EXE(
 
 desktop_worker = EXE(
     pyz,
-    a.scripts[1],
-    [],
+    scripts_for_entrypoint(desktop_worker_script, "desktop_worker_main"),
     exclude_binaries=True,
     name="desktop-worker",
     debug=False,
