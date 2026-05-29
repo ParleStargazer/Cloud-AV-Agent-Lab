@@ -9,7 +9,7 @@ The current MVP implements:
 
 - Desktop Worker server module with authenticated `GET /health`.
 - Authenticated `POST /execute` for the current case's registered uploaded
-  `.exe` only.
+  `.exe` and controlled `.bat` / `.cmd` samples.
 - Authenticated `GET /execution-status/{case_id}` for low-intrusion process
   observation.
 - Worker binds to `127.0.0.1` / `localhost` only.
@@ -50,7 +50,7 @@ variables, and real config paths are not inherited by the child process.
 The Worker must not be exposed to the network:
 
 ```powershell
-python -m cloud_av_agent_lab.desktop_worker.main --host 127.0.0.1 --port 8001
+C:\CloudAvAgentLab\bin\desktop-worker.exe --host 127.0.0.1 --port 8001
 ```
 
 `--host 0.0.0.0` is intentionally rejected.
@@ -58,11 +58,25 @@ python -m cloud_av_agent_lab.desktop_worker.main --host 127.0.0.1 --port 8001
 Use the same shared workdir as Control Agent:
 
 ```powershell
-python -m cloud_av_agent_lab.desktop_worker.main `
+C:\CloudAvAgentLab\bin\desktop-worker.exe `
   --host 127.0.0.1 `
   --port 8001 `
   --workdir C:\CloudAvAgentLab
 ```
+
+The recommended deployment layout is:
+
+```text
+C:\CloudAvAgentLab\
+  bin\
+    guest-agent.exe
+    desktop-worker.exe
+    _internal\
+  cases\
+```
+
+Both executables live under `C:\CloudAvAgentLab\bin` and share the PyInstaller
+`_internal` directory. `C:\CloudAvAgentLab` remains the shared workdir.
 
 ## Environment Variables
 
@@ -78,7 +92,7 @@ bundles.
 Control Agent can proxy Worker readiness by enabling:
 
 ```powershell
-python -m cloud_av_agent_lab.guest_agent_server.main `
+C:\CloudAvAgentLab\bin\guest-agent.exe `
   --host 0.0.0.0 `
   --port 8080 `
   --workdir C:\CloudAvAgentLab `

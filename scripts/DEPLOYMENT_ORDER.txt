@@ -1,0 +1,75 @@
+Cloud AV Agent Lab deployment order
+===================================
+
+Recommended order for a clean Windows Lighthouse instance:
+
+1. Create or update the administrator account
+   Run from an elevated PowerShell:
+
+     .\scripts\create-administrator-user.ps1 -Password "<password>"
+
+2. Install AutoLogon and configure administrator auto-login
+   Run from an elevated PowerShell:
+
+     .\scripts\setup-administrator-autologon.ps1
+
+   The script opens Sysinternals AutoLogon. Enter the Administrator account and
+   password manually. Do not store the password in this repository.
+
+3. Create the Cloud AV Agent Lab workspace
+   Run on the cloud VM from an elevated PowerShell:
+
+     .\scripts\setup-cloud-av-workspace.ps1
+
+   This creates:
+
+     C:\CloudAvAgentLab\
+       bin\
+       cases\
+       README_WORKSPACE.txt
+
+4. Build the unified agent suite locally
+   Run from the project checkout in the conda environment:
+
+     .\scripts\build-agent-suite.ps1
+
+   The build output is:
+
+     scripts\pack\dist\agent-suite\bin\
+       guest-agent.exe
+       desktop-worker.exe
+       _internal\
+
+5. Deploy the unified agent suite to the cloud VM
+   Copy every file under:
+
+     scripts\pack\dist\agent-suite\bin\
+
+   into:
+
+     C:\CloudAvAgentLab\bin\
+
+6. Configure required Windows environment variables on the cloud VM
+   Set machine-level tokens for Guest Agent, upload, execution, and Desktop
+   Worker as needed. Do not write tokens to config files, logs, or evidence.
+
+7. Create scheduled tasks
+   Run from an elevated PowerShell on the cloud VM:
+
+     .\scripts\create-guest-agent-task.ps1
+     .\scripts\create-desktop-worker-task.ps1
+
+   Guest Agent runs as SYSTEM at startup. Desktop Worker runs when the
+   Administrator account logs on and stays bound to localhost.
+
+   If this VM is used for controlled execution tests, create the Guest Agent
+   task with execution actions explicitly enabled:
+
+     .\scripts\create-guest-agent-task.ps1 -EnableExecutionActions
+
+8. Reboot and verify
+   After reboot, confirm:
+
+     - Guest Agent is listening on the configured external port.
+     - Desktop Worker is listening only on 127.0.0.1:8001.
+     - Guest Agent /worker/status reports Administrator and ready=true.

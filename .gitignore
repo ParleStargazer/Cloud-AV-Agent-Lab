@@ -38,10 +38,10 @@ malware/
 *.dll
 *.scr
 *.ps1
-!scripts/build-guest-agent.ps1
-!scripts/build-desktop-worker.ps1
+!scripts/build-agent-suite.ps1
 !scripts/create-administrator-user.ps1
 !scripts/setup-administrator-autologon.ps1
+!scripts/setup-cloud-av-workspace.ps1
 !scripts/create-guest-agent-task.ps1
 !scripts/create-desktop-worker-task.ps1
 
@@ -70,3 +70,4 @@ eicar.com.txt
 
 # Ignore .spec
 *.spec
+!scripts/agent-suite.spec

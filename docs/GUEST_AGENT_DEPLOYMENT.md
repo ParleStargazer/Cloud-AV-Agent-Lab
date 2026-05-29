@@ -10,15 +10,15 @@ not `conda install`.
 
 ```powershell
 conda activate cloud-av-agent-lab
-.\scripts\build-guest-agent.ps1
+.\scripts\build-agent-suite.ps1
 ```
 
 The script:
 
-1. Runs `python -m pip install -e ".[guest-agent,guest-agent-build]"`.
-2. Removes old `build\pyinstaller` and `dist\guest-agent` output.
-3. Runs PyInstaller in `--onedir` mode.
-4. Produces `dist\guest-agent\guest-agent.exe`.
+1. Runs `python -m pip install -e ".[guest-agent,guest-agent-build,desktop-worker,desktop-worker-build]"`.
+2. Removes old `scripts\pack\build` and `scripts\pack\dist\agent-suite` output.
+3. Runs PyInstaller in `--onedir` mode from `scripts\agent-suite.spec`.
+4. Produces `scripts\pack\dist\agent-suite\bin\guest-agent.exe` and `desktop-worker.exe` with a shared `_internal` directory.
 
 `--onedir` is preferred for this phase because it is easier to inspect and debug
 than a single-file executable.
@@ -26,8 +26,8 @@ than a single-file executable.
 ## Source Checkout Update Pitfall
 
 If the cloud instance or platform machine runs from a git checkout instead of a
-freshly uploaded `dist\guest-agent` directory, update the checkout and reinstall
-the current working tree:
+freshly uploaded `scripts\pack\dist\agent-suite\bin` directory, update the
+checkout and reinstall the current working tree:
 
 ```powershell
 git pull
@@ -67,16 +67,22 @@ python -c "import cloud_av_agent_lab.desktop_worker.app as w; print(w.__file__)"
 Suggested cloud-side directory:
 
 ```text
-C:\CloudAvAgentLab\guest-agent\
+C:\CloudAvAgentLab\
+  bin\
+    guest-agent.exe
+    desktop-worker.exe
+    _internal\
+  cases\
 ```
 
 Manual deployment steps:
 
 1. Build locally.
-2. Compress `dist\guest-agent`.
-3. Upload the archive to the Lighthouse Windows instance over RDP.
-4. Extract it to `C:\CloudAvAgentLab\guest-agent\`.
-5. Set a machine-level token environment variable on the cloud instance:
+2. Run `.\scripts\setup-cloud-av-workspace.ps1` on the cloud VM.
+3. Compress or copy `scripts\pack\dist\agent-suite\bin`.
+4. Upload the archive to the Lighthouse Windows instance over RDP.
+5. Extract or copy every file to `C:\CloudAvAgentLab\bin\`.
+6. Set machine-level token environment variables on the cloud instance:
 
 ```powershell
 [Environment]::SetEnvironmentVariable(
@@ -115,7 +121,7 @@ control-plane access from your local workstation, the agent must listen on the
 cloud network interface:
 
 ```powershell
-.\guest-agent.exe --host 0.0.0.0 --port 8080 --workdir C:\CloudAvAgentLab
+C:\CloudAvAgentLab\bin\guest-agent.exe --host 0.0.0.0 --port 8080 --workdir C:\CloudAvAgentLab
 ```
 
 Before remote access, allow the port in Windows Firewall, for example:
@@ -137,7 +143,7 @@ the port to the expected control-plane source IP.
 Run in the foreground first:
 
 ```powershell
-cd C:\CloudAvAgentLab\guest-agent
+cd C:\CloudAvAgentLab\bin
 .\guest-agent.exe --host 0.0.0.0 --port 8080 --workdir C:\CloudAvAgentLab
 ```
 
@@ -146,7 +152,7 @@ validation with an EICAR or harmless executable only, start the agent with the
 explicit execution switch:
 
 ```powershell
-cd C:\CloudAvAgentLab\guest-agent
+cd C:\CloudAvAgentLab\bin
 .\guest-agent.exe `
   --host 0.0.0.0 `
   --port 8080 `
@@ -183,16 +189,17 @@ Do not put the token in TOML, logs, screenshots, or test fixtures.
 
 ## Desktop Worker Execution MVP
 
-Desktop Worker is packaged separately and must run in the interactive desktop
-user session. It only binds to loopback. Control Agent uses it as both a
-readiness gate and the real execution layer for `execute_uploaded_sample` after
-signing a short-lived single-use execution lease.
+Desktop Worker is built into the same `agent-suite` onedir bundle as Guest
+Agent and must run in the interactive desktop user session. It only binds to
+loopback. Control Agent uses it as both a readiness gate and the real execution
+layer for `execute_uploaded_sample` after signing a short-lived single-use
+execution lease.
 
 Build locally:
 
 ```powershell
 conda activate cloud-av-agent-lab
-.\scripts\build-desktop-worker.ps1
+.\scripts\build-agent-suite.ps1
 ```
 
 On the cloud instance, set a separate worker token:
@@ -208,14 +215,14 @@ On the cloud instance, set a separate worker token:
 Start Desktop Worker from the interactive administrator account session:
 
 ```powershell
-cd C:\CloudAvAgentLab\desktop-worker
+cd C:\CloudAvAgentLab\bin
 .\desktop-worker.exe --host 127.0.0.1 --port 8001 --workdir C:\CloudAvAgentLab
 ```
 
 Then start Control Agent with Worker status proxy enabled:
 
 ```powershell
-cd C:\CloudAvAgentLab\guest-agent
+cd C:\CloudAvAgentLab\bin
 .\guest-agent.exe `
   --host 0.0.0.0 `
   --port 8080 `

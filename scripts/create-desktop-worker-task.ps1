@@ -1,8 +1,13 @@
 # Create-StartWorkerTask.ps1
 # Run this script as Administrator.
 
+param(
+    [string]$WorkspaceRoot = "C:\CloudAvAgentLab",
+    [string]$TargetUser = "Administrator",
+    [int]$Port = 8001
+)
+
 $TaskName = "Start-Worker"
-$TargetUser = "Administrator"
 
 Write-Host "Checking administrator privileges..."
 
@@ -16,10 +21,18 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 Write-Host "Preparing scheduled task configuration..."
 
+$BinDirectory = Join-Path $WorkspaceRoot "bin"
+$DesktopWorkerExe = Join-Path $BinDirectory "desktop-worker.exe"
+
+if (-not (Test-Path -LiteralPath $DesktopWorkerExe)) {
+    Write-Error "Desktop Worker executable not found: $DesktopWorkerExe"
+    exit 1
+}
+
 $Action = New-ScheduledTaskAction `
-    -Execute "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
-    -Argument '-ExecutionPolicy Bypass -File "C:\Users\Administrator\desktop-worker\Start-worker.ps1"' `
-    -WorkingDirectory "C:\Users\Administrator\desktop-worker"
+    -Execute $DesktopWorkerExe `
+    -Argument "--host 127.0.0.1 --port $Port --workdir `"$WorkspaceRoot`"" `
+    -WorkingDirectory $BinDirectory
 
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
 
@@ -56,6 +69,6 @@ Register-ScheduledTask `
     -Trigger $Trigger `
     -Principal $Principal `
     -Settings $Settings `
-    -Description "Start Desktop Worker when Administrator logs on."
+    -Description "Start Desktop Worker when $TargetUser logs on."
 
 Write-Host "Scheduled task '$TaskName' created successfully."
