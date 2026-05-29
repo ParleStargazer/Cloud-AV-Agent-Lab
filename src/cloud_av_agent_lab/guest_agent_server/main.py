@@ -80,8 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--desktop-worker-expected-user",
-        default="Administrator",
-        help="expected interactive administrator account for Desktop Worker",
+        default="AvTester-Admin",
+        help="expected interactive test administrator account for Desktop Worker",
     )
     parser.add_argument(
         "--allow-worker-session-0",

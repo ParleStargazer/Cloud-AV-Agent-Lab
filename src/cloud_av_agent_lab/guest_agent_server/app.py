@@ -55,7 +55,7 @@ def create_app(
     desktop_worker_token: str | None = None,
     desktop_worker_timeout_seconds: float = 5.0,
     desktop_worker_required_for_execution: bool = True,
-    desktop_worker_expected_user: str = "Administrator",
+    desktop_worker_expected_user: str = "AvTester-Admin",
     desktop_worker_require_interactive_session: bool = True,
     app_version: str | None = None,
 ) -> FastAPI:

@@ -104,8 +104,9 @@ session, or running under an unexpected user.
 
 The future baseline snapshot should contain:
 
-- a dedicated administrator account;
-- automatic login for that administrator account;
+- a dedicated test administrator account, recommended as `AvTester-Admin` to
+  avoid mixing with the built-in Windows `Administrator` account;
+- automatic login for that test administrator account;
 - Desktop Worker startup on user login;
 - Control Agent startup as Session 0 service or scheduled task;
 - target security product initialized in the desktop session.

@@ -2,11 +2,13 @@
 # Run this script as Administrator.
 
 param(
-    [string]$Username = "Administrator",
+    [string]$Username = "AvTester-Admin",
 
     [Parameter(Mandatory = $true)]
     [string]$Password
 )
+
+$ErrorActionPreference = "Stop"
 
 Write-Host "Checking administrator privileges..."
 
@@ -37,9 +39,15 @@ if ($existingUser) {
     New-LocalUser `
         -Name $Username `
         -Password $SecurePassword `
-        -FullName "Cloud AV Administrator" `
-        -Description "Cloud AV Agent Lab administrator account" `
+        -FullName "Cloud AV Test Administrator" `
+        -Description "Cloud AV Agent Lab test admin" `
         -ErrorAction Stop
+}
+
+$createdUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
+if (-not $createdUser) {
+    Write-Error "User '$Username' was not created. Stop before applying account settings."
+    exit 1
 }
 
 Write-Host "Ensuring password does not expire..."

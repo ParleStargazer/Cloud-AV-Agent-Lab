@@ -1922,7 +1922,7 @@ class _FakeGuestAgentClient:
                 "desktop_session_ready": True,
                 "worker_session_id": 1,
                 "desktop_session_state": "active",
-                "username": "Administrator",
+                "username": "AvTester-Admin",
             },
         )
 

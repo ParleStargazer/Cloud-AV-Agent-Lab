@@ -3,7 +3,7 @@
 
 param(
     [string]$WorkspaceRoot = "C:\CloudAvAgentLab",
-    [string]$TargetUser = "Administrator"
+    [string]$TargetUser = "AvTester-Admin"
 )
 
 $TaskName = "Start-Worker"
@@ -35,7 +35,8 @@ $Action = New-ScheduledTaskAction `
 
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
 
-# Run only when Administrator is logged on, so the worker starts in the interactive desktop session.
+# Run only when the dedicated administrator account is logged on, so the worker
+# starts in the interactive desktop session.
 $Principal = New-ScheduledTaskPrincipal `
     -UserId $TargetUser `
     -LogonType Interactive `

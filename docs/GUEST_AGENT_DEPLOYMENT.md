@@ -212,7 +212,8 @@ On the cloud instance, set a separate worker token:
 )
 ```
 
-Start Desktop Worker from the interactive administrator account session:
+Start Desktop Worker from the interactive test administrator account session
+(recommended account: `AvTester-Admin`):
 
 ```powershell
 cd C:\CloudAvAgentLab

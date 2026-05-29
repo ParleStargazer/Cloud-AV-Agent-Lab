@@ -108,7 +108,7 @@ $Arguments = @(
     "--workdir", $WorkspaceRoot,
     "--enable-desktop-worker",
     "--desktop-worker-url", "http://127.0.0.1:8001",
-    "--desktop-worker-expected-user", "Administrator"
+    "--desktop-worker-expected-user", "AvTester-Admin"
 )
 
 if ($EnableExecutionActions) {

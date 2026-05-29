@@ -3,18 +3,21 @@ Cloud AV Agent Lab deployment order
 
 Recommended order for a clean Windows Lighthouse instance:
 
-1. Create or update the administrator account
+1. Create or update the dedicated test administrator account
    Run from an elevated PowerShell:
 
      .\scripts\create-administrator-user.ps1 -Password "<password>"
 
-2. Install AutoLogon and configure administrator auto-login
+   The default account name is AvTester-Admin. Use -Username only if you need a
+   different dedicated test administrator account.
+
+2. Install AutoLogon and configure test administrator auto-login
    Run from an elevated PowerShell:
 
      .\scripts\setup-administrator-autologon.ps1
 
-   The script opens Sysinternals AutoLogon. Enter the Administrator account and
-   password manually. Do not store the password in this repository.
+   The script opens Sysinternals AutoLogon. Enter the AvTester-Admin account
+   and password manually. Do not store the password in this repository.
 
 3. Create the Cloud AV Agent Lab workspace
    Run on the cloud VM from an elevated PowerShell:
@@ -68,7 +71,7 @@ Recommended order for a clean Windows Lighthouse instance:
      .\scripts\create-desktop-worker-task.ps1
 
    Guest Agent runs StartAgent.ps1 as SYSTEM at startup. Desktop Worker runs
-   StartDesktopWorker.ps1 when the Administrator account logs on and stays
+   StartDesktopWorker.ps1 when the AvTester-Admin account logs on and stays
    bound to localhost.
 
    If this VM is used for controlled execution tests, create the Guest Agent
@@ -81,4 +84,4 @@ Recommended order for a clean Windows Lighthouse instance:
 
      - Guest Agent is listening on the configured external port.
      - Desktop Worker is listening only on 127.0.0.1:8001.
-     - Guest Agent /worker/status reports Administrator and ready=true.
+     - Guest Agent /worker/status reports AvTester-Admin and ready=true.

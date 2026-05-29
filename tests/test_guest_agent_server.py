@@ -134,7 +134,7 @@ class GuestAgentServerTests(unittest.TestCase):
                 upload_token=UPLOAD_TOKEN,
                 desktop_worker_enabled=True,
                 desktop_worker_token="worker-token",
-                desktop_worker_expected_user="Administrator",
+                desktop_worker_expected_user="AvTester-Admin",
                 app_version="test-version",
             )
         )
@@ -147,7 +147,7 @@ class GuestAgentServerTests(unittest.TestCase):
                     "worker_session_id": 1,
                     "interactive_session": True,
                     "desktop_session_state": "active",
-                    "username": "Administrator",
+                    "username": "AvTester-Admin",
                     "bind_host": "127.0.0.1",
                     "version": "test-version",
                     "busy": False,
@@ -834,7 +834,7 @@ class GuestAgentServerTests(unittest.TestCase):
                 execution_token=EXECUTION_TOKEN,
                 desktop_worker_enabled=True,
                 desktop_worker_token="worker-token",
-                desktop_worker_expected_user="Administrator",
+                desktop_worker_expected_user="AvTester-Admin",
                 app_version="test-version",
             )
         )
@@ -861,7 +861,7 @@ class GuestAgentServerTests(unittest.TestCase):
                         "worker_session_id": 1,
                         "interactive_session": True,
                         "desktop_session_state": "active",
-                        "username": "Administrator",
+                        "username": "AvTester-Admin",
                         "busy": False,
                     },
                 ),
@@ -926,7 +926,7 @@ class GuestAgentServerTests(unittest.TestCase):
                 execution_token=EXECUTION_TOKEN,
                 desktop_worker_enabled=True,
                 desktop_worker_token="worker-token",
-                desktop_worker_expected_user="Administrator",
+                desktop_worker_expected_user="AvTester-Admin",
                 app_version="test-version",
             )
         )
@@ -982,7 +982,7 @@ class GuestAgentServerTests(unittest.TestCase):
                         "worker_session_id": 1,
                         "interactive_session": True,
                         "desktop_session_state": "active",
-                        "username": "Administrator",
+                        "username": "AvTester-Admin",
                         "busy": False,
                     },
                 ),

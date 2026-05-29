@@ -906,7 +906,7 @@ class FakeGuestClient:
                 "desktop_session_ready": self.worker_ready,
                 "worker_session_id": 1 if self.worker_ready else 0,
                 "desktop_session_state": "active" if self.worker_ready else "unknown",
-                "username": "Administrator",
+                "username": "AvTester-Admin",
                 "reason": self.worker_reason,
             },
         )

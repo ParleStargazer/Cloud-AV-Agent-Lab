@@ -1,6 +1,10 @@
 # Setup-AutoLogon.ps1
 # Run this script as Administrator.
 
+param(
+    [string]$Username = "AvTester-Admin"
+)
+
 $DownloadUrl = "https://download.sysinternals.com/files/AutoLogon.zip"
 $WorkingDirectory = "C:\AutoLogon"
 $ZipFile = Join-Path $WorkingDirectory "AutoLogon.zip"
@@ -50,4 +54,5 @@ Write-Host "Launching AutoLogon64.exe..."
 
 Start-Process -FilePath $Executable
 
+Write-Host "AutoLogon opened. Enter account '$Username' and its password manually."
 Write-Host "Done."
