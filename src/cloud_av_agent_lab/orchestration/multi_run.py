@@ -163,6 +163,12 @@ class MultiRunPlanError(ValueError):
     failure_kind: FailureKind = "planning_or_policy_failure"
 
 
+class MultiRunStateError(ValueError):
+    """Raised when multi-run state or event artifacts cannot be loaded safely."""
+
+    failure_kind: FailureKind = "planning_or_policy_failure"
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -242,8 +248,12 @@ def compute_manifest_sha256(path: Path | str) -> str:
     return digest.hexdigest()
 
 
+def compute_bytes_sha256(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
 def compute_text_sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return compute_bytes_sha256(value.encode("utf-8"))
 
 
 def load_sample_manifest(path: Path | str) -> LoadedSampleManifest:
@@ -647,6 +657,7 @@ class BatchExecutionPolicy:
     mode: str = "serial"
     failure_policy: str = "continue"
     dry_run: bool = False
+    plan_only: bool = False
     case_timeout_seconds: float | None = None
     environment_failure_policy: str = "stop"
 
@@ -655,6 +666,7 @@ class BatchExecutionPolicy:
             "mode": self.mode,
             "failure_policy": self.failure_policy,
             "dry_run": self.dry_run,
+            "plan_only": self.plan_only,
             "case_timeout_seconds": self.case_timeout_seconds,
             "environment_failure_policy": self.environment_failure_policy,
         }
@@ -665,7 +677,11 @@ class MultiRunPlanArtifacts:
     batch_dir: Path
     batch_plan_path: Path
     generated_config_path: Path
+    manifest_copy_path: Path
     manifest_sha256_path: Path
+    state_path: Path
+    event_log_path: Path
+    batch_plan_sha256: str
     batch_plan: BatchPlan
 
     def to_dict(self) -> dict[str, Any]:
@@ -673,7 +689,11 @@ class MultiRunPlanArtifacts:
             "batch_dir": str(self.batch_dir),
             "batch_plan_path": str(self.batch_plan_path),
             "generated_config_path": str(self.generated_config_path),
+            "manifest_copy_path": str(self.manifest_copy_path),
             "manifest_sha256_path": str(self.manifest_sha256_path),
+            "state_path": str(self.state_path),
+            "event_log_path": str(self.event_log_path),
+            "batch_plan_sha256": self.batch_plan_sha256,
             "batch_plan": self.batch_plan.to_dict(),
         }
 
@@ -730,10 +750,27 @@ def create_multi_run_batch_plan(
     selection: BatchSelection,
     dry_run: bool,
     failure_policy: str,
+    plan_only: bool = False,
 ) -> MultiRunPlanArtifacts:
     resolved_batch_id = _safe_batch_id(batch_id or default_batch_id(product_id))
     batch_dir = Path(batch_root) / resolved_batch_id
     batch_dir.mkdir(parents=True, exist_ok=True)
+
+    batch_plan_path = batch_dir / "batch_plan.json"
+    generated_config_path = batch_dir / "multi_run.generated.toml"
+    manifest_copy_path = batch_dir / "sample_manifest.jsonl"
+    manifest_sha256_path = batch_dir / "sample_manifest.sha256"
+    state_path = batch_dir / "multi_run_state.json"
+    event_log_path = batch_dir / "multi_run_events.jsonl"
+    _ensure_plan_artifacts_do_not_exist(
+        batch_plan_path,
+        generated_config_path,
+        manifest_copy_path,
+        manifest_sha256_path,
+        state_path,
+        event_log_path,
+    )
+    _copy_manifest_bytes(manifest.path, manifest_copy_path)
 
     generated_config = render_multi_run_generated_config(
         product_id=product_id,
@@ -742,9 +779,13 @@ def create_multi_run_batch_plan(
         region=region,
         guest_agent_url=guest_agent_url,
         desktop_worker_url=desktop_worker_url,
+        sample_manifest_path=manifest_copy_path.name,
+        batch_plan_path=batch_plan_path.name,
         dry_run=dry_run,
+        plan_only=plan_only,
     )
-    generated_config_sha256 = compute_text_sha256(generated_config)
+    generated_config_bytes = generated_config.encode("utf-8")
+    generated_config_sha256 = compute_bytes_sha256(generated_config_bytes)
     plan = BatchPlan(
         batch_id=resolved_batch_id,
         created_at_utc=utc_now(),
@@ -752,7 +793,7 @@ def create_multi_run_batch_plan(
         instance_id=instance_id,
         snapshot_id=snapshot_id,
         region=region,
-        sample_manifest_path=str(manifest.path),
+        sample_manifest_path=manifest_copy_path.name,
         manifest_sha256=manifest.sha256,
         generated_config_sha256=generated_config_sha256,
         single_run_runner_version="single-run.v1",
@@ -763,28 +804,59 @@ def create_multi_run_batch_plan(
             mode="serial",
             failure_policy=failure_policy,
             dry_run=dry_run,
+            plan_only=plan_only,
         ),
     )
 
-    batch_plan_path = batch_dir / "batch_plan.json"
-    generated_config_path = batch_dir / "multi_run.generated.toml"
-    manifest_sha256_path = batch_dir / "sample_manifest.sha256"
-
-    batch_plan_path.write_text(
-        json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
+    batch_plan_bytes = (
+        json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n"
+    ).encode("utf-8")
+    batch_plan_path.write_bytes(batch_plan_bytes)
+    batch_plan_sha256 = compute_bytes_sha256(batch_plan_bytes)
+    generated_config_path.write_bytes(generated_config_bytes)
+    manifest_sha256_path.write_text(
+        f"{manifest.sha256}  {manifest_copy_path.name}\n",
         encoding="utf-8",
     )
-    generated_config_path.write_text(generated_config, encoding="utf-8")
-    manifest_sha256_path.write_text(
-        f"{manifest.sha256}  {manifest.path.name}\n",
-        encoding="utf-8",
+    state = _initial_multi_run_state(
+        plan,
+        manifest=manifest,
+        batch_plan_sha256=batch_plan_sha256,
+    )
+    write_multi_run_state(state_path, state)
+    append_next_multi_run_event(
+        event_log_path,
+        batch_id=plan.batch_id,
+        event_type="batch_created",
+        data={
+            "batch_plan_path": batch_plan_path.name,
+            "state_path": state_path.name,
+            "event_log_path": event_log_path.name,
+        },
+    )
+    append_next_multi_run_event(
+        event_log_path,
+        batch_id=plan.batch_id,
+        event_type="plan_created",
+        data={
+            "manifest_sha256": manifest.sha256,
+            "generated_config_sha256": generated_config_sha256,
+            "selected_indexes": selection.selected_indexes,
+            "execution_mode": plan.execution.mode,
+            "dry_run": dry_run,
+            "plan_only": plan_only,
+        },
     )
 
     return MultiRunPlanArtifacts(
         batch_dir=batch_dir,
         batch_plan_path=batch_plan_path,
         generated_config_path=generated_config_path,
+        manifest_copy_path=manifest_copy_path,
         manifest_sha256_path=manifest_sha256_path,
+        state_path=state_path,
+        event_log_path=event_log_path,
+        batch_plan_sha256=batch_plan_sha256,
         batch_plan=plan,
     )
 
@@ -803,6 +875,9 @@ def render_multi_run_generated_config(
     guest_agent_url: str,
     desktop_worker_url: str,
     dry_run: bool,
+    sample_manifest_path: str = "sample_manifest.jsonl",
+    batch_plan_path: str = "batch_plan.json",
+    plan_only: bool = False,
 ) -> str:
     return "\n".join(
         [
@@ -816,7 +891,10 @@ def render_multi_run_generated_config(
             f"region = {_toml_string(region)}",
             f"guest_agent_url = {_toml_string(guest_agent_url)}",
             f"desktop_worker_url = {_toml_string(desktop_worker_url)}",
+            f"sample_manifest_path = {_toml_string(sample_manifest_path)}",
+            f"batch_plan_path = {_toml_string(batch_plan_path)}",
             f"dry_run = {_toml_bool(dry_run)}",
+            f"plan_only = {_toml_bool(plan_only)}",
             "",
         ]
     )
@@ -836,6 +914,21 @@ def _toml_string(value: str) -> str:
 
 def _toml_bool(value: bool) -> str:
     return "true" if value else "false"
+
+
+def _ensure_plan_artifacts_do_not_exist(*paths: Path) -> None:
+    existing = [path.name for path in paths if path.exists()]
+    if existing:
+        formatted = ", ".join(sorted(existing))
+        raise MultiRunPlanError(f"batch plan artifact already exists: {formatted}")
+
+
+def _copy_manifest_bytes(source: Path, destination: Path) -> None:
+    source_path = source.resolve()
+    destination_path = destination.resolve()
+    if source_path == destination_path:
+        return
+    destination.write_bytes(source.read_bytes())
 
 
 @dataclass(frozen=True)
@@ -964,6 +1057,152 @@ class MultiRunEvent:
             "case_status": self.case_status,
             "data": _jsonable(self.data),
         }
+
+
+def _initial_multi_run_state(
+    plan: BatchPlan,
+    *,
+    manifest: LoadedSampleManifest,
+    batch_plan_sha256: str,
+) -> MultiRunState:
+    entries_by_index = manifest.by_index()
+    cases = tuple(
+        CaseState(
+            sample_index=index,
+            sample_id=entries_by_index[index].sample_id,
+            case_id=_planned_case_id(
+                index, entries_by_index[index].sample_id, plan.product_id
+            ),
+        )
+        for index in plan.selection.selected_indexes
+    )
+    return MultiRunState(
+        batch_id=plan.batch_id,
+        batch_state="created",
+        product_id=plan.product_id,
+        instance_id=plan.instance_id,
+        snapshot_id=plan.snapshot_id,
+        region=plan.region,
+        sample_manifest_path=plan.sample_manifest_path,
+        manifest_sha256=plan.manifest_sha256,
+        batch_plan_sha256=batch_plan_sha256,
+        selected_indexes=plan.selection.selected_indexes,
+        cases=cases,
+        started_at_utc=plan.created_at_utc,
+    )
+
+
+def _planned_case_id(sample_index: int, sample_id: str, product_id: str) -> str:
+    safe_sample = _safe_batch_id(sample_id)
+    safe_product = _safe_batch_id(product_id).casefold()
+    return f"{sample_index:04d}_{safe_sample}__{safe_product}"
+
+
+def write_multi_run_state(path: Path | str, state: MultiRunState) -> None:
+    _write_json_atomic(Path(path), state.to_dict())
+
+
+def read_multi_run_state_payload(path: Path | str) -> dict[str, Any]:
+    state_path = Path(path)
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise MultiRunStateError(
+            f"{state_path}: invalid multi_run_state.json: {exc.msg}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise MultiRunStateError(
+            f"{state_path}: multi_run_state.json must be an object"
+        )
+    schema_version = payload.get("schema_version")
+    if schema_version != MULTI_RUN_STATE_SCHEMA_VERSION:
+        raise MultiRunStateError(
+            f"{state_path}: unsupported state schema_version {schema_version!r}"
+        )
+    return payload
+
+
+def append_next_multi_run_event(
+    path: Path | str,
+    *,
+    batch_id: str,
+    event_type: str,
+    sample_index: int | None = None,
+    sample_id: str = "",
+    run_id: str = "",
+    case_id: str = "",
+    case_status: str = "",
+    data: dict[str, Any] | None = None,
+) -> MultiRunEvent:
+    event_path = Path(path)
+    event = MultiRunEvent(
+        seq=_next_event_seq(event_path),
+        event_type=event_type,
+        at_utc=utc_now(),
+        batch_id=batch_id,
+        sample_index=sample_index,
+        sample_id=sample_id,
+        run_id=run_id,
+        case_id=case_id,
+        case_status=case_status,
+        data=data or {},
+    )
+    append_multi_run_event(event_path, event)
+    return event
+
+
+def append_multi_run_event(path: Path | str, event: MultiRunEvent) -> None:
+    event_path = Path(path)
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    with event_path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
+
+
+def read_multi_run_events(path: Path | str) -> tuple[dict[str, Any], ...]:
+    event_path = Path(path)
+    if not event_path.exists():
+        return ()
+    events: list[dict[str, Any]] = []
+    with event_path.open("r", encoding="utf-8") as handle:
+        for line_number, raw_line in enumerate(handle, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise MultiRunStateError(
+                    f"{event_path}: line {line_number}: invalid event json: {exc.msg}"
+                ) from exc
+            if not isinstance(payload, dict):
+                raise MultiRunStateError(
+                    f"{event_path}: line {line_number}: event must be an object"
+                )
+            if payload.get("schema_version") != MULTI_RUN_EVENT_SCHEMA_VERSION:
+                raise MultiRunStateError(
+                    f"{event_path}: line {line_number}: unsupported event schema_version"
+                )
+            events.append(payload)
+    return tuple(events)
+
+
+def _next_event_seq(path: Path) -> int:
+    events = read_multi_run_events(path)
+    if not events:
+        return 1
+    seq_values = [event.get("seq") for event in events]
+    int_values = [value for value in seq_values if isinstance(value, int)]
+    if len(int_values) != len(seq_values):
+        raise MultiRunStateError(f"{path}: event seq must be an integer")
+    return max(int_values, default=0) + 1
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    temp_path = path.with_name(f".{path.name}.tmp")
+    temp_path.write_bytes(content)
+    temp_path.replace(path)
 
 
 def _jsonable(value: Any) -> Any:

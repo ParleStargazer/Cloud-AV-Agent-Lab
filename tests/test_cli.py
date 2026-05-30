@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -741,8 +741,37 @@ class CloudLifecycleCliGuardTests(TestCase):
             plan_path = tmp_path / "batches" / "batch-test" / "batch_plan.json"
             plan = json.loads(plan_path.read_text(encoding="utf-8"))
             self.assertEqual(plan["manifest_sha256"], _sha256_file(manifest_path))
+            self.assertEqual(plan["schema_version"], "multi-run-plan.v1")
+            self.assertEqual(plan["batch_id"], "batch-test")
+            self.assertIn("created_at_utc", plan)
+            self.assertEqual(plan["sample_manifest_path"], "sample_manifest.jsonl")
+            self.assertEqual(plan["execution"]["mode"], "serial")
             self.assertEqual(plan["selection"]["selected_indexes"], [1, 2])
             self.assertTrue(plan["execution"]["dry_run"])
+            self.assertFalse(plan["execution"]["plan_only"])
+            self.assertEqual(
+                plan["generated_config_sha256"],
+                _sha256_file(
+                    tmp_path / "batches" / "batch-test" / "multi_run.generated.toml"
+                ),
+            )
+            self.assertTrue(
+                (
+                    tmp_path / "batches" / "batch-test" / "sample_manifest.jsonl"
+                ).is_file()
+            )
+            state = json.loads(
+                (
+                    tmp_path / "batches" / "batch-test" / "multi_run_state.json"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(state["sample_manifest_path"], "sample_manifest.jsonl")
+            self.assertEqual(state["selected_indexes"], [1, 2])
+            events = (
+                tmp_path / "batches" / "batch-test" / "multi_run_events.jsonl"
+            ).read_text(encoding="utf-8")
+            self.assertIn('"type": "batch_created"', events)
+            self.assertIn('"type": "plan_created"', events)
 
     def test_multi_run_plan_only_writes_config_without_secret_or_token(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -791,6 +820,8 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(
                 plan["execution"]["failure_policy"], "stop-on-case-failure"
             )
+            self.assertFalse(plan["execution"]["dry_run"])
+            self.assertTrue(plan["execution"]["plan_only"])
             self.assertEqual(plan["selection"]["selected_indexes"], [1])
             self.assertTrue((batch_dir / "sample_manifest.sha256").is_file())
 

@@ -1093,6 +1093,7 @@ def _handle_multi_run(
             selection=selection,
             dry_run=args.dry_run,
             failure_policy=args.failure_policy,
+            plan_only=args.plan_only,
         )
     except (
         MultiRunManifestError,
@@ -1124,7 +1125,11 @@ def _handle_multi_run(
                 "batch_dir": str(artifacts.batch_dir),
                 "batch_plan_path": str(artifacts.batch_plan_path),
                 "generated_config_path": str(artifacts.generated_config_path),
+                "manifest_copy_path": str(artifacts.manifest_copy_path),
                 "manifest_sha256_path": str(artifacts.manifest_sha256_path),
+                "state_path": str(artifacts.state_path),
+                "event_log_path": str(artifacts.event_log_path),
+                "batch_plan_sha256": artifacts.batch_plan_sha256,
                 "dry_run": args.dry_run,
                 "plan_only": args.plan_only,
                 "selection_mode": selection.mode,

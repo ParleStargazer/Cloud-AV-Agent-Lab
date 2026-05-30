@@ -174,3 +174,38 @@ single-run 调度；loader 只读取 manifest 文本，不读取样本文件内�
 single-run runner，未触发云操作，未读取样本文件内容。
 
 下一阶段建议进入 Commit 6：实现 event log 和 atomic state writer。
+
+## 2026-05-30 Commit 6：Event Log + Atomic State Writer
+
+本阶段完成 `multi-run` 第六阶段状态与事件落盘基础：
+
+- 复查并收紧 Commit 5 的计划产物语义：
+  - `batch_plan.json` 明确包含 `schema_version = multi-run-plan.v1`、
+    `batch_id`、`created_at_utc`、`manifest_sha256`、
+    `generated_config_sha256`、`selected_indexes` 和
+    `execution.mode = serial`。
+  - `generated_config_sha256` 改为按最终写入
+    `multi_run.generated.toml` 的 UTF-8 bytes 计算，避免 resume 时出现文本
+    规范化歧义。
+  - `sample_manifest.jsonl` 会复制进 batch 目录，`batch_plan.json`、
+    `multi_run.generated.toml` 和 `multi_run_state.json` 中使用相对 batch root
+    的 `sample_manifest.jsonl` 路径。
+  - `--plan-only` 与 `--dry-run` 在 execution policy 中分别记录：
+    `plan_only` 表示只生成计划产物后退出，`dry_run` 表示未来进入
+    scheduler 后也只模拟 / 校验，不调用真实 runner。
+- 新增 `multi_run_state.json` 原子写入能力：
+  - `write_multi_run_state(...)` 使用临时文件 + replace 写入。
+  - `read_multi_run_state_payload(...)` 能识别损坏 JSON 和 schema 不匹配。
+  - 初始 state 记录 batch/product/instance/snapshot/region、manifest digest、
+    batch plan digest、selected indexes 和 planned case 列表。
+- 新增 `multi_run_events.jsonl` append-only 事件能力：
+  - `append_next_multi_run_event(...)` 自动递增 `seq`。
+  - `read_multi_run_events(...)` 支持读取 JSONL，并在损坏行上报告行号。
+  - batch plan 创建时写入 `batch_created` 与 `plan_created` 事件。
+- 新增 `tests/test_multi_run_state.py`，覆盖 state 原子写、损坏 state 报错、
+  event seq 递增、event log 损坏行号。
+
+本阶段仍未调用 single-run runner，未触发云操作，未读取样本文件内容；
+新增 state/event 只服务后续 resume、scheduler 和 aggregate 阶段。
+
+下一阶段建议进入 Commit 7：引入 runner interface 与 fake single-run runner。

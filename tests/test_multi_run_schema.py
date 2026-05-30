@@ -73,6 +73,7 @@ class MultiRunSchemaTests(unittest.TestCase):
                 mode="serial",
                 failure_policy="stop-on-case-failure",
                 dry_run=True,
+                plan_only=True,
                 case_timeout_seconds=1800.0,
             ),
             single_run_runner_version="single-run.v1",
@@ -87,6 +88,8 @@ class MultiRunSchemaTests(unittest.TestCase):
         self.assertEqual(payload["selection"]["selected_indexes"], [1, 2, 3])
         self.assertEqual(payload["selection"]["range"], "1-3")
         self.assertTrue(payload["execution"]["dry_run"])
+        self.assertTrue(payload["execution"]["plan_only"])
+        self.assertEqual(payload["execution"]["mode"], "serial")
         json.dumps(payload)
 
     def test_multi_run_state_serializes_case_status_breakdown(self) -> None:
