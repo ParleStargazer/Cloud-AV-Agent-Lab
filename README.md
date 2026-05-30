@@ -21,6 +21,7 @@ Cloud AV Agent Lab 是一个本地自动化编排框架，用于把 AI Agent、�
 ├── configs/lab.example.toml         # 云端测试矩阵示例配置
 ├── docs/                            # 架构、安全与开发说明
 ├── reports/                         # 运行报告输出目录
+├── runs/                            # single-run / multi-run 运行产物骨架，内容默认忽略
 ├── src/cloud_av_agent_lab/          # 本地编排框架
 └── tests/                           # 无外部依赖的基础测试
 ```

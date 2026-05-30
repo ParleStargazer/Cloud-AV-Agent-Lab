@@ -61,8 +61,23 @@ token.txt
 #built resources
 scripts/pack/
 
-# Ignore running results
+# Ignore running results but keep safe multi-run directory skeleton.
 runs/*
+!runs/README.md
+!runs/.locks/
+!runs/.locks/.gitkeep
+runs/.locks/*
+!runs/.locks/.gitkeep
+!runs/plans/
+!runs/plans/.gitkeep
+runs/plans/*
+!runs/plans/.gitkeep
+!runs/raw_sample/
+!runs/raw_sample/README.md
+!runs/raw_sample/.gitkeep
+runs/raw_sample/*
+!runs/raw_sample/README.md
+!runs/raw_sample/.gitkeep
 
 # Ignore EICAR-TEST-FILE
 eicar.com
