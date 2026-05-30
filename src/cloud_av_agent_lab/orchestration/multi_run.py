@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
 SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION = "multi-run-sample.v1"
@@ -80,6 +83,12 @@ SelectionMode: TypeAlias = Literal["all", "range", "indexes", "from_to"]
 EntryStatus: TypeAlias = Literal["ready", "skipped", "invalid"]
 SampleSourceKind: TypeAlias = Literal["local_platform_path", "external_reference"]
 
+ALLOWED_SAMPLE_SOURCE_KINDS: tuple[str, ...] = (
+    "local_platform_path",
+    "external_reference",
+)
+ALLOWED_ENTRY_STATUSES: tuple[str, ...] = ("ready", "skipped", "invalid")
+
 FAILURE_KINDS: tuple[str, ...] = (
     "planning_or_policy_failure",
     "case_failure",
@@ -133,6 +142,10 @@ BATCH_STATES: tuple[str, ...] = (
     "failed_invalid_config",
     "failed_manifest_mismatch",
 )
+
+
+class MultiRunManifestError(ValueError):
+    """Raised when a multi-run sample manifest is malformed."""
 
 
 def utc_now() -> str:
@@ -189,6 +202,246 @@ class SampleManifestEntry:
             "skip_reason": self.skip_reason,
             "created_at_utc": self.created_at_utc,
         }
+
+
+@dataclass(frozen=True)
+class LoadedSampleManifest:
+    path: Path
+    sha256: str
+    entries: tuple[SampleManifestEntry, ...]
+
+    @property
+    def indexes(self) -> tuple[int, ...]:
+        return tuple(entry.sample_index for entry in self.entries)
+
+    def by_index(self) -> dict[int, SampleManifestEntry]:
+        return {entry.sample_index: entry for entry in self.entries}
+
+
+def compute_manifest_sha256(path: Path | str) -> str:
+    manifest_path = Path(path)
+    digest = hashlib.sha256()
+    with manifest_path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_sample_manifest(path: Path | str) -> LoadedSampleManifest:
+    manifest_path = Path(path)
+    entries: list[SampleManifestEntry] = []
+    seen_indexes: set[int] = set()
+    with manifest_path.open("r", encoding="utf-8") as handle:
+        for line_number, raw_line in enumerate(handle, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            payload = _load_manifest_line(line, line_number)
+            entry = _parse_manifest_entry(payload, line_number)
+            if entry.sample_index in seen_indexes:
+                raise MultiRunManifestError(
+                    f"line {line_number}: duplicate sample_index {entry.sample_index}"
+                )
+            seen_indexes.add(entry.sample_index)
+            entries.append(entry)
+
+    if not entries:
+        raise MultiRunManifestError("sample manifest is empty")
+
+    return LoadedSampleManifest(
+        path=manifest_path,
+        sha256=compute_manifest_sha256(manifest_path),
+        entries=tuple(entries),
+    )
+
+
+def _load_manifest_line(line: str, line_number: int) -> dict[str, Any]:
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise MultiRunManifestError(
+            f"line {line_number}: invalid JSON: {exc.msg}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise MultiRunManifestError(
+            f"line {line_number}: manifest entry must be object"
+        )
+    return payload
+
+
+def _parse_manifest_entry(
+    payload: dict[str, Any],
+    line_number: int,
+) -> SampleManifestEntry:
+    schema_version = _required_str(payload, "schema_version", line_number)
+    if schema_version != SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION:
+        raise MultiRunManifestError(
+            f"line {line_number}: unsupported schema_version {schema_version!r}"
+        )
+
+    sample_index = _required_int(payload, "sample_index", line_number)
+    if sample_index < 1:
+        raise MultiRunManifestError(
+            f"line {line_number}: sample_index must be a positive 1-based integer"
+        )
+
+    sample_source_kind = _optional_str(
+        payload,
+        "sample_source_kind",
+        line_number,
+        default="local_platform_path",
+    )
+    if sample_source_kind not in ALLOWED_SAMPLE_SOURCE_KINDS:
+        raise MultiRunManifestError(
+            f"line {line_number}: invalid sample_source_kind {sample_source_kind!r}"
+        )
+
+    entry_status = _optional_str(
+        payload,
+        "entry_status",
+        line_number,
+        default="ready",
+    )
+    if entry_status not in ALLOWED_ENTRY_STATUSES:
+        raise MultiRunManifestError(
+            f"line {line_number}: invalid entry_status {entry_status!r}"
+        )
+
+    sha256 = _required_hex(payload, "sha256", line_number, expected_length=64)
+    md5 = _required_hex(payload, "md5", line_number, expected_length=32)
+    size = _required_int(payload, "size", line_number)
+    if size < 0:
+        raise MultiRunManifestError(f"line {line_number}: size must be >= 0")
+
+    return SampleManifestEntry(
+        schema_version=schema_version,
+        manifest_id=_optional_str(payload, "manifest_id", line_number),
+        manifest_created_at_utc=_optional_str(
+            payload,
+            "manifest_created_at_utc",
+            line_number,
+        ),
+        manifest_tool_version=_optional_str(
+            payload,
+            "manifest_tool_version",
+            line_number,
+        ),
+        sample_index=sample_index,
+        sample_id=_required_str(payload, "sample_id", line_number),
+        case_name=_required_str(payload, "case_name", line_number),
+        sha256=sha256,
+        md5=md5,
+        size=size,
+        original_filename=_required_str(payload, "original_filename", line_number),
+        original_suffix=_required_str(payload, "original_suffix", line_number),
+        normalized_suffix=_required_str(payload, "normalized_suffix", line_number),
+        renamed_filename=_required_str(payload, "renamed_filename", line_number),
+        sample_source_kind=sample_source_kind,  # type: ignore[arg-type]
+        sample_ref=_required_str(payload, "sample_ref", line_number),
+        duplicate_group_id=_optional_str(payload, "duplicate_group_id", line_number),
+        duplicate_of_sample_index=_optional_int_or_none(
+            payload,
+            "duplicate_of_sample_index",
+            line_number,
+        ),
+        aliases=tuple(_optional_str_list(payload, "aliases", line_number)),
+        entry_status=entry_status,  # type: ignore[arg-type]
+        skip_reason=_optional_str_or_none(payload, "skip_reason", line_number),
+        created_at_utc=_optional_str(payload, "created_at_utc", line_number),
+    )
+
+
+def _required_str(
+    payload: dict[str, Any],
+    key: str,
+    line_number: int,
+) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value:
+        raise MultiRunManifestError(f"line {line_number}: missing or invalid {key}")
+    return value
+
+
+def _optional_str(
+    payload: dict[str, Any],
+    key: str,
+    line_number: int,
+    *,
+    default: str = "",
+) -> str:
+    value = payload.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise MultiRunManifestError(f"line {line_number}: invalid {key}")
+    return value
+
+
+def _optional_str_or_none(
+    payload: dict[str, Any],
+    key: str,
+    line_number: int,
+) -> str | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise MultiRunManifestError(f"line {line_number}: invalid {key}")
+    return value
+
+
+def _required_int(
+    payload: dict[str, Any],
+    key: str,
+    line_number: int,
+) -> int:
+    value = payload.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise MultiRunManifestError(f"line {line_number}: missing or invalid {key}")
+    return value
+
+
+def _optional_int_or_none(
+    payload: dict[str, Any],
+    key: str,
+    line_number: int,
+) -> int | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise MultiRunManifestError(f"line {line_number}: invalid {key}")
+    return value
+
+
+def _required_hex(
+    payload: dict[str, Any],
+    key: str,
+    line_number: int,
+    *,
+    expected_length: int,
+) -> str:
+    value = _required_str(payload, key, line_number).casefold()
+    if len(value) != expected_length or any(
+        ch not in "0123456789abcdef" for ch in value
+    ):
+        raise MultiRunManifestError(
+            f"line {line_number}: {key} must be {expected_length} hex characters"
+        )
+    return value
+
+
+def _optional_str_list(
+    payload: dict[str, Any],
+    key: str,
+    line_number: int,
+) -> list[str]:
+    value = payload.get(key, [])
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise MultiRunManifestError(f"line {line_number}: invalid {key}")
+    return value
 
 
 @dataclass(frozen=True)

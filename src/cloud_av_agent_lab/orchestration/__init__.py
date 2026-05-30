@@ -1,6 +1,8 @@
 """Run orchestration helpers."""
 
 from .multi_run import (
+    ALLOWED_ENTRY_STATUSES,
+    ALLOWED_SAMPLE_SOURCE_KINDS,
     BATCH_PLAN_SCHEMA_VERSION,
     BATCH_STATES,
     CLEANUP_STATUSES,
@@ -16,13 +18,19 @@ from .multi_run import (
     BatchPlan,
     BatchSelection,
     CaseState,
+    LoadedSampleManifest,
     MultiRunEvent,
+    MultiRunManifestError,
     MultiRunState,
     SampleManifestEntry,
+    compute_manifest_sha256,
+    load_sample_manifest,
 )
 from .single_run import SingleRunOptions, SingleRunResult, run_single_case
 
 __all__ = [
+    "ALLOWED_ENTRY_STATUSES",
+    "ALLOWED_SAMPLE_SOURCE_KINDS",
     "BATCH_PLAN_SCHEMA_VERSION",
     "BATCH_STATES",
     "CLEANUP_STATUSES",
@@ -38,10 +46,14 @@ __all__ = [
     "BatchPlan",
     "BatchSelection",
     "CaseState",
+    "LoadedSampleManifest",
     "MultiRunEvent",
+    "MultiRunManifestError",
     "MultiRunState",
     "SampleManifestEntry",
     "SingleRunOptions",
     "SingleRunResult",
+    "compute_manifest_sha256",
+    "load_sample_manifest",
     "run_single_case",
 ]
