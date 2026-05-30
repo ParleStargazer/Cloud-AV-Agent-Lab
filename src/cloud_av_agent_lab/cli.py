@@ -35,9 +35,11 @@ from cloud_av_agent_lab.orchestration import (
     MultiRunManifestError,
     MultiRunPlanError,
     MultiRunSelectionError,
+    MultiRunStateError,
     SingleRunOptions,
     create_multi_run_batch_plan,
     execute_multi_run_batch,
+    load_existing_multi_run_batch,
     load_sample_manifest,
     parse_sample_selection,
     run_single_case,
@@ -1050,6 +1052,7 @@ def _handle_multi_run(
     args: argparse.Namespace,
 ) -> int:
     _multi_run_selection_mode(parser, args)
+    execution_mode = _multi_run_execution_mode(parser, args)
     if args.max_cases is not None and args.max_cases <= 0:
         parser.exit(
             2, "error: --max-cases must be greater than 0; no samples selected\n"
@@ -1081,25 +1084,38 @@ def _handle_multi_run(
             to_index=args.to_index,
             max_cases=args.max_cases,
         )
-        artifacts = create_multi_run_batch_plan(
-            batch_root=args.batch_root,
-            batch_id=args.batch_id,
-            product_id=args.product,
-            instance_id=args.instance_id,
-            snapshot_id=args.snapshot_id,
-            region=args.region,
-            guest_agent_url=args.guest_agent_url,
-            desktop_worker_url=args.desktop_worker_url,
-            manifest=manifest,
-            selection=selection,
-            dry_run=args.dry_run,
-            failure_policy=args.failure_policy,
-            plan_only=args.plan_only,
-        )
+        if execution_mode == "run":
+            artifacts = create_multi_run_batch_plan(
+                batch_root=args.batch_root,
+                batch_id=args.batch_id,
+                product_id=args.product,
+                instance_id=args.instance_id,
+                snapshot_id=args.snapshot_id,
+                region=args.region,
+                guest_agent_url=args.guest_agent_url,
+                desktop_worker_url=args.desktop_worker_url,
+                manifest=manifest,
+                selection=selection,
+                dry_run=args.dry_run,
+                failure_policy=args.failure_policy,
+                plan_only=args.plan_only,
+            )
+        else:
+            artifacts = load_existing_multi_run_batch(
+                batch_root=args.batch_root,
+                batch_id=args.batch_id,
+                product_id=args.product,
+                instance_id=args.instance_id,
+                snapshot_id=args.snapshot_id,
+                region=args.region,
+                manifest=manifest,
+                selection=selection,
+            )
     except (
         MultiRunManifestError,
         MultiRunPlanError,
         MultiRunSelectionError,
+        MultiRunStateError,
     ) as exc:
         parser.exit(2, f"error: {exc}\n")
 
@@ -1109,7 +1125,13 @@ def _handle_multi_run(
         status = "planned"
         message = "multi-run batch plan created; scheduler skipped by --plan-only"
     else:
-        state = execute_multi_run_batch(artifacts.batch_dir)
+        try:
+            state = execute_multi_run_batch(
+                artifacts.batch_dir,
+                execution_mode=execution_mode,
+            )
+        except MultiRunStateError as exc:
+            parser.exit(2, f"error: {exc}\n")
         print("Multi-run batch executed with fake single-run runner.")
         status = state.final_status or state.batch_state
         message = (
@@ -1162,6 +1184,7 @@ def _handle_multi_run(
                 "to": args.to_index,
                 "max_cases": args.max_cases,
                 "failure_policy": args.failure_policy,
+                "execution_mode": execution_mode,
                 "resume": args.resume,
                 "rerun_failed": args.rerun_failed,
                 "force_rerun": args.force_rerun,
@@ -1200,6 +1223,34 @@ def _multi_run_selection_mode(
     if selected_modes == ["from_to"] and args.from_index > args.to_index:
         parser.exit(2, "error: --from must be less than or equal to --to\n")
     return selected_modes[0] if selected_modes else "unspecified"
+
+
+def _multi_run_execution_mode(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> str:
+    selected_modes = [
+        mode
+        for mode, enabled in (
+            ("resume", args.resume),
+            ("rerun_failed", args.rerun_failed),
+            ("force_rerun", args.force_rerun),
+        )
+        if enabled
+    ]
+    if len(selected_modes) > 1:
+        parser.exit(
+            2,
+            "error: execution modes are mutually exclusive "
+            "(use only one of --resume, --rerun-failed, or --force-rerun)\n",
+        )
+    if args.plan_only and selected_modes:
+        parser.exit(
+            2, "error: --plan-only cannot be combined with resume/rerun modes\n"
+        )
+    if selected_modes and not args.batch_id:
+        parser.exit(2, "error: --batch-id is required for resume/rerun modes\n")
+    return selected_modes[0] if selected_modes else "run"
 
 
 def _single_run_options_from_args(

@@ -7,9 +7,11 @@ from pathlib import Path
 
 from cloud_av_agent_lab.orchestration.multi_run import (
     FakeSingleRunRunner,
+    MultiRunStateError,
     SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION,
     create_multi_run_batch_plan,
     execute_multi_run_batch,
+    load_existing_multi_run_batch,
     load_sample_manifest,
     parse_sample_selection,
     read_multi_run_events,
@@ -147,6 +149,10 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertEqual(summary["denominator"]["evaluable_cases"], 2)
             self.assertEqual(summary["detection_rate"]["detected_or_blocked"], 2)
             self.assertEqual(summary["detection_rate"]["denominator"], 2)
+            self.assertTrue(summary["detection_rate"]["simulated"])
+            self.assertEqual(
+                summary["detection_rate"]["rate_kind"], "simulated_detection_rate"
+            )
             self.assertEqual(summary["verdict_breakdown"]["detected_or_blocked"], 2)
             self.assertEqual(summary["verdict_breakdown"]["not_evaluable"], 1)
             self.assertEqual(summary["readiness_breakdown"]["ok"], 2)
@@ -178,6 +184,158 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertEqual(summary["denominator"]["case_failures"], 0)
             self.assertEqual(summary["denominator"]["evaluable_cases"], 0)
             self.assertEqual(summary["detection_rate"]["denominator"], 0)
+
+    def test_resume_skips_completed_restored_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(tmp, indexes=(1, 2))
+            _mark_cases_as_real_resume_eligible(batch_dir)
+            resume_runner = FakeSingleRunRunner()
+
+            state = execute_multi_run_batch(
+                batch_dir,
+                runner=resume_runner,
+                execution_mode="resume",
+            )
+
+            self.assertEqual(resume_runner.requests, [])
+            self.assertEqual(state.batch_state, "completed")
+            events = read_multi_run_events(batch_dir / "multi_run_events.jsonl")
+            self.assertIn(
+                "case_skipped_by_execution_mode", [event["type"] for event in events]
+            )
+
+    def test_resume_runs_completed_case_with_cleanup_unknown_when_state_safe(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(tmp, indexes=(1, 2))
+            _mark_cases_as_real_resume_eligible(batch_dir)
+            state_path = batch_dir / "multi_run_state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["cases"][0]["cleanup_status"] = "unknown"
+            state["cases"][0]["resume_eligible"] = False
+            state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            resume_runner = FakeSingleRunRunner()
+
+            execute_multi_run_batch(
+                batch_dir,
+                runner=resume_runner,
+                execution_mode="resume",
+            )
+
+            self.assertEqual(
+                [request.sample_index for request in resume_runner.requests], [1]
+            )
+            self.assertEqual(resume_runner.requests[0].attempt, 2)
+
+    def test_resume_rejects_unsafe_existing_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(
+                tmp,
+                scenarios={1: "environment_failed", 2: "completed"},
+            )
+
+            with self.assertRaisesRegex(MultiRunStateError, "unsafe to continue"):
+                execute_multi_run_batch(batch_dir, execution_mode="resume")
+
+    def test_rerun_failed_runs_only_case_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(
+                tmp,
+                scenarios={1: "case_failed", 2: "completed"},
+            )
+            rerun_runner = FakeSingleRunRunner()
+
+            execute_multi_run_batch(
+                batch_dir,
+                runner=rerun_runner,
+                execution_mode="rerun_failed",
+            )
+
+            self.assertEqual(
+                [request.sample_index for request in rerun_runner.requests], [1]
+            )
+            self.assertEqual(rerun_runner.requests[0].attempt, 2)
+
+    def test_force_rerun_runs_all_selected_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(tmp, indexes=(1, 2))
+            force_runner = FakeSingleRunRunner()
+
+            execute_multi_run_batch(
+                batch_dir,
+                runner=force_runner,
+                execution_mode="force_rerun",
+            )
+
+            self.assertEqual(
+                [request.sample_index for request in force_runner.requests], [1, 2]
+            )
+            self.assertEqual(
+                [request.attempt for request in force_runner.requests], [2, 2]
+            )
+
+    def test_existing_batch_rejects_manifest_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            batch_dir, _runner = _plan_and_execute(tmp)
+            manifest_path = tmp_path / "different_manifest.jsonl"
+            _write_manifest(manifest_path, case_names={1: "different-case"})
+            manifest = load_sample_manifest(manifest_path)
+            selection = parse_sample_selection(manifest.indexes, all_samples=True)
+
+            with self.assertRaisesRegex(MultiRunStateError, "manifest sha256"):
+                load_existing_multi_run_batch(
+                    batch_root=batch_dir.parent,
+                    batch_id=batch_dir.name,
+                    product_id="huorong",
+                    instance_id="lhins-test",
+                    snapshot_id="lhsnap-test",
+                    region="ap-singapore",
+                    manifest=manifest,
+                    selection=selection,
+                )
+
+    def test_existing_batch_rejects_product_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(tmp)
+            manifest = load_sample_manifest(batch_dir / "sample_manifest.jsonl")
+            selection = parse_sample_selection(manifest.indexes, all_samples=True)
+
+            with self.assertRaisesRegex(MultiRunStateError, "product_id"):
+                load_existing_multi_run_batch(
+                    batch_root=batch_dir.parent,
+                    batch_id=batch_dir.name,
+                    product_id="windows-defender",
+                    instance_id="lhins-test",
+                    snapshot_id="lhsnap-test",
+                    region="ap-singapore",
+                    manifest=manifest,
+                    selection=selection,
+                )
+
+    def test_existing_batch_rejects_batch_plan_sha256_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(tmp)
+            plan_path = batch_dir / "batch_plan.json"
+            plan_path.write_text(
+                plan_path.read_text(encoding="utf-8") + "\n",
+                encoding="utf-8",
+            )
+            manifest = load_sample_manifest(batch_dir / "sample_manifest.jsonl")
+            selection = parse_sample_selection(manifest.indexes, all_samples=True)
+
+            with self.assertRaisesRegex(MultiRunStateError, "batch plan sha256"):
+                load_existing_multi_run_batch(
+                    batch_root=batch_dir.parent,
+                    batch_id=batch_dir.name,
+                    product_id="huorong",
+                    instance_id="lhins-test",
+                    snapshot_id="lhsnap-test",
+                    region="ap-singapore",
+                    manifest=manifest,
+                    selection=selection,
+                )
 
 
 def _plan_and_execute(
@@ -213,6 +371,16 @@ def _plan_and_execute(
     runner = FakeSingleRunRunner(scenarios_by_sample_index=scenarios)
     execute_multi_run_batch(artifacts.batch_dir, runner=runner)
     return artifacts.batch_dir, runner
+
+
+def _mark_cases_as_real_resume_eligible(batch_dir: Path) -> None:
+    state_path = batch_dir / "multi_run_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    for case in state["cases"]:
+        case["result_source"] = "single_run_runner"
+        case["simulated"] = False
+        case["resume_eligible"] = True
+    state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
 def _write_manifest(path: Path, *, case_names: dict[int, str] | None = None) -> None:

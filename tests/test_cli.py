@@ -890,6 +890,41 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(exit_error.exception.code, 2)
         self.assertIn("--from and --to must be provided together", stderr.getvalue())
 
+    def test_multi_run_rejects_conflicting_execution_modes(self) -> None:
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+            main(
+                [
+                    "multi-run",
+                    "--manifest",
+                    "sample_manifest.jsonl",
+                    "--all",
+                    "--resume",
+                    "--rerun-failed",
+                ]
+            )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("execution modes are mutually exclusive", stderr.getvalue())
+
+    def test_multi_run_resume_requires_batch_id(self) -> None:
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+            main(
+                [
+                    "multi-run",
+                    "--manifest",
+                    "sample_manifest.jsonl",
+                    "--all",
+                    "--resume",
+                ]
+            )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("--batch-id is required", stderr.getvalue())
+
     def test_guest_check_security_product_readiness_prints_concise_status(
         self,
     ) -> None:

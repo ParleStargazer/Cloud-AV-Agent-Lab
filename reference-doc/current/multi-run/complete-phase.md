@@ -375,3 +375,60 @@ preflight / resume 设计收口。
 raw product logs、不读取 `configs/real.toml`、不触发云操作。
 
 下一阶段建议进入 Commit 11：resume / rerun / force-rerun 模式。
+
+## 2026-05-30 Commit 11：Resume / Rerun / Force-Rerun
+
+本阶段完成 `multi-run` 第十一阶段 resume / rerun / force-rerun MVP：
+
+- 补查 Commit 10 aggregate summary：
+  - `aggregate_summary.json` 已包含 `schema_version`、`batch_id`、
+    `manifest_sha256`、`batch_plan_sha256`、`generated_at_utc`。
+  - `aggregate_summary.md` 不展示完整 Guest Agent / Desktop Worker URL。
+  - fake / dry-run case 已包含 `simulated = true` 与
+    `result_source = fake_runner`。
+  - detection rate 新增 `simulated` 与 `rate_kind`，fake runner 结果会标记为
+    `simulated_detection_rate`，避免误读为真实检测率。
+- 新增 `load_existing_multi_run_batch(...)`：
+  - 读取既有 `batch_plan.json` 与 `multi_run_state.json`。
+  - 校验 manifest digest。
+  - 校验 batch plan sha256。
+  - 校验 product / instance / snapshot / region。
+  - 校验 selected indexes。
+  - 校验 state 与 plan 的核心 metadata 一致。
+- `execute_multi_run_batch(...)` 新增 `execution_mode`：
+  - `run`
+  - `resume`
+  - `rerun_failed`
+  - `force_rerun`
+- `resume` 行为：
+  - `resume_eligible = true` 的 case 会跳过。
+  - 非 resume eligible 的 case 会重新进入 fake runner。
+  - `unsafe_to_continue = true` 或 `manual_intervention_required = true`
+    会拒绝继续。
+- `rerun_failed` 行为：
+  - 只重跑 `failure_kind = case_failure` 或 `case_status = failed` 的 case。
+- `force_rerun` 行为：
+  - 重跑 selected indexes 中的所有 case。
+- rerun / resume 的新执行请求会把 `attempt` 增加 1。
+- 新增 `case_skipped_by_execution_mode` event，记录 resume/rerun 下被跳过的
+  case。
+- CLI 接入：
+  - `--resume`
+  - `--rerun-failed`
+  - `--force-rerun`
+  三者互斥，且 resume/rerun 模式要求提供 `--batch-id`。
+- 新增 / 更新测试覆盖：
+  - resume 跳过 completed + cleanup restored 的 case。
+  - completed 但 cleanup unknown 且 state 安全时不会被跳过。
+  - unsafe batch 拒绝 resume。
+  - rerun-failed 只运行 case failure。
+  - force-rerun 运行全部 selected case。
+  - manifest digest mismatch 拒绝。
+  - batch plan sha256 mismatch 拒绝。
+  - product 改变拒绝。
+  - CLI 拒绝冲突 execution mode。
+
+本阶段仍使用 fake runner，不触发真实云操作，不读取样本文件内容，不读取
+`configs/real.toml`。
+
+下一阶段建议进入 Commit 12：platform sample manifest indexer。
