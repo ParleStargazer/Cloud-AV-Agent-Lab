@@ -271,6 +271,40 @@ class SingleRunTests(TestCase):
                 "qihoo-360",
             )
 
+    def test_single_run_tencent_pc_manager_product_flows_through_all_stages(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.exe"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            client = FakeGuestClient()
+
+            result = run_single_case(
+                _options(root, sample_path, product_id="tencent-pc-manager"),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(client.prepare_products, ["tencent-pc-manager"])
+            self.assertEqual(client.readiness_products, ["tencent-pc-manager"])
+            self.assertEqual(client.collection_products, ["tencent-pc-manager"])
+            generated_config = result.generated_config_path.read_text(encoding="utf-8")
+            self.assertIn('id = "tencent-pc-manager"', generated_config)
+            self.assertIn(
+                r"C:\\ProgramData\\Tencent\\QQPCMgr\\Quarantine",
+                generated_config,
+            )
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_state["product_id"], "tencent-pc-manager")
+            self.assertEqual(run_state["selected_product_id"], "tencent-pc-manager")
+            self.assertEqual(
+                run_state["stages"]["security_product_readiness"]["product_id"],
+                "tencent-pc-manager",
+            )
+
     def test_single_run_dry_run_generates_mock_config_and_dry_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

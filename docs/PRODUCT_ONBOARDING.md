@@ -81,7 +81,10 @@ final verdicts.
 Required behavior:
 
 - return one of `ready`, `partial`, `not_ready`, `unknown`, or `unsupported`;
-- set `scope`, usually `log_observability` for the first version;
+- set `scope` to the concrete observation surface, for example
+  `log_observability` for plain product logs or
+  `quarantine_metadata_observability` for Tencent PC Manager TAV quarantine
+  metadata;
 - keep `protection_state = "unknown"` unless a future low-risk, read-only,
   well-tested probe can actually prove protection state;
 - write clear `checks`, `warnings`, and `errors`;

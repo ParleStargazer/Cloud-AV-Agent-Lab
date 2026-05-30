@@ -29,13 +29,14 @@ chain for EICAR or harmless test files:
 - `GET /cases/{case_id}/report`: generate and return `case_report.json`, a
   delivery-stage summary built only from metadata, case state, and events.
 - `POST /cases/{case_id}/collection/{product_id}`: collect product logs for the
-  prepared case. Supported collector IDs currently include `huorong` and
-  `windows-defender`.
+  prepared case. Supported collector IDs currently include `huorong`,
+  `windows-defender`, `qihoo-360`, and `tencent-pc-manager`.
 - `GET /cases/{case_id}/collection/status`: return the latest
   `case_collection.json` summary without reading sample bytes.
 - `POST /cases/{case_id}/security-product-readiness/{product_id}`: run a
   low-intrusion, read-only pre-delivery product readiness check for the prepared
-  case. Supported probe IDs currently include `huorong` and `windows-defender`.
+  case. Supported probe IDs currently include `huorong`, `windows-defender`,
+  `qihoo-360`, and `tencent-pc-manager`.
 - `GET /cases/{case_id}/security-product-readiness/status`: return the latest
   `case_security_product_readiness.json` result.
 - `GET /cases/{case_id}/summary`: generate the conservative
@@ -108,7 +109,8 @@ python -m cloud_av_agent_lab guest-prepare-case --config configs/lab.local.toml 
 `guest-prepare-case` sends case metadata, VM metadata, product metadata, and the
 sample cloud object URI. It does not send a local file path and does not trigger
 sample download or execution. The command requires `--product`; use `huorong`
-for the default Huorong flow or `windows-defender` for Defender. Once a case is prepared, the selected product is written to
+for the default Huorong flow, or choose another registered product such as
+`windows-defender`, `qihoo-360`, or `tencent-pc-manager`. Once a case is prepared, the selected product is written to
 `case_state.json` as `product_id`; later readiness and collection commands must
 use the same product unless a future explicit override is added.
 
@@ -165,19 +167,17 @@ python -m cloud_av_agent_lab guest-check-security-product-readiness --config con
 
 This endpoint is deliberately separate from collection. It does not parse
 product interception logs, does not read sample bytes, and does not start,
-stop, repair, or modify a security product. The Huorong MVP only verifies
-minimum log observability: the sysdiag directory and `log.db` exist, the live
-`log.db` can be copied into
-`<workdir>\cases\<case_id>\security-product-readiness\huorong\`, and the copied
-database metadata can be read. Optional WAL/SHM copy problems are warnings. The
-result is written to `case_security_product_readiness.json`, mirrored into
-`case_state.json` / `case_report.json`, and recorded in `events.jsonl`. A
-`ready` result means the Huorong log observation path appears usable; it does
-not prove real-time protection is enabled, and `protection_state` remains
-`unknown`. The standalone model and manual CLI flow are documented in
-`docs/SECURITY_PRODUCT_READINESS.md`. Use `--product windows-defender` for the
-Windows Defender readiness probe; local tests use fake readers, and the real
-reader is only used inside the Windows Guest Agent when pywin32 is available.
+stop, repair, or modify a security product. Huorong and Qihoo 360 readiness
+check product log observability; Windows Defender readiness checks the Defender
+Operational Event Log reader path; Tencent PC Manager readiness checks TAV
+quarantine metadata observability for `QQPCMgr\Quarantine` and
+`TAVCacheFullEx.db`. The result is written to
+`case_security_product_readiness.json`, mirrored into `case_state.json` /
+`case_report.json`, and recorded in `events.jsonl`. A `ready` result means the
+selected observation path appears usable; it does not prove real-time
+protection is enabled, and `protection_state` remains `unknown`. The standalone
+model and manual CLI flow are documented in
+`docs/SECURITY_PRODUCT_READINESS.md`.
 
 Recent status can be queried without reading sample content:
 
@@ -304,9 +304,10 @@ download the redacted guest-reported evidence bundle. The command defaults to a
 real run after one runtime risk confirmation; use `--dry-run` to keep cloud
 lifecycle, Desktop Worker gate, and controlled action requests in dry-run mode.
 
-`--product` can be `huorong` or `windows-defender`. In interactive mode, if it
-is omitted, single-run prompts for it before any generated config is written and
-shows `huorong` as the default suggestion. The selected product is written into
+`--product` can be `huorong`, `windows-defender`, `qihoo-360`, or
+`tencent-pc-manager`. In interactive mode, if it is omitted, single-run prompts
+for it before any generated config is written and shows `huorong` as the default
+suggestion. The selected product is written into
 `run_state.json` as `selected_product_id` and into the generated case's
 `case_state.json` as `product_id`; prepare, readiness, collection, summary, and
 evidence all consume that same case-bound product.
@@ -322,9 +323,11 @@ Desktop Worker is now the real execution layer when enabled. Control Agent keeps
 the stable HTTP control plane in Session 0, signs a short-TTL single-use
 execution lease, and forwards `execute_uploaded_sample` to Worker over
 localhost. Worker derives the sample path from case metadata, accepts only the
-current case's registered `.exe`, verifies sha256, launches it with
-`shell=False` and a minimal environment, then reports execution status back to
-Control Agent. See `docs/DESKTOP_WORKER.md`.
+current case's registered sample, verifies sha256, resolves the controlled
+handler from `stored_filename` (`.exe` as `pe_executable`, `.bat/.cmd` as
+`batch_script`, `.ps1` recognized but disabled), launches with `shell=False`,
+and reports execution status back to Control Agent. See
+`docs/DESKTOP_WORKER.md`.
 
 The controlled action is conditional on the post-upload observation. If the
 polling window ends with `stable`, single-run may request execution. If it sees
@@ -362,6 +365,7 @@ Current CLI:
 python -m cloud_av_agent_lab guest-worker-status --config configs/lab.local.toml --vm-id sg-win10
 python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__huorong --product huorong
 python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml --vm-id win10-windows-defender --case-id case-001__windows-defender --product windows-defender
+python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml --vm-id win10-tencent-manager --case-id case-001__tencent-pc-manager --product tencent-pc-manager
 python -m cloud_av_agent_lab guest-case-summary --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__huorong
 python -m cloud_av_agent_lab guest-export-evidence --config configs/lab.local.toml --vm-id sg-win10 --case-id case-001__huorong --output .\artifacts\case_evidence_case-001__huorong.zip
 ```

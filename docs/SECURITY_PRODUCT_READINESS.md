@@ -43,6 +43,8 @@ are:
 
 - `huorong`
 - `windows-defender`
+- `qihoo-360`
+- `tencent-pc-manager`
 
 `guest-prepare-case` stores the selected product in `case_state.json`; later
 readiness requests should use the same product. A request for a different
@@ -99,9 +101,11 @@ The result is also summarized in:
   selected readiness probe. Unknown product IDs should normally fail earlier in
   product resolution instead of being silently treated as a supported product.
 
-For both current probes, `scope = "log_observability"` and `protection_state =
-"unknown"`. This is deliberate: readiness does not confirm real-time protection
-state.
+For Huorong, Windows Defender, and Qihoo 360, `scope = "log_observability"`.
+For Tencent PC Manager, `scope = "quarantine_metadata_observability"` because
+the first MVP observes TAV quarantine metadata rather than plain product logs.
+All current probes keep `protection_state = "unknown"`. This is deliberate:
+readiness does not confirm real-time protection state.
 
 ## Windows Defender Probe
 
@@ -116,6 +120,47 @@ readers and do not read the local machine's real Event Log. The real pywin32
 reader is only attempted inside the Windows Guest Agent when the probe runs on a
 Windows host with pywin32 available. No PowerShell, `wevtutil`, `cmd`, shell
 runner, or service/configuration changes are used.
+
+## Qihoo 360 Probe
+
+The Qihoo 360 probe checks observability of the 360 quarantine summary metadata
+without deciding whether real-time protection is enabled. It looks for the
+configured or default `360safe.Summary.dat` SQLite file, verifies that the
+expected `FI/FQ` query path is readable, and records warnings such as empty
+summary records or missing union metadata. Raw SQLite snapshots remain excluded
+from the default redacted evidence bundle.
+
+## Tencent PC Manager Probe
+
+The Tencent PC Manager probe checks TAV quarantine metadata observability. It
+uses the stable product id `tencent-pc-manager` and the scope
+`quarantine_metadata_observability`.
+
+Default paths:
+
+```text
+C:\ProgramData\Tencent\QQPCMgr\Quarantine
+C:\ProgramData\Tencent\QQPCMgr\TAVWfsDB\TAVCacheFullEx.db
+```
+
+The probe records product-presence metadata:
+
+```json
+{
+  "qqpcmgr_root_exists": true,
+  "quarantine_dir_exists": true,
+  "tav_cache_exists": true,
+  "product_process_observed": false,
+  "product_service_observed": false
+}
+```
+
+The process/service values are informational placeholders in this MVP and are
+not used as blocking gates. Readiness records a baseline for the current case
+sample MD5 from `prepare-case` metadata; it must not read the uploaded sample to
+calculate MD5. If the quarantine directory exists but `TAVCacheFullEx.db` is
+missing, the result is `partial` with a `tav_cache_missing` warning. Raw TAV
+artifacts are not copied into the evidence bundle by readiness.
 
 ## CLI
 
@@ -141,6 +186,16 @@ python -m cloud_av_agent_lab guest-check-security-product-readiness `
   --vm-id win10-windows-defender `
   --case-id eicar-001__windows-defender `
   --product windows-defender
+```
+
+For Tencent PC Manager:
+
+```powershell
+python -m cloud_av_agent_lab guest-check-security-product-readiness `
+  --config configs/lab.local.toml `
+  --vm-id win10-tencent-manager `
+  --case-id eicar-001__tencent-pc-manager `
+  --product tencent-pc-manager
 ```
 
 Load the last result without rerunning the probe:

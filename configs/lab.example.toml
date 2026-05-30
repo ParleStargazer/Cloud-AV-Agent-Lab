@@ -111,11 +111,11 @@ enabled = true
 display_name = "Tencent PC Manager"
 vendor = "Tencent"
 log_paths = [
-  'C:\ProgramData\Tencent\Logs',
-  'C:\Program Files\Tencent\QQPCMgr\Logs',
+  'C:\ProgramData\Tencent\QQPCMgr\Quarantine',
+  'C:\ProgramData\Tencent\QQPCMgr\TAVWfsDB\TAVCacheFullEx.db',
 ]
-ui_window_titles = ["Tencent PC Manager", "QQPCMgr"]
-detection_keywords = ["blocked", "quarantine", "virus", "trojan", "malware", "risk"]
+ui_window_titles = ["Tencent PC Manager", "QQPCMgr", "腾讯电脑管家"]
+detection_keywords = ["blocked", "quarantine", "virus", "trojan", "malware", "risk", "拦截", "隔离"]
 
 [[products]]
 id = "huorong"

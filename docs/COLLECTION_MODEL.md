@@ -23,16 +23,16 @@ collector. Readiness probes run after `prepare-case` and before upload, do only
 low-intrusion read-only environment checks, and write
 `case_security_product_readiness.json`.
 
-Current probes support `huorong` and `windows-defender`, both scoped to
-`log_observability`. Huorong checks that the sysdiag directory and `log.db`
-exist, copies `log.db` into the current case readiness snapshot directory, and
-reads only copied-file metadata. Windows Defender uses the Windows Event Log
-reader abstraction to check Defender Operational channel observability. These
-probes do not parse interception logs, do not read sample content, and do not
-start, stop, repair, or modify the security product. `protection_state` is
-therefore `unknown` even when readiness is `ready`; readiness means the log
-observation path has minimum prerequisites, not that real-time protection is
-confirmed.
+Current probes support `huorong`, `windows-defender`, `qihoo-360`, and
+`tencent-pc-manager`. Huorong, Windows Defender, and Qihoo 360 are scoped to
+log observability. Tencent PC Manager is scoped to
+`quarantine_metadata_observability`: it records whether QQPCMgr quarantine
+metadata paths and `TAVCacheFullEx.db` are visible, and records a baseline for
+the current case sample MD5. These probes do not parse interception logs, do
+not read sample content, and do not start, stop, repair, or modify the security
+product. `protection_state` is therefore `unknown` even when readiness is
+`ready`; readiness means the observation path has minimum prerequisites, not
+that real-time protection is confirmed.
 
 Readiness and collection share `product_id`, but not verdict semantics.
 Unsupported, unknown, partial, missing, or not-ready readiness states must not
@@ -58,6 +58,14 @@ src/cloud_av_agent_lab/guest_agent_server/collectors/
     collector.py
     parser.py
     reader.py
+    schema.py
+  qihoo_360/
+    collector.py
+    parser.py
+    schema.py
+  tencent_pc_manager/
+    collector.py
+    quarantine.py
     schema.py
 ```
 
@@ -161,6 +169,43 @@ record schema, timestamp fields, action semantics, and attribution rules inside
 FILETIME-like Qihoo timestamps are normalized from UTC+8 local wall-clock time
 to UTC while preserving an explicit parser warning, so time-window attribution
 can align with the unified case timeline without hiding the assumption.
+
+## Tencent PC Manager Onboarding
+
+Tencent PC Manager uses the stable product id `tencent-pc-manager`. The first
+collector MVP is intentionally metadata-only because the observed Tencent TAV
+artifact is an encrypted quarantine container, not a plain log database. The
+collector does not decrypt, parse, copy, or include the container bytes in the
+default evidence bundle.
+
+Readiness runs after `prepare-case` and records the current case sample MD5
+from case metadata, then checks:
+
+```text
+C:\ProgramData\Tencent\QQPCMgr\Quarantine
+C:\ProgramData\Tencent\QQPCMgr\TAVWfsDB\TAVCacheFullEx.db
+```
+
+The readiness scope is `quarantine_metadata_observability`. It also records
+product-presence signals such as whether the QQPCMgr root, quarantine
+directory, and TAV cache file are visible. Process and service signals are
+currently informational placeholders and are not used as blocking gates.
+
+Collection observes only metadata for:
+
+- `Quarantine\<sample_md5>`: quarantine container, the only strong quarantine
+  artifact;
+- `Quarantine\<sample_md5>.ico`: sidecar icon, auxiliary only and never strong
+  by itself;
+- `TAVWfsDB\TAVCacheFullEx.db`: product activity signal compared with the
+  readiness baseline.
+
+The collector uses a small time tolerance around the case window to absorb VM
+clock drift and asynchronous product writes. A newly created or modified
+container for the current case MD5 can produce `intercepted`; TAV cache activity
+without a matching container remains `unknown` with a normalized
+`product_log_activity_observed` event. Raw TAV artifacts are declared with
+`include_in_evidence=false` and `redaction_state=raw_blocked`.
 
 ## Unified Event Timeline
 

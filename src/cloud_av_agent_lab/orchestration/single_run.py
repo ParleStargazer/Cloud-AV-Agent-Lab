@@ -132,6 +132,27 @@ SINGLE_RUN_PRODUCT_PROFILES: dict[str, dict[str, Any]] = {
             "隔离",
         ],
     },
+    "tencent-pc-manager": {
+        "display_name": "Tencent PC Manager",
+        "vendor": "Tencent",
+        "log_paths": [
+            r"C:\ProgramData\Tencent\QQPCMgr\Quarantine",
+            r"C:\ProgramData\Tencent\QQPCMgr\TAVWfsDB\TAVCacheFullEx.db",
+        ],
+        "ui_window_titles": ["Tencent PC Manager", "QQPCMgr", "腾讯电脑管家"],
+        "detection_keywords": [
+            "blocked",
+            "quarantine",
+            "virus",
+            "trojan",
+            "malware",
+            "risk",
+            "拦截",
+            "隔离",
+            "木马",
+            "风险",
+        ],
+    },
 }
 
 
