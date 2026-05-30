@@ -47,10 +47,14 @@ malware/
 
 .vscode/
 
-# Personal daily reports and notes
+# Local/deprecated skill checkouts
+skills/vmware-mcp/
+
+# Personal daily reports and local planning/reference notes
 daily-report/
 daily-reports/
 reference-doc/
+reference-doc/**
 
 # Initialization scripts with secrets
 init.ps1
