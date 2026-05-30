@@ -9,11 +9,13 @@ from .base import (
 )
 from .huorong import HuorongSecurityProductReadinessProbe
 from .qihoo_360 import Qihoo360SecurityProductReadinessProbe
+from .tencent_pc_manager import TencentPcManagerSecurityProductReadinessProbe
 from .windows_defender import WindowsDefenderSecurityProductReadinessProbe
 
 SUPPORTED_SECURITY_PRODUCT_READINESS_PROBES = {
     "huorong": HuorongSecurityProductReadinessProbe,
     "qihoo-360": Qihoo360SecurityProductReadinessProbe,
+    "tencent-pc-manager": TencentPcManagerSecurityProductReadinessProbe,
     "windows-defender": WindowsDefenderSecurityProductReadinessProbe,
 }
 
