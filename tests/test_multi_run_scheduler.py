@@ -256,6 +256,39 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
                 [request.sample_index for request in rerun_runner.requests], [1]
             )
             self.assertEqual(rerun_runner.requests[0].attempt, 2)
+            self.assertEqual(
+                rerun_runner.requests[0].case_dir.as_posix(),
+                (
+                    batch_dir
+                    / "cases"
+                    / ("0001_" + "a" * 16)
+                    / "attempts"
+                    / "attempt_002"
+                ).as_posix(),
+            )
+
+    def test_rerun_failed_does_not_rerun_environment_failure_with_failed_status(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(
+                tmp,
+                scenarios={1: "case_failed", 2: "completed"},
+            )
+            state_path = batch_dir / "multi_run_state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["cases"][0]["case_status"] = "failed"
+            state["cases"][0]["failure_kind"] = "environment_failure"
+            state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            rerun_runner = FakeSingleRunRunner()
+
+            execute_multi_run_batch(
+                batch_dir,
+                runner=rerun_runner,
+                execution_mode="rerun_failed",
+            )
+
+            self.assertEqual(rerun_runner.requests, [])
 
     def test_force_rerun_runs_all_selected_cases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

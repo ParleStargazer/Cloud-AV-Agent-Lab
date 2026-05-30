@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import stat
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -256,6 +258,37 @@ class LoadedSampleManifest:
         return {entry.sample_index: entry for entry in self.entries}
 
 
+@dataclass(frozen=True)
+class SampleManifestIndexArtifacts:
+    sample_dir: Path
+    output_dir: Path
+    indexed_dir: Path
+    manifest_path: Path
+    sample_name_map_path: Path
+    entries: tuple[SampleManifestEntry, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sample_dir": str(self.sample_dir),
+            "output_dir": str(self.output_dir),
+            "indexed_dir": str(self.indexed_dir),
+            "manifest_path": str(self.manifest_path),
+            "sample_name_map_path": str(self.sample_name_map_path),
+            "entries": [entry.to_dict() for entry in self.entries],
+        }
+
+
+@dataclass(frozen=True)
+class _IndexedSampleCandidate:
+    path: Path
+    relative_path: str
+    sha256: str
+    md5: str
+    size: int
+    original_filename: str
+    original_suffix: str
+
+
 def compute_manifest_sha256(path: Path | str) -> str:
     manifest_path = Path(path)
     digest = hashlib.sha256()
@@ -271,6 +304,200 @@ def compute_bytes_sha256(value: bytes) -> str:
 
 def compute_text_sha256(value: str) -> str:
     return compute_bytes_sha256(value.encode("utf-8"))
+
+
+def build_sample_manifest_from_directory(
+    sample_dir: Path | str,
+    output_dir: Path | str,
+    *,
+    manifest_id: str = "",
+    created_at_utc: str | None = None,
+) -> SampleManifestIndexArtifacts:
+    source_root = Path(sample_dir)
+    if not source_root.is_dir():
+        raise MultiRunManifestError(f"sample_dir does not exist: {source_root}")
+    destination_root = Path(output_dir)
+    indexed_dir = destination_root / "indexed"
+    manifest_path = destination_root / "sample_manifest.jsonl"
+    name_map_path = destination_root / "sample_name_map.txt"
+    _ensure_index_output_paths_do_not_exist(indexed_dir, manifest_path, name_map_path)
+    destination_root.mkdir(parents=True, exist_ok=True)
+    indexed_dir.mkdir(parents=True, exist_ok=True)
+
+    candidates = _scan_sample_candidates(source_root)
+    if not candidates:
+        raise MultiRunManifestError("sample_dir contains no regular sample files")
+    grouped: dict[str, list[_IndexedSampleCandidate]] = {}
+    for candidate in candidates:
+        grouped.setdefault(candidate.sha256, []).append(candidate)
+    unique_sha256 = tuple(sorted(grouped))
+    prefixes = unique_sha_prefixes(unique_sha256)
+    timestamp = created_at_utc or utc_now()
+    resolved_manifest_id = manifest_id or f"manifest-{timestamp}"
+    entries: list[SampleManifestEntry] = []
+    name_map_lines = ["# original_relative_path\trenamed_filename\tsha256\tprimary\n"]
+    for sample_index, sha256 in enumerate(unique_sha256, start=1):
+        duplicates = sorted(grouped[sha256], key=lambda item: item.relative_path)
+        primary = duplicates[0]
+        prefix = prefixes[sha256]
+        renamed_filename = f"{sample_index:04d}_{prefix}{primary.original_suffix}"
+        indexed_path = indexed_dir / renamed_filename
+        shutil.copy2(primary.path, indexed_path)
+        aliases = tuple(candidate.relative_path for candidate in duplicates)
+        entry = SampleManifestEntry(
+            sample_index=sample_index,
+            sample_id=sha256,
+            case_name=prefix,
+            sha256=sha256,
+            md5=primary.md5,
+            size=primary.size,
+            original_filename=primary.original_filename,
+            original_suffix=primary.original_suffix,
+            normalized_suffix=primary.original_suffix.casefold(),
+            renamed_filename=renamed_filename,
+            sample_ref=indexed_path.as_posix(),
+            manifest_id=resolved_manifest_id,
+            manifest_created_at_utc=timestamp,
+            manifest_tool_version=MULTI_RUN_VERSION,
+            sample_source_kind="local_platform_path",
+            duplicate_group_id=f"sha256:{sha256}",
+            duplicate_of_sample_index=None,
+            aliases=aliases,
+            entry_status="ready",
+            skip_reason=None,
+            created_at_utc=timestamp,
+        )
+        entries.append(entry)
+        for candidate in duplicates:
+            name_map_lines.append(
+                "\t".join(
+                    [
+                        candidate.relative_path,
+                        renamed_filename,
+                        sha256,
+                        "true" if candidate == primary else "false",
+                    ]
+                )
+                + "\n"
+            )
+
+    manifest_path.write_text(
+        "".join(
+            json.dumps(entry.to_dict(), ensure_ascii=False, sort_keys=True) + "\n"
+            for entry in entries
+        ),
+        encoding="utf-8",
+    )
+    name_map_path.write_text("".join(name_map_lines), encoding="utf-8")
+    return SampleManifestIndexArtifacts(
+        sample_dir=source_root,
+        output_dir=destination_root,
+        indexed_dir=indexed_dir,
+        manifest_path=manifest_path,
+        sample_name_map_path=name_map_path,
+        entries=tuple(entries),
+    )
+
+
+def unique_sha_prefixes(
+    sha256_values: Iterable[str],
+    *,
+    min_length: int = 16,
+) -> dict[str, str]:
+    values = tuple(sorted(set(sha.casefold() for sha in sha256_values)))
+    for sha in values:
+        if len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
+            raise MultiRunManifestError(f"invalid sha256 for prefixing: {sha!r}")
+    prefixes: dict[str, str] = {}
+    for sha in values:
+        prefix_length = min_length
+        while prefix_length <= 64:
+            prefix = sha[:prefix_length]
+            if sum(other.startswith(prefix) for other in values) == 1:
+                prefixes[sha] = prefix
+                break
+            prefix_length += 1
+        else:
+            prefixes[sha] = sha
+    return prefixes
+
+
+def _scan_sample_candidates(sample_dir: Path) -> tuple[_IndexedSampleCandidate, ...]:
+    candidates: list[_IndexedSampleCandidate] = []
+    for root, dir_names, file_names in os.walk(sample_dir, followlinks=False):
+        root_path = Path(root)
+        dir_names[:] = [
+            name
+            for name in dir_names
+            if not _should_skip_index_path(root_path / name, sample_dir)
+        ]
+        for file_name in sorted(file_names):
+            path = root_path / file_name
+            if _should_skip_index_path(path, sample_dir):
+                continue
+            file_stat = path.stat()
+            if not stat.S_ISREG(file_stat.st_mode):
+                continue
+            digest = _hash_sample_file(path)
+            candidates.append(
+                _IndexedSampleCandidate(
+                    path=path,
+                    relative_path=path.relative_to(sample_dir).as_posix(),
+                    sha256=digest["sha256"],
+                    md5=digest["md5"],
+                    size=digest["size"],
+                    original_filename=path.name,
+                    original_suffix=path.suffix.casefold(),
+                )
+            )
+    return tuple(sorted(candidates, key=lambda item: item.relative_path))
+
+
+def _should_skip_index_path(path: Path, sample_dir: Path) -> bool:
+    if path.is_symlink():
+        return True
+    if ":" in path.name:
+        return True
+    try:
+        resolved = path.resolve()
+        resolved_sample_dir = sample_dir.resolve()
+        if resolved != resolved_sample_dir and not _is_relative_path(
+            resolved, resolved_sample_dir
+        ):
+            return True
+        file_stat = path.stat()
+    except OSError:
+        return True
+    attributes = getattr(file_stat, "st_file_attributes", 0)
+    return bool(attributes & 0x400)
+
+
+def _is_relative_path(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _hash_sample_file(path: Path) -> dict[str, Any]:
+    sha256 = hashlib.sha256()
+    md5 = hashlib.md5(usedforsecurity=False)
+    size = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            size += len(chunk)
+            sha256.update(chunk)
+            md5.update(chunk)
+    return {"sha256": sha256.hexdigest(), "md5": md5.hexdigest(), "size": size}
+
+
+def _ensure_index_output_paths_do_not_exist(*paths: Path) -> None:
+    existing = [str(path) for path in paths if path.exists()]
+    if existing:
+        raise MultiRunManifestError(
+            "sample manifest index output already exists: " + ", ".join(existing)
+        )
 
 
 def load_sample_manifest(path: Path | str) -> LoadedSampleManifest:
@@ -1450,7 +1677,11 @@ def execute_multi_run_batch(
                 },
             )
             continue
-        case_dir = root / "cases" / _case_dir_name(index, entry.case_name)
+        attempt = planned_case.attempt + 1
+        case_dir = _case_attempt_dir(
+            root / "cases" / _case_dir_name(index, entry.case_name),
+            attempt,
+        )
         case_dir.mkdir(parents=True, exist_ok=True)
         request = _single_run_request_for_entry(
             plan,
@@ -1458,7 +1689,7 @@ def execute_multi_run_batch(
             case_id=planned_case.case_id,
             case_dir=case_dir,
             batch_plan_sha256=batch_plan_sha256,
-            attempt=planned_case.attempt + 1,
+            attempt=attempt,
         )
         append_next_multi_run_event(
             event_log_path,
@@ -1923,6 +2154,12 @@ def _case_dir_name(sample_index: int, case_name: str) -> str:
     return f"{sample_index:04d}_{_safe_batch_id(case_name)[:16]}"
 
 
+def _case_attempt_dir(case_dir: Path, attempt: int) -> Path:
+    if attempt <= 1:
+        return case_dir
+    return case_dir / "attempts" / f"attempt_{attempt:03d}"
+
+
 def _cases_in_selected_order(
     cases_by_index: Mapping[int, CaseState],
     selected_indexes: tuple[int, ...],
@@ -2074,6 +2311,8 @@ def _should_run_case_for_mode(
     if execution_mode == "resume":
         return not case.resume_eligible
     if execution_mode == "rerun_failed":
+        if case.failure_kind == "environment_failure":
+            return False
         return case.failure_kind == "case_failure" or case.case_status == "failed"
     raise MultiRunPlanError(f"unsupported multi-run execution mode: {execution_mode}")
 

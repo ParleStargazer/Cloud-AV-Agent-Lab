@@ -37,7 +37,9 @@ from cloud_av_agent_lab.orchestration import (
     MultiRunSelectionError,
     MultiRunStateError,
     SingleRunOptions,
+    build_sample_manifest_from_directory,
     create_multi_run_batch_plan,
+    default_batch_id,
     execute_multi_run_batch,
     load_existing_multi_run_batch,
     load_sample_manifest,
@@ -1057,11 +1059,12 @@ def _handle_multi_run(
         parser.exit(
             2, "error: --max-cases must be greater than 0; no samples selected\n"
         )
-    if not args.manifest:
+    batch_id = args.batch_id
+    if execution_mode == "run" and not args.manifest and not args.sample_dir:
         parser.exit(
             2,
-            "error: --manifest is required until sample-dir manifest generation is "
-            "implemented\n",
+            "error: either --manifest or --sample-dir is required for multi-run "
+            "planning\n",
         )
     for name, value in (
         ("--product", args.product),
@@ -1074,7 +1077,19 @@ def _handle_multi_run(
             parser.exit(2, f"error: {name} is required for multi-run planning\n")
 
     try:
-        manifest = load_sample_manifest(args.manifest)
+        if args.manifest:
+            manifest = load_sample_manifest(args.manifest)
+        elif execution_mode != "run":
+            manifest = load_sample_manifest(
+                Path(args.batch_root) / batch_id / "sample_manifest.jsonl"
+            )
+        else:
+            batch_id = batch_id or default_batch_id(args.product)
+            index_artifacts = build_sample_manifest_from_directory(
+                args.sample_dir,
+                Path(args.batch_root) / batch_id / "sample_index",
+            )
+            manifest = load_sample_manifest(index_artifacts.manifest_path)
         selection = parse_sample_selection(
             manifest.indexes,
             all_samples=args.all,
@@ -1087,7 +1102,7 @@ def _handle_multi_run(
         if execution_mode == "run":
             artifacts = create_multi_run_batch_plan(
                 batch_root=args.batch_root,
-                batch_id=args.batch_id,
+                batch_id=batch_id,
                 product_id=args.product,
                 instance_id=args.instance_id,
                 snapshot_id=args.snapshot_id,
@@ -1103,7 +1118,7 @@ def _handle_multi_run(
         else:
             artifacts = load_existing_multi_run_batch(
                 batch_root=args.batch_root,
-                batch_id=args.batch_id,
+                batch_id=batch_id,
                 product_id=args.product,
                 instance_id=args.instance_id,
                 snapshot_id=args.snapshot_id,

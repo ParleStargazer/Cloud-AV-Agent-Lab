@@ -861,6 +861,52 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(state["cases"][0]["evidence_status"], "not_started")
             self.assertFalse((batch_dir / "cases").exists())
 
+    def test_multi_run_sample_dir_generates_manifest_and_indexed_mirror(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_dir = tmp_path / "raw_sample"
+            raw_dir.mkdir()
+            (raw_dir / "sample-a.txt").write_text("alpha", encoding="utf-8")
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "multi-run",
+                        "--product",
+                        "huorong",
+                        "--instance-id",
+                        "lhins-example",
+                        "--snapshot-id",
+                        "lhsnap-example",
+                        "--region",
+                        "ap-singapore",
+                        "--guest-agent-url",
+                        "http://127.0.0.1:8080",
+                        "--sample-dir",
+                        str(raw_dir),
+                        "--batch-root",
+                        str(tmp_path / "batches"),
+                        "--batch-id",
+                        "sample-dir-test",
+                        "--all",
+                        "--plan-only",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            batch_dir = tmp_path / "batches" / "sample-dir-test"
+            self.assertTrue(
+                (batch_dir / "sample_index" / "sample_manifest.jsonl").is_file()
+            )
+            self.assertTrue(
+                (batch_dir / "sample_index" / "sample_name_map.txt").is_file()
+            )
+            self.assertTrue((batch_dir / "sample_index" / "indexed").is_dir())
+            self.assertTrue((batch_dir / "sample_manifest.jsonl").is_file())
+            output = stdout.getvalue()
+            self.assertIn('"manifest_sha256"', output)
+
     def test_multi_run_rejects_conflicting_selection_options(self) -> None:
         stderr = StringIO()
 

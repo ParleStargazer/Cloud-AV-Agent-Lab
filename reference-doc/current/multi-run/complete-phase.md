@@ -432,3 +432,49 @@ raw product logs、不读取 `configs/real.toml`、不触发云操作。
 `configs/real.toml`。
 
 下一阶段建议进入 Commit 12：platform sample manifest indexer。
+
+## 2026-05-30 Commit 12：Platform Sample Manifest Indexer
+
+本阶段完成 `multi-run` 第十二阶段平台样本目录索引器：
+
+- 先补查并收紧 Commit 11：
+  - `rerun_failed` 不会重跑 `failure_kind = environment_failure` 的 case，
+    即使其 `case_status = failed`。
+  - rerun / resume 的 attempt > 1 会写入
+    `cases/<case>/attempts/attempt_002/`，避免覆盖旧 attempt 输出。
+  - 保留 completed 但 cleanup unknown 不可 resume-skip 的测试。
+- 新增 `build_sample_manifest_from_directory(...)`：
+  - 扫描 `raw_sample` 目录。
+  - 只处理普通文件。
+  - 跳过 symlink / reparse point / 路径逃逸 / ADS 风格名称。
+  - 流式计算 sha256 / md5 / size。
+  - 按 full sha256 排序生成 1-based `sample_index`。
+  - 同 sha256 去重，只生成一个 runnable entry。
+  - duplicate 文件名进入 `aliases`。
+  - sha16 冲突时通过 `unique_sha_prefixes(...)` 扩展 prefix。
+  - 生成 `renamed_filename = 0001_prefix.ext`。
+  - 复制 primary 样本到 indexed mirror。
+  - 生成 `sample_manifest.jsonl`。
+  - 生成 `sample_name_map.txt`。
+- `multi-run --sample-dir ...` 在未提供 `--manifest` 时会自动生成：
+  - `sample_index/sample_manifest.jsonl`
+  - `sample_index/sample_name_map.txt`
+  - `sample_index/indexed/`
+  然后进入原有 batch planning 流程。
+- resume/rerun 模式如果未显式传 `--manifest`，会读取既有
+  `batch_root/batch_id/sample_manifest.jsonl`，不重新扫描 `sample_dir`。
+- 新增 / 更新测试覆盖：
+  - regular file indexing。
+  - duplicate sha256 去重与 aliases。
+  - sha16 collision prefix 扩展。
+  - indexed mirror 生成。
+  - raw_sample 不被修改。
+  - 已存在 index 输出时拒绝覆盖。
+  - 生成的 manifest 可被现有 loader 读取。
+  - CLI `--sample-dir` 可生成 manifest / name map / indexed mirror。
+
+本阶段测试只使用临时无害文件。索引器会读取用户显式指定的 `sample_dir`
+以计算 hash 和生成镜像，但不执行、不打开解析、不解压样本，不读取
+`configs/real.toml`，不触发真实云操作。
+
+下一阶段建议进入 Commit 13：preflight checks before execution。
