@@ -96,6 +96,7 @@ class MultiRunSchemaTests(unittest.TestCase):
         case_state = CaseState(
             sample_index=7,
             sample_id="sample-007",
+            case_name="sample-007",
             case_id="sample-007__huorong",
             run_id="run-007",
             attempt=1,
@@ -133,6 +134,7 @@ class MultiRunSchemaTests(unittest.TestCase):
         self.assertEqual(payload["schema_version"], MULTI_RUN_STATE_SCHEMA_VERSION)
         self.assertEqual(payload["selected_indexes"], [7])
         self.assertFalse(payload["unsafe_to_continue"])
+        self.assertEqual(payload["cases"][0]["case_name"], "sample-007")
         self.assertEqual(payload["cases"][0]["cleanup_status"], "restored")
         self.assertEqual(payload["cases"][0]["evidence_status"], "exported")
         self.assertEqual(payload["cases"][0]["summary_status"], "collected")

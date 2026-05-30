@@ -767,6 +767,12 @@ class CloudLifecycleCliGuardTests(TestCase):
             )
             self.assertEqual(state["sample_manifest_path"], "sample_manifest.jsonl")
             self.assertEqual(state["selected_indexes"], [1, 2])
+            self.assertEqual(state["cases"][0]["case_name"], "aaaaaaaaaaaaaaaa")
+            self.assertEqual(state["cases"][0]["case_status"], "planned")
+            self.assertFalse(state["cases"][0]["resume_eligible"])
+            self.assertEqual(state["cases"][0]["cleanup_status"], "not_started")
+            self.assertEqual(state["cases"][0]["summary_status"], "not_started")
+            self.assertEqual(state["cases"][0]["evidence_status"], "not_started")
             events = (
                 tmp_path / "batches" / "batch-test" / "multi_run_events.jsonl"
             ).read_text(encoding="utf-8")

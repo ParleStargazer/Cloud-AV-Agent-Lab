@@ -209,3 +209,40 @@ single-run runner，未触发云操作，未读取样本文件内容。
 新增 state/event 只服务后续 resume、scheduler 和 aggregate 阶段。
 
 下一阶段建议进入 Commit 7：引入 runner interface 与 fake single-run runner。
+
+## 2026-05-30 Commit 7：Runner Interface + Fake Runner
+
+本阶段完成 `multi-run` 第七阶段 runner 抽象与 fake runner：
+
+- 补查并收紧 Commit 6 的状态基础：
+  - `write_multi_run_state()` 从 tmp + replace 升级为 tmp + flush/fsync +
+    replace，提高状态文件落盘强度。
+  - `append_next_multi_run_event()` 对不存在 / 空事件文件会稳定从
+    `seq = 1` 开始。
+  - 初始 planned case 现在包含 `sample_index`、`sample_id`、`case_name`、
+    `case_status = planned`、`resume_eligible = false`、
+    `cleanup_status = not_started`、`summary_status = not_started`、
+    `evidence_status = not_started`。
+- 新增 `SingleRunRequest`，用于描述 scheduler 后续调用 single-run runner
+  所需的 manifest 元数据和 case 目录信息，不包含样本 bytes。
+- 新增 `SingleRunRunner` Protocol，固定 runner 接口为
+  `run(request) -> SingleRunRunnerResult`。
+- 新增 `SingleRunRunnerResult`，将单轮结果规范化为 multi-run 可消费的
+  case 状态元数据，并提供 `to_case_state(...)`。
+- 新增 `FakeSingleRunRunner` 与 `fake_single_run_result(...)` fixture：
+  - `completed`
+  - `case_failed`
+  - `environment_failed`
+  - `timeout`
+  - `summary_missing`
+  - `cleanup_unknown`
+  - `cleanup_restore_failed`
+- 新增 `tests/test_multi_run_runner.py`，覆盖 fake runner 调用记录、
+  per-index scenario、case failure、environment failure、timeout、summary
+  missing、cleanup unknown、cleanup restore failed，以及 request 不包含样本内容。
+
+本阶段仍未接入真实 single-run runner，未执行 scheduler，未触发云操作，
+未读取样本文件内容。fake runner 只为后续 serial scheduler 和 failure
+classification 提供稳定测试夹具。
+
+下一阶段建议进入 Commit 8：使用 fake runner 串行执行 selected samples。

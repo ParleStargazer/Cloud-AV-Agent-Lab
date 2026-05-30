@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, Protocol, TypeAlias
 
 SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION = "multi-run-sample.v1"
 BATCH_PLAN_SCHEMA_VERSION = "multi-run-plan.v1"
@@ -64,6 +65,15 @@ SingleRunStatus: TypeAlias = Literal[
     "failed",
     "timeout",
     "unknown",
+]
+FakeSingleRunScenario: TypeAlias = Literal[
+    "completed",
+    "case_failed",
+    "environment_failed",
+    "timeout",
+    "summary_missing",
+    "cleanup_unknown",
+    "cleanup_restore_failed",
 ]
 BatchState: TypeAlias = Literal[
     "created",
@@ -935,6 +945,7 @@ def _copy_manifest_bytes(source: Path, destination: Path) -> None:
 class CaseState:
     sample_index: int
     sample_id: str
+    case_name: str
     case_id: str
     run_id: str = ""
     attempt: int = 0
@@ -959,6 +970,7 @@ class CaseState:
         return {
             "sample_index": self.sample_index,
             "sample_id": self.sample_id,
+            "case_name": self.case_name,
             "case_id": self.case_id,
             "run_id": self.run_id,
             "attempt": self.attempt,
@@ -1059,6 +1071,269 @@ class MultiRunEvent:
         }
 
 
+@dataclass(frozen=True)
+class SingleRunRequest:
+    batch_id: str
+    sample_index: int
+    sample_id: str
+    case_name: str
+    case_id: str
+    run_id: str
+    product_id: str
+    instance_id: str
+    snapshot_id: str
+    region: str
+    sample_ref: str
+    sha256: str
+    md5: str
+    size: int
+    original_filename: str
+    case_dir: Path
+    dry_run: bool
+    attempt: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "batch_id": self.batch_id,
+            "sample_index": self.sample_index,
+            "sample_id": self.sample_id,
+            "case_name": self.case_name,
+            "case_id": self.case_id,
+            "run_id": self.run_id,
+            "product_id": self.product_id,
+            "instance_id": self.instance_id,
+            "snapshot_id": self.snapshot_id,
+            "region": self.region,
+            "sample_ref": self.sample_ref,
+            "sha256": self.sha256,
+            "md5": self.md5,
+            "size": self.size,
+            "original_filename": self.original_filename,
+            "case_dir": str(self.case_dir),
+            "dry_run": self.dry_run,
+            "attempt": self.attempt,
+        }
+
+
+@dataclass(frozen=True)
+class SingleRunRunnerResult:
+    run_id: str
+    case_id: str
+    final_status: str
+    case_status: CaseStatus
+    single_run_status: SingleRunStatus
+    cleanup_status: CleanupStatus
+    evidence_status: EvidenceStatus
+    summary_status: SummaryStatus
+    readiness_status: ReadinessStatus = "unknown"
+    verdict: Verdict = "unknown"
+    confidence: str = ""
+    failure_kind: FailureKind | None = None
+    error_summary: str = ""
+    evidence_bundle_path: str = ""
+    run_state_path: str = ""
+    case_summary_path: str = ""
+    duration_seconds: float | None = None
+    warnings: tuple[str, ...] = ()
+    unsafe_to_continue: bool = False
+    manual_intervention_required: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "case_id": self.case_id,
+            "final_status": self.final_status,
+            "case_status": self.case_status,
+            "single_run_status": self.single_run_status,
+            "cleanup_status": self.cleanup_status,
+            "evidence_status": self.evidence_status,
+            "summary_status": self.summary_status,
+            "readiness_status": self.readiness_status,
+            "verdict": self.verdict,
+            "confidence": self.confidence,
+            "failure_kind": self.failure_kind,
+            "error_summary": self.error_summary,
+            "evidence_bundle_path": self.evidence_bundle_path,
+            "run_state_path": self.run_state_path,
+            "case_summary_path": self.case_summary_path,
+            "duration_seconds": self.duration_seconds,
+            "warnings": list(self.warnings),
+            "unsafe_to_continue": self.unsafe_to_continue,
+            "manual_intervention_required": self.manual_intervention_required,
+        }
+
+    def to_case_state(self, request: SingleRunRequest) -> CaseState:
+        return CaseState(
+            sample_index=request.sample_index,
+            sample_id=request.sample_id,
+            case_name=request.case_name,
+            case_id=self.case_id,
+            run_id=self.run_id,
+            attempt=request.attempt,
+            case_status=self.case_status,
+            single_run_status=self.single_run_status,
+            cleanup_status=self.cleanup_status,
+            evidence_status=self.evidence_status,
+            summary_status=self.summary_status,
+            readiness_status=self.readiness_status,
+            resume_eligible=(
+                self.case_status == "completed" and self.cleanup_status == "restored"
+            ),
+            verdict=self.verdict,
+            confidence=self.confidence,
+            failure_kind=self.failure_kind,
+            error_summary=self.error_summary,
+            evidence_bundle_path=self.evidence_bundle_path,
+            run_state_path=self.run_state_path,
+            case_summary_path=self.case_summary_path,
+            duration_seconds=self.duration_seconds,
+            warnings=self.warnings,
+        )
+
+
+class SingleRunRunner(Protocol):
+    def run(self, request: SingleRunRequest) -> SingleRunRunnerResult:
+        """Run one already-planned case and return normalized multi-run metadata."""
+
+
+class FakeSingleRunRunner:
+    def __init__(
+        self,
+        *,
+        default_scenario: FakeSingleRunScenario = "completed",
+        scenarios_by_sample_index: Mapping[int, FakeSingleRunScenario] | None = None,
+    ) -> None:
+        self.default_scenario = default_scenario
+        self.scenarios_by_sample_index = dict(scenarios_by_sample_index or {})
+        self.requests: list[SingleRunRequest] = []
+
+    def run(self, request: SingleRunRequest) -> SingleRunRunnerResult:
+        self.requests.append(request)
+        scenario = self.scenarios_by_sample_index.get(
+            request.sample_index, self.default_scenario
+        )
+        return fake_single_run_result(scenario, request)
+
+
+def fake_single_run_result(
+    scenario: FakeSingleRunScenario,
+    request: SingleRunRequest,
+) -> SingleRunRunnerResult:
+    run_root = request.case_dir / "single_run"
+    run_state_path = (run_root / "run_state.json").as_posix()
+    summary_path = (run_root / "case_summary.json").as_posix()
+    evidence_path = (run_root / f"case_evidence_{request.case_id}.zip").as_posix()
+    base = {
+        "run_id": request.run_id,
+        "case_id": request.case_id,
+        "run_state_path": run_state_path,
+        "case_summary_path": summary_path,
+        "evidence_bundle_path": evidence_path,
+        "duration_seconds": 1.0,
+    }
+    if scenario == "completed":
+        return SingleRunRunnerResult(
+            **base,
+            final_status="completed",
+            case_status="completed",
+            single_run_status="completed",
+            cleanup_status="restored",
+            evidence_status="exported",
+            summary_status="collected",
+            readiness_status="ok",
+            verdict="detected_or_blocked",
+            confidence="high",
+        )
+    if scenario == "case_failed":
+        return SingleRunRunnerResult(
+            **base,
+            final_status="failed",
+            case_status="failed",
+            single_run_status="failed",
+            cleanup_status="restored",
+            evidence_status="exported",
+            summary_status="collected",
+            verdict="inconclusive",
+            failure_kind="case_failure",
+            error_summary="fake single-run case failure",
+        )
+    if scenario == "environment_failed":
+        return SingleRunRunnerResult(
+            **base,
+            final_status="failed_cleanup_failed",
+            case_status="stopped_environment_failure",
+            single_run_status="failed",
+            cleanup_status="restore_failed",
+            evidence_status="failed",
+            summary_status="failed",
+            verdict="not_evaluable",
+            failure_kind="environment_failure",
+            error_summary="fake environment failure",
+            unsafe_to_continue=True,
+            manual_intervention_required=True,
+        )
+    if scenario == "timeout":
+        return SingleRunRunnerResult(
+            **base,
+            final_status="failed",
+            case_status="failed",
+            single_run_status="timeout",
+            cleanup_status="restored",
+            evidence_status="partial",
+            summary_status="missing",
+            verdict="inconclusive",
+            failure_kind="case_failure",
+            error_summary="fake single-run timeout",
+        )
+    if scenario == "summary_missing":
+        return SingleRunRunnerResult(
+            **base,
+            final_status="completed_with_warnings",
+            case_status="failed",
+            single_run_status="completed",
+            cleanup_status="restored",
+            evidence_status="exported",
+            summary_status="missing",
+            verdict="not_evaluable",
+            failure_kind="case_failure",
+            error_summary="fake case summary missing",
+            warnings=("case_summary.json missing",),
+        )
+    if scenario == "cleanup_unknown":
+        return SingleRunRunnerResult(
+            **base,
+            final_status="completed_with_cleanup_warning",
+            case_status="stopped_environment_failure",
+            single_run_status="completed",
+            cleanup_status="unknown",
+            evidence_status="exported",
+            summary_status="collected",
+            verdict="inconclusive",
+            failure_kind="environment_failure",
+            error_summary="fake cleanup status unknown",
+            unsafe_to_continue=True,
+            manual_intervention_required=True,
+            warnings=("cleanup status unknown",),
+        )
+    if scenario == "cleanup_restore_failed":
+        return SingleRunRunnerResult(
+            **base,
+            final_status="failed_cleanup_failed",
+            case_status="stopped_environment_failure",
+            single_run_status="completed",
+            cleanup_status="restore_failed",
+            evidence_status="exported",
+            summary_status="collected",
+            verdict="inconclusive",
+            failure_kind="environment_failure",
+            error_summary="fake cleanup restore failed",
+            unsafe_to_continue=True,
+            manual_intervention_required=True,
+            warnings=("cleanup restore failed",),
+        )
+    raise MultiRunPlanError(f"unsupported fake single-run scenario: {scenario}")
+
+
 def _initial_multi_run_state(
     plan: BatchPlan,
     *,
@@ -1070,6 +1345,7 @@ def _initial_multi_run_state(
         CaseState(
             sample_index=index,
             sample_id=entries_by_index[index].sample_id,
+            case_name=entries_by_index[index].case_name,
             case_id=_planned_case_id(
                 index, entries_by_index[index].sample_id, plan.product_id
             ),
@@ -1201,7 +1477,10 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     temp_path = path.with_name(f".{path.name}.tmp")
-    temp_path.write_bytes(content)
+    with temp_path.open("wb") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
     temp_path.replace(path)
 
 
