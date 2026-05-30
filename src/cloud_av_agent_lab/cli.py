@@ -437,6 +437,113 @@ def build_parser() -> argparse.ArgumentParser:
         help="read timeout used for fast-fail evidence salvage",
     )
 
+    multi_run = subparsers.add_parser(
+        "multi-run",
+        help="parse a serial multi-run batch request; execution is staged later",
+    )
+    multi_run.add_argument(
+        "--product",
+        default="",
+        choices=supported_single_run_products(),
+        help="security product profile for this batch",
+    )
+    multi_run.add_argument("--instance-id", default="", help="Lighthouse instance id")
+    multi_run.add_argument("--snapshot-id", default="", help="baseline snapshot id")
+    multi_run.add_argument("--region", default="", help="Tencent Cloud region")
+    multi_run.add_argument(
+        "--guest-agent-url",
+        default="",
+        help="Guest Agent base URL, for example http://x.x.x.x:8080",
+    )
+    multi_run.add_argument(
+        "--desktop-worker-url",
+        default="",
+        help="Control Agent localhost URL for Desktop Worker inside the VM",
+    )
+    multi_run.add_argument(
+        "--sample-dir",
+        default="",
+        help="cloud platform sample directory; first skeleton only parses this value",
+    )
+    multi_run.add_argument(
+        "--manifest",
+        default="",
+        help="existing sample_manifest.jsonl path; first skeleton only parses it",
+    )
+    multi_run.add_argument("--batch-id", default="", help="optional batch id")
+    multi_run.add_argument(
+        "--batch-root",
+        default="runs",
+        help="batch output root directory",
+    )
+    multi_run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="plan a batch without real cloud writes",
+    )
+    multi_run.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="only parse options and plan; do not schedule cases",
+    )
+    multi_run.add_argument(
+        "--all",
+        action="store_true",
+        help="select all manifest entries",
+    )
+    multi_run.add_argument(
+        "--range",
+        dest="sample_range",
+        default="",
+        help="closed sample index range, for example 1-50",
+    )
+    multi_run.add_argument(
+        "--indexes",
+        default="",
+        help="comma-separated sample indexes, for example 1,3,7",
+    )
+    multi_run.add_argument(
+        "--from",
+        dest="from_index",
+        type=int,
+        default=None,
+        help="first sample index for a closed range",
+    )
+    multi_run.add_argument(
+        "--to",
+        dest="to_index",
+        type=int,
+        default=None,
+        help="last sample index for a closed range",
+    )
+    multi_run.add_argument(
+        "--max-cases",
+        type=int,
+        default=None,
+        help="maximum number of selected cases to schedule",
+    )
+    multi_run.add_argument(
+        "--failure-policy",
+        choices=("continue", "stop-on-case-failure"),
+        default="continue",
+        help="case failure policy for the future serial scheduler",
+    )
+    multi_run.add_argument(
+        "--resume",
+        action="store_true",
+        help="resume an existing batch; execution is staged later",
+    )
+    multi_run.add_argument(
+        "--rerun-failed",
+        action="store_true",
+        help="rerun failed cases; execution is staged later",
+    )
+    multi_run.add_argument(
+        "--force-rerun",
+        action="store_true",
+        help="rerun selected cases even if prior results exist",
+    )
+
     return parser
 
 
@@ -482,6 +589,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "single-run":
         return _handle_single_run(parser, args)
+    if args.command == "multi-run":
+        return _handle_multi_run(parser, args)
 
     try:
         config = load_config(args.config)
@@ -924,6 +1033,82 @@ def _handle_single_run(
             f"Manual intervention required: {options.instance_id}"
         )
     return 0 if not result.final_status.startswith("failed") else 1
+
+
+def _handle_multi_run(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> int:
+    selection_mode = _multi_run_selection_mode(parser, args)
+    if args.max_cases is not None and args.max_cases <= 0:
+        parser.exit(2, "error: --max-cases must be greater than 0\n")
+
+    print("Multi-run skeleton parsed; execution is not implemented in this phase.")
+    print(
+        json.dumps(
+            {
+                "status": "skeleton",
+                "message": (
+                    "multi-run CLI skeleton parsed; manifest, state, and runner "
+                    "will be added in later commits"
+                ),
+                "product": args.product,
+                "instance_id": args.instance_id,
+                "snapshot_id": args.snapshot_id,
+                "region": args.region,
+                "guest_agent_url": args.guest_agent_url,
+                "desktop_worker_url": args.desktop_worker_url,
+                "sample_dir": args.sample_dir,
+                "manifest": args.manifest,
+                "batch_id": args.batch_id,
+                "batch_root": args.batch_root,
+                "dry_run": args.dry_run,
+                "plan_only": args.plan_only,
+                "selection_mode": selection_mode,
+                "range": args.sample_range,
+                "indexes": args.indexes,
+                "from": args.from_index,
+                "to": args.to_index,
+                "max_cases": args.max_cases,
+                "failure_policy": args.failure_policy,
+                "resume": args.resume,
+                "rerun_failed": args.rerun_failed,
+                "force_rerun": args.force_rerun,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _multi_run_selection_mode(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> str:
+    has_from_to = args.from_index is not None or args.to_index is not None
+    if has_from_to and (args.from_index is None or args.to_index is None):
+        parser.exit(2, "error: --from and --to must be provided together\n")
+
+    selected_modes = [
+        mode
+        for mode, enabled in (
+            ("all", args.all),
+            ("range", bool(args.sample_range)),
+            ("indexes", bool(args.indexes)),
+            ("from_to", has_from_to),
+        )
+        if enabled
+    ]
+    if len(selected_modes) > 1:
+        parser.exit(
+            2,
+            "error: selection options are mutually exclusive "
+            "(use only one of --all, --range, --indexes, or --from/--to)\n",
+        )
+    if selected_modes == ["from_to"] and args.from_index > args.to_index:
+        parser.exit(2, "error: --from must be less than or equal to --to\n")
+    return selected_modes[0] if selected_modes else "unspecified"
 
 
 def _single_run_options_from_args(

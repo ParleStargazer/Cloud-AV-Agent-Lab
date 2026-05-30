@@ -683,6 +683,95 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(exit_error.exception.code, 2)
         self.assertIn("invalid choice", stderr.getvalue())
 
+    def test_multi_run_skeleton_accepts_manifest_range_dry_run(self) -> None:
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            exit_code = main(
+                [
+                    "multi-run",
+                    "--product",
+                    "tencent-pc-manager",
+                    "--instance-id",
+                    "lhins-example",
+                    "--snapshot-id",
+                    "lhsnap-example",
+                    "--region",
+                    "ap-singapore",
+                    "--guest-agent-url",
+                    "http://127.0.0.1:8080",
+                    "--desktop-worker-url",
+                    "http://127.0.0.1:8001",
+                    "--manifest",
+                    "sample_manifest.jsonl",
+                    "--range",
+                    "1-10",
+                    "--dry-run",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("Multi-run skeleton parsed", output)
+        self.assertIn('"status": "skeleton"', output)
+        self.assertIn('"selection_mode": "range"', output)
+        self.assertIn('"manifest": "sample_manifest.jsonl"', output)
+        self.assertIn('"product": "tencent-pc-manager"', output)
+
+    def test_multi_run_skeleton_accepts_sample_dir_all_plan_only(self) -> None:
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            exit_code = main(
+                [
+                    "multi-run",
+                    "--product",
+                    "huorong",
+                    "--sample-dir",
+                    "C:\\CloudAvSamples\\raw_sample",
+                    "--all",
+                    "--plan-only",
+                    "--failure-policy",
+                    "stop-on-case-failure",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn('"selection_mode": "all"', output)
+        self.assertIn('"sample_dir": "C:\\\\CloudAvSamples\\\\raw_sample"', output)
+        self.assertIn('"plan_only": true', output)
+        self.assertIn('"failure_policy": "stop-on-case-failure"', output)
+
+    def test_multi_run_rejects_conflicting_selection_options(self) -> None:
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+            main(
+                [
+                    "multi-run",
+                    "--manifest",
+                    "sample_manifest.jsonl",
+                    "--range",
+                    "1-10",
+                    "--indexes",
+                    "1,3,7",
+                    "--dry-run",
+                ]
+            )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("selection options are mutually exclusive", stderr.getvalue())
+
+    def test_multi_run_requires_from_and_to_together(self) -> None:
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+            main(["multi-run", "--manifest", "sample_manifest.jsonl", "--from", "3"])
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn("--from and --to must be provided together", stderr.getvalue())
+
     def test_guest_check_security_product_readiness_prints_concise_status(
         self,
     ) -> None:
