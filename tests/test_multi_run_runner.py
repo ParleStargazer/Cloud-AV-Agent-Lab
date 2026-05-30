@@ -80,6 +80,8 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
         payload = _request().to_dict()
 
         self.assertEqual(payload["sample_ref"], r"C:\CloudAvSamples\eicar.bat")
+        self.assertEqual(payload["manifest_sha256"], "c" * 64)
+        self.assertEqual(payload["batch_plan_sha256"], "d" * 64)
         self.assertEqual(payload["sha256"], "a" * 64)
         self.assertNotIn("sample_bytes", payload)
         self.assertNotIn("content", payload)
@@ -98,6 +100,8 @@ def _request(sample_index: int = 1) -> SingleRunRequest:
         snapshot_id="lhsnap-test",
         region="ap-singapore",
         sample_ref=r"C:\CloudAvSamples\eicar.bat",
+        manifest_sha256="c" * 64,
+        batch_plan_sha256="d" * 64,
         sha256="a" * 64,
         md5="b" * 32,
         size=68,

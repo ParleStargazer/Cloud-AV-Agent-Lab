@@ -37,6 +37,7 @@ from cloud_av_agent_lab.orchestration import (
     MultiRunSelectionError,
     SingleRunOptions,
     create_multi_run_batch_plan,
+    execute_multi_run_batch,
     load_sample_manifest,
     parse_sample_selection,
     run_single_case,
@@ -1102,15 +1103,24 @@ def _handle_multi_run(
     ) as exc:
         parser.exit(2, f"error: {exc}\n")
 
-    print("Multi-run batch plan created; runner execution is not implemented yet.")
+    state = None
+    if args.plan_only:
+        print("Multi-run batch plan created; scheduler skipped by --plan-only.")
+        status = "planned"
+        message = "multi-run batch plan created; scheduler skipped by --plan-only"
+    else:
+        state = execute_multi_run_batch(artifacts.batch_dir)
+        print("Multi-run batch executed with fake single-run runner.")
+        status = state.final_status or state.batch_state
+        message = (
+            "multi-run fake scheduler completed; real single-run runner will be "
+            "added in a later commit"
+        )
     print(
         json.dumps(
             {
-                "status": "planned",
-                "message": (
-                    "multi-run batch plan created; state, event log, and runner "
-                    "will be added in later commits"
-                ),
+                "status": status,
+                "message": message,
                 "product": args.product,
                 "instance_id": args.instance_id,
                 "snapshot_id": args.snapshot_id,
@@ -1130,6 +1140,8 @@ def _handle_multi_run(
                 "state_path": str(artifacts.state_path),
                 "event_log_path": str(artifacts.event_log_path),
                 "batch_plan_sha256": artifacts.batch_plan_sha256,
+                "batch_state": state.batch_state if state is not None else "",
+                "final_status": state.final_status if state is not None else "",
                 "dry_run": args.dry_run,
                 "plan_only": args.plan_only,
                 "selection_mode": selection.mode,

@@ -734,8 +734,10 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(exit_code, 0)
             runner.assert_not_called()
             output = stdout.getvalue()
-            self.assertIn("Multi-run batch plan created", output)
-            self.assertIn('"status": "planned"', output)
+            self.assertIn(
+                "Multi-run batch executed with fake single-run runner", output
+            )
+            self.assertIn('"status": "completed"', output)
             self.assertIn('"selection_mode": "range"', output)
             self.assertIn('"selected_indexes": [\n    1,\n    2\n  ]', output)
             plan_path = tmp_path / "batches" / "batch-test" / "batch_plan.json"
@@ -768,16 +770,23 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(state["sample_manifest_path"], "sample_manifest.jsonl")
             self.assertEqual(state["selected_indexes"], [1, 2])
             self.assertEqual(state["cases"][0]["case_name"], "aaaaaaaaaaaaaaaa")
-            self.assertEqual(state["cases"][0]["case_status"], "planned")
-            self.assertFalse(state["cases"][0]["resume_eligible"])
-            self.assertEqual(state["cases"][0]["cleanup_status"], "not_started")
-            self.assertEqual(state["cases"][0]["summary_status"], "not_started")
-            self.assertEqual(state["cases"][0]["evidence_status"], "not_started")
+            self.assertEqual(state["cases"][0]["case_status"], "completed")
+            self.assertTrue(state["cases"][0]["resume_eligible"])
+            self.assertEqual(state["cases"][0]["cleanup_status"], "restored")
+            self.assertEqual(state["cases"][0]["summary_status"], "collected")
+            self.assertEqual(state["cases"][0]["evidence_status"], "exported")
+            self.assertEqual(state["batch_state"], "completed")
+            self.assertTrue(
+                (
+                    tmp_path / "batches" / "batch-test" / "cases" / ("0001_" + "a" * 16)
+                ).is_dir()
+            )
             events = (
                 tmp_path / "batches" / "batch-test" / "multi_run_events.jsonl"
             ).read_text(encoding="utf-8")
             self.assertIn('"type": "batch_created"', events)
             self.assertIn('"type": "plan_created"', events)
+            self.assertIn('"type": "single_run_completed"', events)
 
     def test_multi_run_plan_only_writes_config_without_secret_or_token(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -830,6 +839,16 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertTrue(plan["execution"]["plan_only"])
             self.assertEqual(plan["selection"]["selected_indexes"], [1])
             self.assertTrue((batch_dir / "sample_manifest.sha256").is_file())
+            state = json.loads(
+                (batch_dir / "multi_run_state.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(state["batch_state"], "created")
+            self.assertEqual(state["cases"][0]["case_status"], "planned")
+            self.assertFalse(state["cases"][0]["resume_eligible"])
+            self.assertEqual(state["cases"][0]["cleanup_status"], "not_started")
+            self.assertEqual(state["cases"][0]["summary_status"], "not_started")
+            self.assertEqual(state["cases"][0]["evidence_status"], "not_started")
+            self.assertFalse((batch_dir / "cases").exists())
 
     def test_multi_run_rejects_conflicting_selection_options(self) -> None:
         stderr = StringIO()

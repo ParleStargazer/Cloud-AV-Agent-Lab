@@ -5,7 +5,7 @@ import json
 import os
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Protocol, TypeAlias
@@ -1084,6 +1084,8 @@ class SingleRunRequest:
     snapshot_id: str
     region: str
     sample_ref: str
+    manifest_sha256: str
+    batch_plan_sha256: str
     sha256: str
     md5: str
     size: int
@@ -1105,6 +1107,8 @@ class SingleRunRequest:
             "snapshot_id": self.snapshot_id,
             "region": self.region,
             "sample_ref": self.sample_ref,
+            "manifest_sha256": self.manifest_sha256,
+            "batch_plan_sha256": self.batch_plan_sha256,
             "sha256": self.sha256,
             "md5": self.md5,
             "size": self.size,
@@ -1332,6 +1336,371 @@ def fake_single_run_result(
             warnings=("cleanup restore failed",),
         )
     raise MultiRunPlanError(f"unsupported fake single-run scenario: {scenario}")
+
+
+def execute_multi_run_batch(
+    batch_dir: Path | str,
+    *,
+    runner: SingleRunRunner | None = None,
+) -> MultiRunState:
+    root = Path(batch_dir)
+    plan_path = root / "batch_plan.json"
+    event_log_path = root / "multi_run_events.jsonl"
+    state_path = root / "multi_run_state.json"
+    plan = load_batch_plan(plan_path)
+    batch_plan_sha256 = compute_bytes_sha256(plan_path.read_bytes())
+    manifest_path = root / plan.sample_manifest_path
+    manifest = load_sample_manifest(manifest_path)
+    _ensure_batch_inputs_match(plan, manifest)
+
+    selected_indexes = plan.selection.selected_indexes
+    state = replace(
+        _initial_multi_run_state(
+            plan,
+            manifest=manifest,
+            batch_plan_sha256=batch_plan_sha256,
+        ),
+        batch_state="running",
+    )
+    write_multi_run_state(state_path, state)
+    append_next_multi_run_event(
+        event_log_path,
+        batch_id=plan.batch_id,
+        event_type="preflight_started",
+        data={"selected_indexes": selected_indexes},
+    )
+    append_next_multi_run_event(
+        event_log_path,
+        batch_id=plan.batch_id,
+        event_type="preflight_passed",
+        data={
+            "manifest_sha256": manifest.sha256,
+            "batch_plan_sha256": batch_plan_sha256,
+            "runner": "fake" if runner is None else type(runner).__name__,
+        },
+    )
+
+    active_runner = runner or FakeSingleRunRunner()
+    entries_by_index = manifest.by_index()
+    cases_by_index = {case.sample_index: case for case in state.cases}
+    stop_state: BatchState | None = None
+    errors: list[str] = []
+    warnings: list[str] = []
+    unsafe_to_continue = False
+    manual_intervention_required = False
+    manual_intervention_reason = ""
+
+    for index in selected_indexes:
+        entry = entries_by_index[index]
+        planned_case = cases_by_index[index]
+        case_dir = root / "cases" / _case_dir_name(index, entry.sample_id)
+        case_dir.mkdir(parents=True, exist_ok=True)
+        request = _single_run_request_for_entry(
+            plan,
+            entry=entry,
+            case_id=planned_case.case_id,
+            case_dir=case_dir,
+            batch_plan_sha256=batch_plan_sha256,
+        )
+        append_next_multi_run_event(
+            event_log_path,
+            batch_id=plan.batch_id,
+            event_type="case_started",
+            sample_index=index,
+            sample_id=entry.sample_id,
+            run_id=request.run_id,
+            case_id=request.case_id,
+            case_status="planned",
+        )
+        append_next_multi_run_event(
+            event_log_path,
+            batch_id=plan.batch_id,
+            event_type="single_run_started",
+            sample_index=index,
+            sample_id=entry.sample_id,
+            run_id=request.run_id,
+            case_id=request.case_id,
+        )
+        result = active_runner.run(request)
+        case_state = result.to_case_state(request)
+        cases_by_index[index] = case_state
+        append_next_multi_run_event(
+            event_log_path,
+            batch_id=plan.batch_id,
+            event_type="single_run_completed",
+            sample_index=index,
+            sample_id=entry.sample_id,
+            run_id=result.run_id,
+            case_id=result.case_id,
+            case_status=result.case_status,
+            data=result.to_dict(),
+        )
+        append_next_multi_run_event(
+            event_log_path,
+            batch_id=plan.batch_id,
+            event_type="case_finalized",
+            sample_index=index,
+            sample_id=entry.sample_id,
+            run_id=result.run_id,
+            case_id=result.case_id,
+            case_status=result.case_status,
+            data={
+                "failure_kind": result.failure_kind,
+                "cleanup_status": result.cleanup_status,
+                "resume_eligible": case_state.resume_eligible,
+            },
+        )
+        if result.error_summary:
+            errors.append(result.error_summary)
+        warnings.extend(result.warnings)
+        if result.unsafe_to_continue:
+            unsafe_to_continue = True
+        if result.manual_intervention_required:
+            manual_intervention_required = True
+            manual_intervention_reason = (
+                result.error_summary or "manual intervention required"
+            )
+
+        state = replace(
+            state,
+            cases=_cases_in_selected_order(cases_by_index, selected_indexes),
+            unsafe_to_continue=unsafe_to_continue,
+            manual_intervention_required=manual_intervention_required,
+            manual_intervention_reason=manual_intervention_reason,
+            errors=tuple(errors),
+            warnings=tuple(warnings),
+        )
+        write_multi_run_state(state_path, state)
+
+        stop_state = _stop_state_for_result(result, plan)
+        if stop_state is not None:
+            state = replace(
+                state,
+                batch_state=stop_state,
+                final_status=stop_state,
+                finished_at_utc=utc_now(),
+            )
+            write_multi_run_state(state_path, state)
+            break
+
+    if stop_state is None:
+        state = replace(
+            state,
+            batch_state=_completed_batch_state(state),
+            final_status=_completed_batch_state(state),
+            finished_at_utc=utc_now(),
+        )
+        write_multi_run_state(state_path, state)
+
+    append_next_multi_run_event(
+        event_log_path,
+        batch_id=plan.batch_id,
+        event_type="batch_finished",
+        data={
+            "batch_state": state.batch_state,
+            "final_status": state.final_status,
+            "unsafe_to_continue": state.unsafe_to_continue,
+            "manual_intervention_required": state.manual_intervention_required,
+        },
+    )
+    return state
+
+
+def load_batch_plan(path: Path | str) -> BatchPlan:
+    plan_path = Path(path)
+    try:
+        payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise MultiRunPlanError(
+            f"{plan_path}: invalid batch_plan.json: {exc.msg}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise MultiRunPlanError(f"{plan_path}: batch_plan.json must be an object")
+    if payload.get("schema_version") != BATCH_PLAN_SCHEMA_VERSION:
+        raise MultiRunPlanError(
+            f"{plan_path}: unsupported batch plan schema_version "
+            f"{payload.get('schema_version')!r}"
+        )
+    selection_payload = _mapping_value(payload, "selection", plan_path)
+    execution_payload = _mapping_value(payload, "execution", plan_path)
+    selected_indexes = tuple(
+        _positive_int_from_json(value, "selection.selected_indexes", plan_path)
+        for value in _list_value(selection_payload, "selected_indexes", plan_path)
+    )
+    selection = BatchSelection(
+        mode=str(selection_payload.get("mode", "all")),
+        selected_indexes=selected_indexes,
+        range_text=str(selection_payload.get("range", "")),
+        from_index=_optional_int(selection_payload.get("from_index"), plan_path),
+        to_index=_optional_int(selection_payload.get("to_index"), plan_path),
+        max_cases=_optional_int(selection_payload.get("max_cases"), plan_path),
+    )
+    execution = BatchExecutionPolicy(
+        mode=str(execution_payload.get("mode", "serial")),
+        failure_policy=str(execution_payload.get("failure_policy", "continue")),
+        dry_run=bool(execution_payload.get("dry_run", False)),
+        plan_only=bool(execution_payload.get("plan_only", False)),
+        case_timeout_seconds=_optional_float(
+            execution_payload.get("case_timeout_seconds"), plan_path
+        ),
+        environment_failure_policy=str(
+            execution_payload.get("environment_failure_policy", "stop")
+        ),
+    )
+    return BatchPlan(
+        batch_id=_str_value(payload, "batch_id", plan_path),
+        created_at_utc=_str_value(payload, "created_at_utc", plan_path),
+        product_id=_str_value(payload, "product_id", plan_path),
+        instance_id=_str_value(payload, "instance_id", plan_path),
+        snapshot_id=_str_value(payload, "snapshot_id", plan_path),
+        region=_str_value(payload, "region", plan_path),
+        sample_manifest_path=_str_value(payload, "sample_manifest_path", plan_path),
+        manifest_sha256=_str_value(payload, "manifest_sha256", plan_path),
+        generated_config_sha256=_str_value(
+            payload, "generated_config_sha256", plan_path
+        ),
+        selection=selection,
+        execution=execution,
+        single_run_runner_version=str(payload.get("single_run_runner_version", "")),
+        multi_run_version=str(payload.get("multi_run_version", "")),
+        product_profile_version=str(payload.get("product_profile_version", "")),
+    )
+
+
+def _mapping_value(
+    payload: Mapping[str, Any],
+    field_name: str,
+    path: Path,
+) -> Mapping[str, Any]:
+    value = payload.get(field_name)
+    if not isinstance(value, dict):
+        raise MultiRunPlanError(f"{path}: {field_name} must be an object")
+    return value
+
+
+def _list_value(
+    payload: Mapping[str, Any],
+    field_name: str,
+    path: Path,
+) -> list[Any]:
+    value = payload.get(field_name)
+    if not isinstance(value, list):
+        raise MultiRunPlanError(f"{path}: {field_name} must be a list")
+    return value
+
+
+def _str_value(payload: Mapping[str, Any], field_name: str, path: Path) -> str:
+    value = payload.get(field_name)
+    if not isinstance(value, str) or not value:
+        raise MultiRunPlanError(f"{path}: {field_name} must be a non-empty string")
+    return value
+
+
+def _positive_int_from_json(value: Any, field_name: str, path: Path) -> int:
+    if not isinstance(value, int) or value <= 0:
+        raise MultiRunPlanError(f"{path}: {field_name} must contain positive integers")
+    return value
+
+
+def _optional_int(value: Any, path: Path) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int):
+        raise MultiRunPlanError(f"{path}: optional integer field must be an integer")
+    return value
+
+
+def _optional_float(value: Any, path: Path) -> float | None:
+    if value is None:
+        return None
+    if not isinstance(value, int | float):
+        raise MultiRunPlanError(f"{path}: optional float field must be numeric")
+    return float(value)
+
+
+def _single_run_request_for_entry(
+    plan: BatchPlan,
+    *,
+    entry: SampleManifestEntry,
+    case_id: str,
+    case_dir: Path,
+    batch_plan_sha256: str,
+) -> SingleRunRequest:
+    return SingleRunRequest(
+        batch_id=plan.batch_id,
+        sample_index=entry.sample_index,
+        sample_id=entry.sample_id,
+        case_name=entry.case_name,
+        case_id=case_id,
+        run_id=f"{plan.batch_id}__{entry.sample_index:04d}_{entry.case_name}",
+        product_id=plan.product_id,
+        instance_id=plan.instance_id,
+        snapshot_id=plan.snapshot_id,
+        region=plan.region,
+        sample_ref=entry.sample_ref,
+        manifest_sha256=plan.manifest_sha256,
+        batch_plan_sha256=batch_plan_sha256,
+        sha256=entry.sha256,
+        md5=entry.md5,
+        size=entry.size,
+        original_filename=entry.original_filename,
+        case_dir=case_dir,
+        dry_run=plan.execution.dry_run,
+    )
+
+
+def _case_dir_name(sample_index: int, sample_id: str) -> str:
+    return f"{sample_index:04d}_{_safe_batch_id(sample_id)[:16]}"
+
+
+def _cases_in_selected_order(
+    cases_by_index: Mapping[int, CaseState],
+    selected_indexes: tuple[int, ...],
+) -> tuple[CaseState, ...]:
+    return tuple(cases_by_index[index] for index in selected_indexes)
+
+
+def _ensure_batch_inputs_match(
+    plan: BatchPlan,
+    manifest: LoadedSampleManifest,
+) -> None:
+    if manifest.sha256 != plan.manifest_sha256:
+        raise MultiRunPlanError("sample manifest sha256 does not match batch plan")
+    available = set(manifest.indexes)
+    missing = [
+        index for index in plan.selection.selected_indexes if index not in available
+    ]
+    if missing:
+        formatted = ", ".join(str(index) for index in missing)
+        raise MultiRunPlanError(f"batch plan selected unavailable indexes: {formatted}")
+
+
+def _stop_state_for_result(
+    result: SingleRunRunnerResult,
+    plan: BatchPlan,
+) -> BatchState | None:
+    if result.failure_kind == "environment_failure" or result.unsafe_to_continue:
+        return "stopped_for_environment_failure"
+    if (
+        result.failure_kind == "case_failure"
+        and plan.execution.failure_policy == "stop-on-case-failure"
+    ):
+        return "stopped_for_case_failure"
+    return None
+
+
+def _completed_batch_state(state: MultiRunState) -> BatchState:
+    case_failures = [
+        case
+        for case in state.cases
+        if case.failure_kind == "case_failure" or case.case_status == "failed"
+    ]
+    if case_failures:
+        return "completed_with_case_failures"
+    warnings = [case for case in state.cases if case.warnings]
+    if warnings or state.warnings:
+        return "completed_with_warnings"
+    return "completed"
 
 
 def _initial_multi_run_state(

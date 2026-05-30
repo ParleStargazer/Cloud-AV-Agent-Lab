@@ -246,3 +246,44 @@ single-run runner，未触发云操作，未读取样本文件内容。
 classification 提供稳定测试夹具。
 
 下一阶段建议进入 Commit 8：使用 fake runner 串行执行 selected samples。
+
+## 2026-05-30 Commit 8：Serial Scheduler + Fake Runner Execution
+
+本阶段完成 `multi-run` 第八阶段串行调度 MVP：
+
+- 补查并收紧 Commit 7 的 runner contract：
+  - `SingleRunRequest` 已包含 `batch_id`、`sample_index`、`sample_id`、
+    `case_name`、`sample_ref`、`case_dir`、`product_id`、
+    `manifest_sha256`、`batch_plan_sha256`。
+  - `SingleRunRunnerResult.failure_kind` 明确区分 `case_failure` 和
+    `environment_failure`，后续 stop rule 不依赖模糊 failed 状态。
+  - `cleanup_restore_failed` fake fixture 固定映射为
+    `failure_kind = environment_failure`、`unsafe_to_continue = true`、
+    `manual_intervention_required = true`、`cleanup_status = restore_failed`。
+- 新增 `load_batch_plan(...)`，从 `batch_plan.json` 还原 plan / selection /
+  execution policy，并校验 schema。
+- 新增 `execute_multi_run_batch(...)`：
+  - 从 batch root 读取 `batch_plan.json` 和相对路径
+    `sample_manifest.jsonl`。
+  - 校验 manifest digest 与 batch plan 一致。
+  - 按 `selected_indexes` 顺序创建 `cases/<index>_<sha16>/`。
+  - 构造 `SingleRunRequest` 并调用 fake runner。
+  - 持续写入 `multi_run_state.json` 与 `multi_run_events.jsonl`。
+  - 默认 case failure 继续执行后续样本。
+  - `failure_policy = stop-on-case-failure` 时遇到 case failure 停止。
+  - environment failure / unsafe cleanup 必定停止 batch。
+- `multi-run` CLI 在非 `--plan-only` 时会运行 fake scheduler；`--plan-only`
+  仍只生成计划产物后退出。
+- 新增 `tests/test_multi_run_scheduler.py`，覆盖：
+  - selected indexes 按排序后的顺序执行。
+  - 每个 case 生成独立目录。
+  - case failure 默认继续。
+  - `stop-on-case-failure` 停止。
+  - environment failure 强制停止。
+  - scheduler 写入 preflight、case、single-run、finalize、batch finished
+    事件。
+
+本阶段仍未接入真实 single-run runner，未触发云操作，未读取样本文件内容；
+fake scheduler 只用于压稳 state/event/failure-policy 语义。
+
+下一阶段建议进入 Commit 9：failure classification 与更完整的状态转换规则。
