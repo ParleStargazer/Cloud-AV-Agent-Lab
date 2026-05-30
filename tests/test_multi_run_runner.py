@@ -7,12 +7,16 @@ from pathlib import Path
 from cloud_av_agent_lab.orchestration.multi_run import (
     FakeSingleRunRunner,
     SingleRunRequest,
+    SingleRunRunnerResult,
+    classify_runner_result,
     fake_single_run_result,
 )
 
 
 class MultiRunFakeRunnerTests(unittest.TestCase):
-    def test_completed_result_maps_to_resumable_case_state(self) -> None:
+    def test_completed_fake_result_maps_to_simulated_non_resumable_case_state(
+        self,
+    ) -> None:
         request = _request()
 
         result = fake_single_run_result("completed", request)
@@ -20,11 +24,39 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
 
         self.assertEqual(result.case_status, "completed")
         self.assertEqual(result.cleanup_status, "restored")
-        self.assertTrue(case_state.resume_eligible)
+        self.assertEqual(result.result_source, "fake_runner")
+        self.assertTrue(result.simulated)
+        self.assertFalse(case_state.resume_eligible)
+        self.assertEqual(case_state.result_source, "fake_runner")
+        self.assertTrue(case_state.simulated)
         self.assertEqual(case_state.case_name, "eicar")
         self.assertEqual(case_state.evidence_status, "exported")
         json.dumps(result.to_dict())
         json.dumps(case_state.to_dict())
+
+    def test_real_completed_result_maps_to_resumable_case_state(self) -> None:
+        request = _request()
+        result = SingleRunRunnerResult(
+            run_id=request.run_id,
+            case_id=request.case_id,
+            final_status="completed",
+            case_status="completed",
+            single_run_status="completed",
+            cleanup_status="restored",
+            evidence_status="exported",
+            summary_status="collected",
+            readiness_status="ok",
+            verdict="detected_or_blocked",
+            confidence="high",
+            result_source="single_run_runner",
+            simulated=False,
+        )
+
+        case_state = result.to_case_state(request)
+
+        self.assertTrue(case_state.resume_eligible)
+        self.assertEqual(case_state.failure_kind, None)
+        self.assertFalse(case_state.simulated)
 
     def test_fake_runner_records_requests_and_uses_per_index_scenario(self) -> None:
         runner = FakeSingleRunRunner(
@@ -75,6 +107,28 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
         self.assertEqual(result.cleanup_status, "restore_failed")
         self.assertEqual(result.failure_kind, "environment_failure")
         self.assertTrue(result.unsafe_to_continue)
+
+    def test_failure_classifier_infers_environment_failure_from_cleanup(self) -> None:
+        request = _request()
+        result = SingleRunRunnerResult(
+            run_id=request.run_id,
+            case_id=request.case_id,
+            final_status="completed_with_cleanup_warning",
+            case_status="completed",
+            single_run_status="completed",
+            cleanup_status="unknown",
+            evidence_status="exported",
+            summary_status="collected",
+            result_source="single_run_runner",
+            simulated=False,
+        )
+
+        case_state = result.to_case_state(request)
+
+        self.assertEqual(classify_runner_result(result), "environment_failure")
+        self.assertEqual(result.to_dict()["failure_kind"], "environment_failure")
+        self.assertEqual(case_state.failure_kind, "environment_failure")
+        self.assertFalse(case_state.resume_eligible)
 
     def test_request_serialization_contains_metadata_not_sample_bytes(self) -> None:
         payload = _request().to_dict()

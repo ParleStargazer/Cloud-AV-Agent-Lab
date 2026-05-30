@@ -32,6 +32,9 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertEqual(
                 [case["case_status"] for case in state["cases"]], ["completed"] * 3
             )
+            self.assertTrue(state["cases"][0]["simulated"])
+            self.assertEqual(state["cases"][0]["result_source"], "fake_runner")
+            self.assertFalse(state["cases"][0]["resume_eligible"])
 
     def test_case_failure_default_policy_continues(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -72,10 +75,40 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertEqual([request.sample_index for request in runner.requests], [1])
             state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
             self.assertEqual(state["batch_state"], "stopped_for_environment_failure")
+            self.assertEqual(state["final_status"], "stopped_for_environment_failure")
             self.assertTrue(state["unsafe_to_continue"])
             self.assertTrue(state["manual_intervention_required"])
             self.assertEqual(state["cases"][0]["cleanup_status"], "restore_failed")
+            self.assertEqual(state["cases"][0]["failure_kind"], "environment_failure")
             self.assertEqual(state["cases"][1]["case_status"], "planned")
+
+    def test_cleanup_restore_failure_stops_batch_as_environment_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, runner = _plan_and_execute(
+                tmp,
+                scenarios={1: "cleanup_restore_failed", 2: "completed"},
+            )
+
+            self.assertEqual([request.sample_index for request in runner.requests], [1])
+            state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
+            self.assertEqual(state["batch_state"], "stopped_for_environment_failure")
+            self.assertEqual(state["final_status"], "stopped_for_environment_failure")
+            self.assertTrue(state["unsafe_to_continue"])
+            self.assertTrue(state["manual_intervention_required"])
+            self.assertEqual(state["cases"][0]["cleanup_status"], "restore_failed")
+            self.assertEqual(state["cases"][0]["failure_kind"], "environment_failure")
+            self.assertEqual(state["cases"][1]["case_status"], "planned")
+
+    def test_case_directory_uses_manifest_case_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, runner = _plan_and_execute(
+                tmp,
+                indexes=(1,),
+                case_names={1: "custom-case-name"},
+            )
+
+            self.assertEqual(runner.requests[0].case_dir.name, "0001_custom-case-name")
+            self.assertTrue((batch_dir / "cases" / "0001_custom-case-name").is_dir())
 
     def test_scheduler_writes_expected_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -83,8 +116,8 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
 
             events = read_multi_run_events(batch_dir / "multi_run_events.jsonl")
             event_types = [event["type"] for event in events]
-            self.assertIn("preflight_started", event_types)
-            self.assertIn("preflight_passed", event_types)
+            self.assertIn("lightweight_preflight_started", event_types)
+            self.assertIn("lightweight_preflight_passed", event_types)
             self.assertIn("case_started", event_types)
             self.assertIn("single_run_started", event_types)
             self.assertIn("single_run_completed", event_types)
@@ -98,10 +131,11 @@ def _plan_and_execute(
     indexes: tuple[int, ...] = (1, 2),
     scenarios: dict[int, str] | None = None,
     failure_policy: str = "continue",
+    case_names: dict[int, str] | None = None,
 ) -> tuple[Path, FakeSingleRunRunner]:
     tmp_path = Path(tmp)
     manifest_path = tmp_path / "sample_manifest.jsonl"
-    _write_manifest(manifest_path)
+    _write_manifest(manifest_path, case_names=case_names)
     manifest = load_sample_manifest(manifest_path)
     selection = parse_sample_selection(
         manifest.indexes,
@@ -126,15 +160,24 @@ def _plan_and_execute(
     return artifacts.batch_dir, runner
 
 
-def _write_manifest(path: Path) -> None:
-    entries = [_entry(1, "a"), _entry(2, "b"), _entry(3, "c")]
+def _write_manifest(path: Path, *, case_names: dict[int, str] | None = None) -> None:
+    entries = [
+        _entry(1, "a", case_name=case_names.get(1) if case_names else None),
+        _entry(2, "b", case_name=case_names.get(2) if case_names else None),
+        _entry(3, "c", case_name=case_names.get(3) if case_names else None),
+    ]
     path.write_text(
         "".join(json.dumps(entry, sort_keys=True) + "\n" for entry in entries),
         encoding="utf-8",
     )
 
 
-def _entry(index: int, digest_char: str) -> dict[str, object]:
+def _entry(
+    index: int,
+    digest_char: str,
+    *,
+    case_name: str | None = None,
+) -> dict[str, object]:
     sha256 = digest_char * 64
     return {
         "schema_version": SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION,
@@ -143,7 +186,7 @@ def _entry(index: int, digest_char: str) -> dict[str, object]:
         "manifest_tool_version": "0.1.0",
         "sample_index": index,
         "sample_id": sha256,
-        "case_name": sha256[:16],
+        "case_name": case_name or sha256[:16],
         "sha256": sha256,
         "md5": digest_char * 32,
         "size": 100 + index,

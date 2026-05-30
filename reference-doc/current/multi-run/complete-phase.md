@@ -287,3 +287,48 @@ classification 提供稳定测试夹具。
 fake scheduler 只用于压稳 state/event/failure-policy 语义。
 
 下一阶段建议进入 Commit 9：failure classification 与更完整的状态转换规则。
+
+## 2026-05-30 Commit 9：Failure Classification + Batch Stop Rules
+
+本阶段完成 `multi-run` 第九阶段 failure classification 与状态收口：
+
+- 新增统一 `classify_runner_result(...)` helper：
+  - 显式 `failure_kind` 优先。
+  - `unsafe_to_continue` / `manual_intervention_required` 视为
+    `environment_failure`。
+  - `cleanup_status = restore_failed | unknown` 视为
+    `environment_failure`。
+  - `case_status = failed`、`single_run_status = failed | timeout`、
+    `summary_status = missing` 视为 `case_failure`。
+- `SingleRunRunnerResult.to_case_state(...)` 通过统一 helper 写入
+  `CaseState.failure_kind`，避免调度层和 case 状态分类不一致。
+- fake runner 输出新增：
+  - `result_source = fake_runner`
+  - `simulated = true`
+- fake / dry-run 调度结果不再标记为 `resume_eligible`，避免后续 aggregate
+  或 resume 把模拟完成误当成真实完成。
+- lightweight preflight 事件改名为：
+  - `lightweight_preflight_started`
+  - `lightweight_preflight_passed`
+  该事件只表示 planning 层输入校验通过，不暗示已经检查 Guest Agent、
+  Desktop Worker 或云端环境。
+- case 目录命名改为基于 manifest `case_name`：
+  `cases/<sample_index>_<safe_case_name_prefix>/`，不从文件名反推。
+- environment failure / cleanup restore failed 会在顶层 state 写入：
+  - `unsafe_to_continue = true`
+  - `manual_intervention_required = true`
+  - `final_status = stopped_for_environment_failure`
+- 新增 / 更新测试覆盖：
+  - fake runner simulated 结果不可 resume。
+  - 真实 runner 成功结果仍可 resume。
+  - cleanup unknown / restore failed 可被统一 helper 推断为
+    `environment_failure`。
+  - cleanup restore failed 会停止 batch。
+  - case 目录使用 manifest `case_name`。
+  - lightweight preflight 事件名称。
+
+本阶段仍未接入真实 single-run runner，未触发云操作，未读取样本文件内容；
+所有调度执行仍由 fake runner 驱动。
+
+下一阶段建议进入 Commit 10：接入真实 single-run runner adapter 前的
+preflight / resume 设计收口。

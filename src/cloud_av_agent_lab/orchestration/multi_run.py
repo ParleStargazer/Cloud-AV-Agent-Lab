@@ -79,7 +79,7 @@ BatchState: TypeAlias = Literal[
     "created",
     "planning",
     "manifest_ready",
-    "preflight_passed",
+    "lightweight_preflight_passed",
     "running",
     "stopping",
     "stopped_by_user",
@@ -142,7 +142,7 @@ BATCH_STATES: tuple[str, ...] = (
     "created",
     "planning",
     "manifest_ready",
-    "preflight_passed",
+    "lightweight_preflight_passed",
     "running",
     "stopping",
     "stopped_by_user",
@@ -959,6 +959,8 @@ class CaseState:
     verdict: Verdict = "unknown"
     confidence: str = ""
     failure_kind: FailureKind | None = None
+    result_source: str = ""
+    simulated: bool = False
     error_summary: str = ""
     evidence_bundle_path: str = ""
     run_state_path: str = ""
@@ -984,6 +986,8 @@ class CaseState:
             "verdict": self.verdict,
             "confidence": self.confidence,
             "failure_kind": self.failure_kind,
+            "result_source": self.result_source,
+            "simulated": self.simulated,
             "error_summary": self.error_summary,
             "evidence_bundle_path": self.evidence_bundle_path,
             "run_state_path": self.run_state_path,
@@ -1133,6 +1137,8 @@ class SingleRunRunnerResult:
     verdict: Verdict = "unknown"
     confidence: str = ""
     failure_kind: FailureKind | None = None
+    result_source: str = ""
+    simulated: bool = False
     error_summary: str = ""
     evidence_bundle_path: str = ""
     run_state_path: str = ""
@@ -1155,7 +1161,9 @@ class SingleRunRunnerResult:
             "readiness_status": self.readiness_status,
             "verdict": self.verdict,
             "confidence": self.confidence,
-            "failure_kind": self.failure_kind,
+            "failure_kind": classify_runner_result(self),
+            "result_source": self.result_source,
+            "simulated": self.simulated,
             "error_summary": self.error_summary,
             "evidence_bundle_path": self.evidence_bundle_path,
             "run_state_path": self.run_state_path,
@@ -1180,12 +1188,12 @@ class SingleRunRunnerResult:
             evidence_status=self.evidence_status,
             summary_status=self.summary_status,
             readiness_status=self.readiness_status,
-            resume_eligible=(
-                self.case_status == "completed" and self.cleanup_status == "restored"
-            ),
+            resume_eligible=_case_resume_eligible(self),
             verdict=self.verdict,
             confidence=self.confidence,
-            failure_kind=self.failure_kind,
+            failure_kind=classify_runner_result(self),
+            result_source=self.result_source,
+            simulated=self.simulated,
             error_summary=self.error_summary,
             evidence_bundle_path=self.evidence_bundle_path,
             run_state_path=self.run_state_path,
@@ -1234,6 +1242,8 @@ def fake_single_run_result(
         "case_summary_path": summary_path,
         "evidence_bundle_path": evidence_path,
         "duration_seconds": 1.0,
+        "result_source": "fake_runner",
+        "simulated": True,
     }
     if scenario == "completed":
         return SingleRunRunnerResult(
@@ -1366,13 +1376,13 @@ def execute_multi_run_batch(
     append_next_multi_run_event(
         event_log_path,
         batch_id=plan.batch_id,
-        event_type="preflight_started",
+        event_type="lightweight_preflight_started",
         data={"selected_indexes": selected_indexes},
     )
     append_next_multi_run_event(
         event_log_path,
         batch_id=plan.batch_id,
-        event_type="preflight_passed",
+        event_type="lightweight_preflight_passed",
         data={
             "manifest_sha256": manifest.sha256,
             "batch_plan_sha256": batch_plan_sha256,
@@ -1393,7 +1403,7 @@ def execute_multi_run_batch(
     for index in selected_indexes:
         entry = entries_by_index[index]
         planned_case = cases_by_index[index]
-        case_dir = root / "cases" / _case_dir_name(index, entry.sample_id)
+        case_dir = root / "cases" / _case_dir_name(index, entry.case_name)
         case_dir.mkdir(parents=True, exist_ok=True)
         request = _single_run_request_for_entry(
             plan,
@@ -1422,6 +1432,7 @@ def execute_multi_run_batch(
             case_id=request.case_id,
         )
         result = active_runner.run(request)
+        failure_kind = classify_runner_result(result)
         case_state = result.to_case_state(request)
         cases_by_index[index] = case_state
         append_next_multi_run_event(
@@ -1445,7 +1456,7 @@ def execute_multi_run_batch(
             case_id=result.case_id,
             case_status=result.case_status,
             data={
-                "failure_kind": result.failure_kind,
+                "failure_kind": failure_kind,
                 "cleanup_status": result.cleanup_status,
                 "resume_eligible": case_state.resume_eligible,
             },
@@ -1649,8 +1660,8 @@ def _single_run_request_for_entry(
     )
 
 
-def _case_dir_name(sample_index: int, sample_id: str) -> str:
-    return f"{sample_index:04d}_{_safe_batch_id(sample_id)[:16]}"
+def _case_dir_name(sample_index: int, case_name: str) -> str:
+    return f"{sample_index:04d}_{_safe_batch_id(case_name)[:16]}"
 
 
 def _cases_in_selected_order(
@@ -1658,6 +1669,33 @@ def _cases_in_selected_order(
     selected_indexes: tuple[int, ...],
 ) -> tuple[CaseState, ...]:
     return tuple(cases_by_index[index] for index in selected_indexes)
+
+
+def classify_runner_result(result: SingleRunRunnerResult) -> FailureKind | None:
+    if result.failure_kind is not None:
+        return result.failure_kind
+    if result.unsafe_to_continue or result.manual_intervention_required:
+        return "environment_failure"
+    if result.cleanup_status in {"restore_failed", "unknown"}:
+        return "environment_failure"
+    if result.case_status == "failed" or result.single_run_status in {
+        "failed",
+        "timeout",
+    }:
+        return "case_failure"
+    if result.summary_status == "missing":
+        return "case_failure"
+    return None
+
+
+def _case_resume_eligible(result: SingleRunRunnerResult) -> bool:
+    return (
+        not result.simulated
+        and classify_runner_result(result) is None
+        and result.case_status == "completed"
+        and result.single_run_status == "completed"
+        and result.cleanup_status == "restored"
+    )
 
 
 def _ensure_batch_inputs_match(
@@ -1679,10 +1717,11 @@ def _stop_state_for_result(
     result: SingleRunRunnerResult,
     plan: BatchPlan,
 ) -> BatchState | None:
-    if result.failure_kind == "environment_failure" or result.unsafe_to_continue:
+    failure_kind = classify_runner_result(result)
+    if failure_kind == "environment_failure":
         return "stopped_for_environment_failure"
     if (
-        result.failure_kind == "case_failure"
+        failure_kind == "case_failure"
         and plan.execution.failure_policy == "stop-on-case-failure"
     ):
         return "stopped_for_case_failure"
