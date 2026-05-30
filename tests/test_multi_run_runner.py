@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
 from cloud_av_agent_lab.orchestration.multi_run import (
     FakeSingleRunRunner,
+    RealSingleRunRunner,
     SingleRunRequest,
     SingleRunRunnerResult,
     classify_runner_result,
     fake_single_run_result,
 )
+from cloud_av_agent_lab.orchestration.single_run import SingleRunResult
 
 
 class MultiRunFakeRunnerTests(unittest.TestCase):
@@ -134,11 +137,144 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
         payload = _request().to_dict()
 
         self.assertEqual(payload["sample_ref"], r"C:\CloudAvSamples\eicar.bat")
+        self.assertEqual(payload["guest_agent_url"], "http://127.0.0.1:8080")
+        self.assertEqual(payload["desktop_worker_url"], "http://127.0.0.1:8001")
         self.assertEqual(payload["manifest_sha256"], "c" * 64)
         self.assertEqual(payload["batch_plan_sha256"], "d" * 64)
         self.assertEqual(payload["sha256"], "a" * 64)
         self.assertNotIn("sample_bytes", payload)
         self.assertNotIn("content", payload)
+
+    def test_real_runner_passes_manifest_sample_ref_to_single_run_options(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sample_path = tmp_path / "indexed" / "0001_sample.exe"
+            sample_path.parent.mkdir()
+            sample_path.write_bytes(b"harmless")
+            request = _request_for_sample(sample_path, tmp_path / "case")
+            captured = {}
+
+            def fake_run_single_case(options: object) -> SingleRunResult:
+                captured["sample_path"] = str(getattr(options, "sample_path"))
+                captured["product_id"] = getattr(options, "product_id")
+                captured["guest_agent_url"] = getattr(options, "guest_agent_url")
+                captured["desktop_worker_url"] = getattr(options, "desktop_worker_url")
+                run_dir = Path(getattr(options, "runs_dir")) / "run-001"
+                run_dir.mkdir(parents=True)
+                run_state_path = run_dir / "run_state.json"
+                summary_path = run_dir / "case_summary.json"
+                evidence_path = run_dir / "case_evidence.zip"
+                run_state_path.write_text(
+                    json.dumps(
+                        {
+                            "security_product_readiness": {"status": "ok"},
+                            "evidence_export_status": "saved",
+                            "warnings": [],
+                            "errors": [],
+                            "fatal_errors": [],
+                            "stages": {"summary": {"path": str(summary_path)}},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                summary_path.write_text("{}", encoding="utf-8")
+                evidence_path.write_bytes(b"zip")
+                return SingleRunResult(
+                    run_id="real-run-001",
+                    case_id="real-case-001",
+                    run_dir=run_dir,
+                    run_state_path=run_state_path,
+                    generated_config_path=run_dir / "lab.generated.toml",
+                    summary_path=summary_path,
+                    evidence_bundle_path=evidence_path,
+                    verdict="detected_or_blocked",
+                    confidence="high",
+                    final_status="completed",
+                    cleanup_status="restored",
+                    emergency_poweroff_status="not_needed",
+                )
+
+            result = RealSingleRunRunner(run_single_case_func=fake_run_single_case).run(
+                request
+            )
+
+            self.assertEqual(captured["sample_path"], str(sample_path))
+            self.assertEqual(captured["product_id"], "huorong")
+            self.assertEqual(captured["guest_agent_url"], "http://127.0.0.1:8080")
+            self.assertEqual(captured["desktop_worker_url"], "http://127.0.0.1:8001")
+            self.assertEqual(result.run_id, "real-run-001")
+            self.assertEqual(result.case_id, "real-case-001")
+            self.assertEqual(result.result_source, "single_run_runner")
+            self.assertFalse(result.simulated)
+            self.assertEqual(result.evidence_status, "exported")
+            self.assertEqual(result.summary_status, "collected")
+            self.assertEqual(result.readiness_status, "ok")
+
+    def test_real_runner_rejects_sample_ref_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sample_path = tmp_path / "indexed" / "0001_sample.exe"
+            sample_path.parent.mkdir()
+            sample_path.write_bytes(b"changed")
+
+            result = RealSingleRunRunner(
+                run_single_case_func=lambda _options: self.fail("should not run")
+            ).run(_request_for_sample(sample_path, tmp_path / "case", sha256="a" * 64))
+
+            self.assertEqual(result.case_status, "failed")
+            self.assertEqual(result.failure_kind, "case_failure")
+            self.assertIn("metadata does not match", result.error_summary)
+
+    def test_real_runner_maps_cleanup_restore_failed_to_environment_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sample_path = tmp_path / "indexed" / "0001_sample.exe"
+            sample_path.parent.mkdir()
+            sample_path.write_bytes(b"harmless")
+            request = _request_for_sample(sample_path, tmp_path / "case")
+
+            def fake_run_single_case(options: object) -> SingleRunResult:
+                run_dir = Path(getattr(options, "runs_dir")) / "run-001"
+                run_dir.mkdir(parents=True)
+                run_state_path = run_dir / "run_state.json"
+                run_state_path.write_text(
+                    json.dumps(
+                        {
+                            "warnings": [{"message": "cleanup warning"}],
+                            "errors": [{"message": "cleanup failed"}],
+                            "fatal_errors": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return SingleRunResult(
+                    run_id="real-run-001",
+                    case_id="real-case-001",
+                    run_dir=run_dir,
+                    run_state_path=run_state_path,
+                    generated_config_path=run_dir / "lab.generated.toml",
+                    summary_path=None,
+                    evidence_bundle_path=None,
+                    verdict="inconclusive",
+                    confidence="",
+                    final_status="failed_cleanup_failed",
+                    cleanup_status="restore_failed",
+                    emergency_poweroff_status="failed",
+                )
+
+            result = RealSingleRunRunner(run_single_case_func=fake_run_single_case).run(
+                request
+            )
+
+            self.assertEqual(result.failure_kind, "environment_failure")
+            self.assertEqual(result.case_status, "stopped_environment_failure")
+            self.assertTrue(result.unsafe_to_continue)
+            self.assertTrue(result.manual_intervention_required)
+            self.assertEqual(result.error_summary, "cleanup failed")
 
 
 def _request(sample_index: int = 1) -> SingleRunRequest:
@@ -153,6 +289,8 @@ def _request(sample_index: int = 1) -> SingleRunRequest:
         instance_id="lhins-test",
         snapshot_id="lhsnap-test",
         region="ap-singapore",
+        guest_agent_url="http://127.0.0.1:8080",
+        desktop_worker_url="http://127.0.0.1:8001",
         sample_ref=r"C:\CloudAvSamples\eicar.bat",
         manifest_sha256="c" * 64,
         batch_plan_sha256="d" * 64,
@@ -162,6 +300,40 @@ def _request(sample_index: int = 1) -> SingleRunRequest:
         original_filename="eicar.bat",
         case_dir=Path(f"cases/{sample_index:04d}_sample"),
         dry_run=True,
+    )
+
+
+def _request_for_sample(
+    sample_path: Path,
+    case_dir: Path,
+    *,
+    sha256: str | None = None,
+) -> SingleRunRequest:
+    import hashlib
+
+    content = sample_path.read_bytes()
+    return SingleRunRequest(
+        batch_id="batch-001",
+        sample_index=1,
+        sample_id=hashlib.sha256(content).hexdigest(),
+        case_name="sample",
+        case_id="0001_sample__huorong",
+        run_id="run-001",
+        product_id="huorong",
+        instance_id="lhins-test",
+        snapshot_id="lhsnap-test",
+        region="ap-singapore",
+        guest_agent_url="http://127.0.0.1:8080",
+        desktop_worker_url="http://127.0.0.1:8001",
+        sample_ref=str(sample_path),
+        manifest_sha256="c" * 64,
+        batch_plan_sha256="d" * 64,
+        sha256=sha256 or hashlib.sha256(content).hexdigest(),
+        md5=hashlib.md5(content, usedforsecurity=False).hexdigest(),
+        size=len(content),
+        original_filename=sample_path.name,
+        case_dir=case_dir,
+        dry_run=False,
     )
 
 

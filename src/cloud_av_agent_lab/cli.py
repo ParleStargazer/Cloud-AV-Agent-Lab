@@ -32,10 +32,12 @@ from cloud_av_agent_lab.guest_agent_server.security_product_readiness import (
 )
 from cloud_av_agent_lab.network.client import NetworkClient
 from cloud_av_agent_lab.orchestration import (
+    FakeSingleRunRunner,
     MultiRunManifestError,
     MultiRunPlanError,
     MultiRunSelectionError,
     MultiRunStateError,
+    RealSingleRunRunner,
     SingleRunOptions,
     build_sample_manifest_from_directory,
     create_multi_run_batch_plan,
@@ -1155,18 +1157,26 @@ def _handle_multi_run(
         message = "multi-run batch plan created; scheduler skipped by --plan-only"
     else:
         try:
+            runner = (
+                FakeSingleRunRunner()
+                if artifacts.batch_plan.execution.dry_run
+                else RealSingleRunRunner()
+            )
             state = execute_multi_run_batch(
                 artifacts.batch_dir,
+                runner=runner,
                 execution_mode=execution_mode,
             )
         except MultiRunStateError as exc:
             parser.exit(2, f"error: {exc}\n")
-        print("Multi-run batch executed with fake single-run runner.")
-        status = state.final_status or state.batch_state
-        message = (
-            "multi-run fake scheduler completed; real single-run runner will be "
-            "added in a later commit"
+        runner_label = (
+            "fake single-run runner"
+            if artifacts.batch_plan.execution.dry_run
+            else "real single-run runner"
         )
+        print(f"Multi-run batch executed with {runner_label}.")
+        status = state.final_status or state.batch_state
+        message = f"multi-run scheduler completed with {runner_label}"
     print(
         json.dumps(
             {

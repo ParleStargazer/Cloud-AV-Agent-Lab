@@ -6,7 +6,7 @@ import os
 import re
 import shutil
 import stat
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1463,6 +1463,8 @@ class SingleRunRequest:
     instance_id: str
     snapshot_id: str
     region: str
+    guest_agent_url: str
+    desktop_worker_url: str
     sample_ref: str
     manifest_sha256: str
     batch_plan_sha256: str
@@ -1486,6 +1488,8 @@ class SingleRunRequest:
             "instance_id": self.instance_id,
             "snapshot_id": self.snapshot_id,
             "region": self.region,
+            "guest_agent_url": self.guest_agent_url,
+            "desktop_worker_url": self.desktop_worker_url,
             "sample_ref": self.sample_ref,
             "manifest_sha256": self.manifest_sha256,
             "batch_plan_sha256": self.batch_plan_sha256,
@@ -1601,6 +1605,59 @@ class FakeSingleRunRunner:
             request.sample_index, self.default_scenario
         )
         return fake_single_run_result(scenario, request)
+
+
+SingleRunEntrypoint = Callable[[Any], Any]
+
+
+class RealSingleRunRunner:
+    def __init__(
+        self,
+        *,
+        run_single_case_func: SingleRunEntrypoint | None = None,
+    ) -> None:
+        self._run_single_case_func = run_single_case_func
+        self.requests: list[SingleRunRequest] = []
+
+    def run(self, request: SingleRunRequest) -> SingleRunRunnerResult:
+        self.requests.append(request)
+        try:
+            _validate_single_run_sample_ref(request)
+            from .single_run import SingleRunOptions, run_single_case
+
+            entrypoint = self._run_single_case_func or run_single_case
+            result = entrypoint(
+                SingleRunOptions(
+                    instance_id=request.instance_id,
+                    snapshot_id=request.snapshot_id,
+                    region=request.region,
+                    sample_name=request.case_name,
+                    sample_path=Path(request.sample_ref),
+                    guest_agent_url=request.guest_agent_url,
+                    product_id=request.product_id,
+                    desktop_worker_url=request.desktop_worker_url,
+                    dry_run=request.dry_run,
+                    runs_dir=request.case_dir,
+                )
+            )
+            return _single_run_result_to_runner_result(request, result)
+        except Exception as exc:  # noqa: BLE001 - normalize runner failures for batch state.
+            return SingleRunRunnerResult(
+                run_id=request.run_id,
+                case_id=request.case_id,
+                final_status="failed",
+                case_status="failed",
+                single_run_status="failed",
+                cleanup_status="not_started",
+                evidence_status="not_started",
+                summary_status="not_started",
+                verdict="inconclusive",
+                failure_kind="case_failure",
+                result_source="single_run_runner",
+                simulated=request.dry_run,
+                error_summary=_safe_multi_run_message(exc),
+                warnings=("single-run runner failed before returning a result",),
+            )
 
 
 def fake_single_run_result(
@@ -1722,6 +1779,211 @@ def fake_single_run_result(
             warnings=("cleanup restore failed",),
         )
     raise MultiRunPlanError(f"unsupported fake single-run scenario: {scenario}")
+
+
+def _validate_single_run_sample_ref(request: SingleRunRequest) -> None:
+    path = Path(request.sample_ref)
+    if not path.is_file():
+        raise MultiRunPlanError(f"sample_ref does not exist: {path}")
+    digest = _hash_sample_file(path)
+    mismatches = [
+        field_name
+        for field_name, expected_value in (
+            ("sha256", request.sha256),
+            ("md5", request.md5),
+            ("size", request.size),
+        )
+        if digest[field_name] != expected_value
+    ]
+    if mismatches:
+        raise MultiRunPlanError(
+            "sample_ref metadata does not match manifest: " + ", ".join(mismatches)
+        )
+
+
+def _single_run_result_to_runner_result(
+    request: SingleRunRequest,
+    result: Any,
+) -> SingleRunRunnerResult:
+    run_state_payload = _read_optional_json_mapping(
+        Path(str(getattr(result, "run_state_path", "")))
+    )
+    warnings = _single_run_warnings(run_state_payload)
+    errors = _single_run_errors(run_state_payload)
+    cleanup_status = _normalize_cleanup_status(
+        str(getattr(result, "cleanup_status", ""))
+    )
+    final_status = str(getattr(result, "final_status", "unknown"))
+    failure_kind = _failure_kind_from_single_run(final_status, cleanup_status)
+    return SingleRunRunnerResult(
+        run_id=str(getattr(result, "run_id", request.run_id)),
+        case_id=str(getattr(result, "case_id", request.case_id)),
+        final_status=final_status,
+        case_status=_case_status_from_single_run(final_status, cleanup_status),
+        single_run_status=_single_run_status_from_final(final_status),
+        cleanup_status=cleanup_status,
+        evidence_status=_evidence_status_from_single_run(result, run_state_payload),
+        summary_status=_summary_status_from_single_run(result, run_state_payload),
+        readiness_status=_readiness_status_from_single_run(run_state_payload),
+        verdict=str(getattr(result, "verdict", "") or "unknown"),
+        confidence=str(getattr(result, "confidence", "")),
+        failure_kind=failure_kind,
+        result_source="single_run_runner",
+        simulated=request.dry_run,
+        error_summary=_first_text(errors),
+        evidence_bundle_path=str(getattr(result, "evidence_bundle_path", "") or ""),
+        run_state_path=str(getattr(result, "run_state_path", "") or ""),
+        case_summary_path=str(getattr(result, "summary_path", "") or ""),
+        warnings=warnings,
+        unsafe_to_continue=cleanup_status == "restore_failed",
+        manual_intervention_required=cleanup_status == "restore_failed",
+    )
+
+
+def _read_optional_json_mapping(path: Path) -> Mapping[str, Any]:
+    if not str(path) or not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _single_run_warnings(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    warnings = payload.get("warnings")
+    if not isinstance(warnings, list):
+        return ()
+    messages: list[str] = []
+    for item in warnings:
+        if isinstance(item, Mapping):
+            message = str(item.get("message", ""))
+        else:
+            message = str(item)
+        if message:
+            messages.append(_redact_multi_run_message(message))
+    return tuple(messages)
+
+
+def _single_run_errors(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    messages: list[str] = []
+    for key in ("fatal_errors", "errors"):
+        values = payload.get(key)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if isinstance(item, Mapping):
+                message = str(item.get("message", ""))
+            else:
+                message = str(item)
+            if message:
+                messages.append(_redact_multi_run_message(message))
+    return tuple(messages)
+
+
+def _normalize_cleanup_status(value: str) -> CleanupStatus:
+    normalized = value or "unknown"
+    if normalized == "dry_run":
+        return "skipped"
+    if normalized in CLEANUP_STATUSES:
+        return normalized  # type: ignore[return-value]
+    return "unknown"
+
+
+def _case_status_from_single_run(
+    final_status: str,
+    cleanup_status: CleanupStatus,
+) -> CaseStatus:
+    if cleanup_status == "restore_failed":
+        return "stopped_environment_failure"
+    if final_status.startswith("completed"):
+        return "completed"
+    if final_status.startswith("failed"):
+        return "failed"
+    return "failed"
+
+
+def _single_run_status_from_final(final_status: str) -> SingleRunStatus:
+    if final_status.startswith("completed"):
+        return "completed"
+    if final_status == "timeout":
+        return "timeout"
+    if final_status.startswith("failed"):
+        return "failed"
+    return "unknown"
+
+
+def _failure_kind_from_single_run(
+    final_status: str,
+    cleanup_status: CleanupStatus,
+) -> FailureKind | None:
+    if cleanup_status in {"restore_failed", "unknown"}:
+        return "environment_failure"
+    if final_status.startswith("failed") or final_status == "timeout":
+        return "case_failure"
+    return None
+
+
+def _evidence_status_from_single_run(
+    result: Any,
+    payload: Mapping[str, Any],
+) -> EvidenceStatus:
+    status = str(payload.get("evidence_export_status", ""))
+    if status == "saved":
+        return "exported"
+    if status in {"failed", "skipped"}:
+        return status  # type: ignore[return-value]
+    path = getattr(result, "evidence_bundle_path", None)
+    return "exported" if path else "not_started"
+
+
+def _summary_status_from_single_run(
+    result: Any,
+    payload: Mapping[str, Any],
+) -> SummaryStatus:
+    stages = payload.get("stages")
+    if isinstance(stages, Mapping):
+        summary = stages.get("summary")
+        if isinstance(summary, Mapping) and summary.get("path"):
+            return "collected"
+    path = getattr(result, "summary_path", None)
+    return "collected" if path else "missing"
+
+
+def _readiness_status_from_single_run(payload: Mapping[str, Any]) -> ReadinessStatus:
+    readiness = payload.get("security_product_readiness")
+    if isinstance(readiness, Mapping):
+        status = str(readiness.get("status", ""))
+        if status in READINESS_STATUSES:
+            return status  # type: ignore[return-value]
+    stages = payload.get("stages")
+    if isinstance(stages, Mapping):
+        stage = stages.get("security_product_readiness")
+        if isinstance(stage, Mapping):
+            status = str(stage.get("status", ""))
+            if status in READINESS_STATUSES:
+                return status  # type: ignore[return-value]
+    return "unknown"
+
+
+def _first_text(values: Iterable[str]) -> str:
+    for value in values:
+        if value:
+            return value
+    return ""
+
+
+def _safe_multi_run_message(error: BaseException) -> str:
+    return _redact_multi_run_message(f"{type(error).__name__}: {error}")
+
+
+def _redact_multi_run_message(message: str) -> str:
+    return re.sub(
+        r"(?i)\b(authorization|bearer|token|secret|password|credential|"
+        r"api[_-]?key|cloud[_-]?secret)\b(\s*[:=]\s*)?[^\s,;\"']*",
+        r"\1=<redacted>",
+        message,
+    )[:500]
 
 
 def execute_multi_run_batch(
@@ -2304,6 +2566,8 @@ def _single_run_request_for_entry(
         instance_id=plan.instance_id,
         snapshot_id=plan.snapshot_id,
         region=plan.region,
+        guest_agent_url=plan.guest_agent_url,
+        desktop_worker_url=plan.desktop_worker_url,
         sample_ref=entry.sample_ref,
         manifest_sha256=plan.manifest_sha256,
         batch_plan_sha256=batch_plan_sha256,
@@ -2552,6 +2816,8 @@ def _check_generated_config_has_no_secrets(path: Path) -> MultiRunPreflightCheck
         "secret",
         "password",
         "credential",
+        "authorization",
+        "bearer",
         "api_key",
         "cloud_secret",
         "tencentcloud_secret",

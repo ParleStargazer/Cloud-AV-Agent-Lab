@@ -530,3 +530,46 @@ primary 在内的所有同 hash 原始相对路径。
 Desktop Worker。
 
 下一阶段建议进入 Commit 14：real single-run runner adapter。
+
+## 2026-05-30 Commit 14：Real Single-Run Runner Adapter
+
+本阶段完成 `multi-run` 第十四阶段真实 single-run runner adapter：
+
+- 新增 `RealSingleRunRunner`：
+  - 将 manifest entry / `SingleRunRequest` 转换为 `SingleRunOptions`。
+  - 传入 `product_id` / `instance_id` / `snapshot_id` / `region`。
+  - 传入 `guest_agent_url` / `desktop_worker_url`。
+  - 将 `sample_ref` 作为 `SingleRunOptions.sample_path`，即后续真实 runner 只使用
+    indexed mirror。
+  - single-run 输出会映射回 `SingleRunRunnerResult`。
+- 真实 runner 启动前会校验 indexed mirror：
+  - `sample_ref` 必须存在。
+  - 实际 sha256 / md5 / size 必须与 manifest 一致。
+  - 不匹配时不调用 single-run，直接记录 case failure。
+- `BatchPlan` / `SingleRunRequest` 补充 Guest Agent 和 Desktop Worker URL，
+  供真实 runner 与 preflight 使用。
+- CLI 行为调整：
+  - `--dry-run` 继续使用 `FakeSingleRunRunner`，不会真实调用 single-run。
+  - 非 `--dry-run` 且非 `--plan-only` 时使用 `RealSingleRunRunner`。
+- 真实 runner 结果映射：
+  - 收集 single-run `run_id` / `case_id`。
+  - 收集 `run_state.json` 路径。
+  - 收集 `case_summary.json` 路径。
+  - 收集 evidence bundle 路径。
+  - 将 cleanup restore failed 映射为 `environment_failure`、
+    `unsafe_to_continue = true`、`manual_intervention_required = true`。
+  - 将普通 single-run failure 映射为 `case_failure`。
+- 补查 Commit 13 的敏感字段检查：
+  - generated config preflight 现在也检查 `authorization` / `bearer`。
+  - 不检查普通 `url` / `agent`，避免 Guest Agent URL 误报。
+- 新增 / 更新测试覆盖：
+  - real runner 把 `sample_ref` 传给 single-run options。
+  - real runner 传递 product / Guest Agent / Desktop Worker 参数。
+  - digest mismatch 不调用 single-run。
+  - cleanup restore failed 映射为 environment failure。
+  - `.to_dict()` 不包含样本 bytes。
+
+本阶段自动测试仍使用 mock / fake entrypoint，不触发真实云操作，不读取
+`configs/real.toml`，不执行样本。真实云 smoke 应在本 commit 后手工执行。
+
+下一阶段建议进入 Commit 15：redaction check + docs / smoke。
