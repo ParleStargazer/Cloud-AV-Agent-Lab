@@ -456,11 +456,13 @@ raw product logs、不读取 `configs/real.toml`、不触发云操作。
   - 复制 primary 样本到 indexed mirror。
   - 生成 `sample_manifest.jsonl`。
   - 生成 `sample_name_map.txt`。
-- `multi-run --sample-dir ...` 在未提供 `--manifest` 时会自动生成：
+- `multi-run --sample-dir ... --platform-sample-dir` 在未提供 `--manifest` 时会自动生成：
   - `sample_index/sample_manifest.jsonl`
   - `sample_index/sample_name_map.txt`
   - `sample_index/indexed/`
   然后进入原有 batch planning 流程。
+- `--sample-dir` 明确只用于云端平台机索引目录；开发机模式必须使用
+  `--manifest`，避免把真实样本放到开发机。
 - resume/rerun 模式如果未显式传 `--manifest`，会读取既有
   `batch_root/batch_id/sample_manifest.jsonl`，不重新扫描 `sample_dir`。
 - 新增 / 更新测试覆盖：
@@ -468,13 +470,22 @@ raw product logs、不读取 `configs/real.toml`、不触发云操作。
   - duplicate sha256 去重与 aliases。
   - sha16 collision prefix 扩展。
   - indexed mirror 生成。
+  - `sample_ref` 指向 indexed mirror，不指向 raw_sample 原始路径。
+  - indexed mirror 输出已存在时拒绝覆盖。
   - raw_sample 不被修改。
   - 已存在 index 输出时拒绝覆盖。
+  - aliases 包含 primary 与 duplicate 原始相对路径。
   - 生成的 manifest 可被现有 loader 读取。
-  - CLI `--sample-dir` 可生成 manifest / name map / indexed mirror。
+  - CLI `--sample-dir --platform-sample-dir` 可生成 manifest / name map /
+    indexed mirror。
 
 本阶段测试只使用临时无害文件。索引器会读取用户显式指定的 `sample_dir`
 以计算 hash 和生成镜像，但不执行、不打开解析、不解压样本，不读取
 `configs/real.toml`，不触发真实云操作。
+
+补查结论：开发机继续要求 `--manifest`；`--sample-dir` 必须显式确认
+`--platform-sample-dir` 后才会索引。manifest 中的 `sample_ref` 指向
+`sample_index/indexed/0001_xxx.ext`，不会指向 raw_sample；`aliases` 保留包含
+primary 在内的所有同 hash 原始相对路径。
 
 下一阶段建议进入 Commit 13：preflight checks before execution。

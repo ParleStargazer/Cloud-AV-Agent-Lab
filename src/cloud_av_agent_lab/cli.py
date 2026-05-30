@@ -477,7 +477,12 @@ def build_parser() -> argparse.ArgumentParser:
     multi_run.add_argument(
         "--sample-dir",
         default="",
-        help="cloud platform sample directory; first skeleton only parses this value",
+        help=("cloud platform sample directory; development hosts must use --manifest"),
+    )
+    multi_run.add_argument(
+        "--platform-sample-dir",
+        action="store_true",
+        help=("confirm --sample-dir is being indexed on the cloud platform host"),
     )
     multi_run.add_argument(
         "--manifest",
@@ -1058,6 +1063,15 @@ def _handle_multi_run(
     if args.max_cases is not None and args.max_cases <= 0:
         parser.exit(
             2, "error: --max-cases must be greater than 0; no samples selected\n"
+        )
+    if args.platform_sample_dir and not args.sample_dir:
+        parser.exit(2, "error: --platform-sample-dir requires --sample-dir\n")
+    if args.sample_dir and not args.platform_sample_dir:
+        parser.exit(
+            2,
+            "error: --sample-dir is only for cloud platform hosts; development "
+            "hosts must use --manifest, or rerun on the platform host with "
+            "--platform-sample-dir\n",
         )
     batch_id = args.batch_id
     if execution_mode == "run" and not args.manifest and not args.sample_dir:

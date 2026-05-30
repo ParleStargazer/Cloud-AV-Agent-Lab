@@ -57,6 +57,9 @@ class MultiRunSampleDirectoryIndexerTests(unittest.TestCase):
             self.assertEqual(
                 sorted(alpha_entry.aliases), ["first.bin", "nested/first-copy.bin"]
             )
+            self.assertIn(alpha_entry.original_filename, alpha_entry.aliases)
+            self.assertIn("/indexed/", alpha_entry.sample_ref)
+            self.assertNotIn("/raw_sample/", alpha_entry.sample_ref)
             self.assertTrue(
                 (artifacts.indexed_dir / alpha_entry.renamed_filename).is_file()
             )
@@ -87,6 +90,20 @@ class MultiRunSampleDirectoryIndexerTests(unittest.TestCase):
             output_dir.mkdir()
             (raw_dir / "sample.txt").write_text("hello", encoding="utf-8")
             (output_dir / "sample_manifest.jsonl").write_text("", encoding="utf-8")
+
+            with self.assertRaisesRegex(MultiRunManifestError, "output already exists"):
+                build_sample_manifest_from_directory(raw_dir, output_dir)
+
+    def test_indexer_rejects_existing_indexed_mirror_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_dir = tmp_path / "raw_sample"
+            output_dir = tmp_path / "sample_index"
+            indexed_dir = output_dir / "indexed"
+            raw_dir.mkdir()
+            indexed_dir.mkdir(parents=True)
+            (raw_dir / "sample.txt").write_text("hello", encoding="utf-8")
+            (indexed_dir / "0001_existing.txt").write_text("old", encoding="utf-8")
 
             with self.assertRaisesRegex(MultiRunManifestError, "output already exists"):
                 build_sample_manifest_from_directory(raw_dir, output_dir)

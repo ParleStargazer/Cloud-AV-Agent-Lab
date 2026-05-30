@@ -885,6 +885,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "http://127.0.0.1:8080",
                         "--sample-dir",
                         str(raw_dir),
+                        "--platform-sample-dir",
                         "--batch-root",
                         str(tmp_path / "batches"),
                         "--batch-id",
@@ -906,6 +907,43 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertTrue((batch_dir / "sample_manifest.jsonl").is_file())
             output = stdout.getvalue()
             self.assertIn('"manifest_sha256"', output)
+
+    def test_multi_run_sample_dir_requires_platform_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_dir = tmp_path / "raw_sample"
+            raw_dir.mkdir()
+            stderr = StringIO()
+
+            with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_error:
+                main(
+                    [
+                        "multi-run",
+                        "--product",
+                        "huorong",
+                        "--instance-id",
+                        "lhins-example",
+                        "--snapshot-id",
+                        "lhsnap-example",
+                        "--region",
+                        "ap-singapore",
+                        "--guest-agent-url",
+                        "http://127.0.0.1:8080",
+                        "--sample-dir",
+                        str(raw_dir),
+                        "--batch-root",
+                        str(tmp_path / "batches"),
+                        "--batch-id",
+                        "sample-dir-test",
+                        "--all",
+                        "--plan-only",
+                    ]
+                )
+
+            self.assertEqual(exit_error.exception.code, 2)
+            self.assertIn(
+                "--sample-dir is only for cloud platform hosts", stderr.getvalue()
+            )
 
     def test_multi_run_rejects_conflicting_selection_options(self) -> None:
         stderr = StringIO()
