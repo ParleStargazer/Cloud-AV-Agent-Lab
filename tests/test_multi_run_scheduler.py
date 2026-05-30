@@ -7,6 +7,7 @@ from pathlib import Path
 
 from cloud_av_agent_lab.orchestration.multi_run import (
     FakeSingleRunRunner,
+    MultiRunPreflightCheck,
     MultiRunStateError,
     SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION,
     create_multi_run_batch_plan,
@@ -118,14 +119,101 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
 
             events = read_multi_run_events(batch_dir / "multi_run_events.jsonl")
             event_types = [event["type"] for event in events]
-            self.assertIn("lightweight_preflight_started", event_types)
-            self.assertIn("lightweight_preflight_passed", event_types)
+            self.assertIn("preflight_started", event_types)
+            self.assertIn("preflight_passed", event_types)
             self.assertIn("case_started", event_types)
             self.assertIn("single_run_started", event_types)
             self.assertIn("single_run_completed", event_types)
             self.assertIn("case_finalized", event_types)
             self.assertIn("aggregate_summary_written", event_types)
             self.assertEqual(event_types[-1], "batch_finished")
+
+    def test_scheduler_writes_preflight_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(tmp, indexes=(1,))
+
+            report = json.loads(
+                (batch_dir / "preflight_report.json").read_text(encoding="utf-8")
+            )
+            checks = {item["name"]: item for item in report["checks"]}
+            self.assertEqual(report["schema_version"], "multi-run-preflight-report.v1")
+            self.assertEqual(report["status"], "passed")
+            self.assertEqual(checks["manifest_digest"]["status"], "passed")
+            self.assertEqual(checks["runner_callable"]["status"], "passed")
+            self.assertEqual(checks["guest_agent_reachability"]["status"], "skipped")
+
+    def test_preflight_failure_stops_before_scheduler(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            manifest_path = tmp_path / "sample_manifest.jsonl"
+            _write_manifest(manifest_path)
+            manifest = load_sample_manifest(manifest_path)
+            selection = parse_sample_selection(manifest.indexes, indexes_text="1")
+            artifacts = create_multi_run_batch_plan(
+                batch_root=tmp_path / "batches",
+                batch_id="batch-test",
+                product_id="huorong",
+                instance_id="lhins-test",
+                snapshot_id="lhsnap-test",
+                region="ap-singapore",
+                guest_agent_url="http://127.0.0.1:8080",
+                desktop_worker_url="http://127.0.0.1:8001",
+                manifest=manifest,
+                selection=selection,
+                dry_run=True,
+                failure_policy="continue",
+            )
+            runner = FakeSingleRunRunner()
+
+            state = execute_multi_run_batch(
+                artifacts.batch_dir,
+                runner=runner,
+                preflight_checker=FailingGuestPreflightChecker(),
+            )
+
+            self.assertEqual(runner.requests, [])
+            self.assertEqual(state.batch_state, "failed_preflight")
+            self.assertEqual(state.final_status, "failed_preflight")
+            self.assertIn("guest agent unavailable", state.errors[0])
+            report = json.loads(
+                (artifacts.batch_dir / "preflight_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(report["status"], "failed")
+
+    def test_preflight_unknown_product_stops_before_scheduler(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            manifest_path = tmp_path / "sample_manifest.jsonl"
+            _write_manifest(manifest_path)
+            manifest = load_sample_manifest(manifest_path)
+            selection = parse_sample_selection(manifest.indexes, indexes_text="1")
+            artifacts = create_multi_run_batch_plan(
+                batch_root=tmp_path / "batches",
+                batch_id="batch-test",
+                product_id="huorong",
+                instance_id="lhins-test",
+                snapshot_id="lhsnap-test",
+                region="ap-singapore",
+                guest_agent_url="http://127.0.0.1:8080",
+                desktop_worker_url="http://127.0.0.1:8001",
+                manifest=manifest,
+                selection=selection,
+                dry_run=True,
+                failure_policy="continue",
+            )
+            plan_path = artifacts.batch_dir / "batch_plan.json"
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan["product_id"] = "unknown-product"
+            plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            runner = FakeSingleRunRunner()
+
+            state = execute_multi_run_batch(artifacts.batch_dir, runner=runner)
+
+            self.assertEqual(runner.requests, [])
+            self.assertEqual(state.batch_state, "failed_preflight")
+            self.assertIn("product_profile_known", state.errors[0])
 
     def test_scheduler_writes_aggregate_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -404,6 +492,24 @@ def _plan_and_execute(
     runner = FakeSingleRunRunner(scenarios_by_sample_index=scenarios)
     execute_multi_run_batch(artifacts.batch_dir, runner=runner)
     return artifacts.batch_dir, runner
+
+
+class FailingGuestPreflightChecker:
+    def check_guest_agent_url(self, url: str) -> MultiRunPreflightCheck:
+        return MultiRunPreflightCheck(
+            name="guest_agent_reachability",
+            status="failed",
+            message="guest agent unavailable",
+            data={"url_configured": bool(url)},
+        )
+
+    def check_desktop_worker_url(self, url: str) -> MultiRunPreflightCheck:
+        return MultiRunPreflightCheck(
+            name="desktop_worker_reachability",
+            status="skipped",
+            message="not reached because guest preflight failed",
+            data={"url_configured": bool(url)},
+        )
 
 
 def _mark_cases_as_real_resume_eligible(batch_dir: Path) -> None:

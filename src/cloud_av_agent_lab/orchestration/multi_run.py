@@ -11,12 +11,14 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Protocol, TypeAlias
+from urllib.parse import urlparse
 
 SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION = "multi-run-sample.v1"
 BATCH_PLAN_SCHEMA_VERSION = "multi-run-plan.v1"
 MULTI_RUN_STATE_SCHEMA_VERSION = "multi-run-state.v1"
 MULTI_RUN_EVENT_SCHEMA_VERSION = "multi-run-event.v1"
 MULTI_RUN_AGGREGATE_SUMMARY_SCHEMA_VERSION = "multi-run-aggregate-summary.v1"
+MULTI_RUN_PREFLIGHT_REPORT_SCHEMA_VERSION = "multi-run-preflight-report.v1"
 MULTI_RUN_VERSION = "multi-run.v1"
 
 FailureKind: TypeAlias = Literal[
@@ -89,6 +91,7 @@ BatchState: TypeAlias = Literal[
     "planning",
     "manifest_ready",
     "lightweight_preflight_passed",
+    "failed_preflight",
     "running",
     "stopping",
     "stopped_by_user",
@@ -104,6 +107,7 @@ BatchState: TypeAlias = Literal[
 SelectionMode: TypeAlias = Literal["all", "range", "indexes", "from_to"]
 EntryStatus: TypeAlias = Literal["ready", "skipped", "invalid"]
 SampleSourceKind: TypeAlias = Literal["local_platform_path", "external_reference"]
+PreflightCheckStatus: TypeAlias = Literal["passed", "failed", "skipped"]
 
 ALLOWED_SAMPLE_SOURCE_KINDS: tuple[str, ...] = (
     "local_platform_path",
@@ -152,6 +156,7 @@ BATCH_STATES: tuple[str, ...] = (
     "planning",
     "manifest_ready",
     "lightweight_preflight_passed",
+    "failed_preflight",
     "running",
     "stopping",
     "stopped_by_user",
@@ -957,6 +962,81 @@ class MultiRunAggregateArtifacts:
 
 
 @dataclass(frozen=True)
+class MultiRunPreflightCheck:
+    name: str
+    status: PreflightCheckStatus
+    message: str = ""
+    data: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "status": self.status,
+            "message": self.message,
+            "data": _jsonable(dict(self.data)),
+        }
+
+
+@dataclass(frozen=True)
+class MultiRunPreflightReport:
+    batch_id: str
+    generated_at_utc: str
+    checks: tuple[MultiRunPreflightCheck, ...]
+    schema_version: str = MULTI_RUN_PREFLIGHT_REPORT_SCHEMA_VERSION
+
+    @property
+    def passed(self) -> bool:
+        return all(check.status != "failed" for check in self.checks)
+
+    @property
+    def failed_checks(self) -> tuple[MultiRunPreflightCheck, ...]:
+        return tuple(check for check in self.checks if check.status == "failed")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "batch_id": self.batch_id,
+            "generated_at_utc": self.generated_at_utc,
+            "status": "passed" if self.passed else "failed",
+            "checks": [check.to_dict() for check in self.checks],
+        }
+
+
+class MultiRunPreflightChecker(Protocol):
+    def check_guest_agent_url(self, url: str) -> MultiRunPreflightCheck:
+        """Return the Guest Agent reachability check result."""
+
+    def check_desktop_worker_url(self, url: str) -> MultiRunPreflightCheck:
+        """Return the Desktop Worker reachability check result."""
+
+
+class StaticMultiRunPreflightChecker:
+    """Safe default checker that does not perform network I/O."""
+
+    def check_guest_agent_url(self, url: str) -> MultiRunPreflightCheck:
+        return MultiRunPreflightCheck(
+            name="guest_agent_reachability",
+            status="skipped",
+            message=(
+                "network reachability is deferred; static preflight only validates "
+                "URL shape"
+            ),
+            data={"url_configured": bool(url), "network_io": False},
+        )
+
+    def check_desktop_worker_url(self, url: str) -> MultiRunPreflightCheck:
+        return MultiRunPreflightCheck(
+            name="desktop_worker_reachability",
+            status="skipped",
+            message=(
+                "network reachability is deferred; static preflight only validates "
+                "URL shape"
+            ),
+            data={"url_configured": bool(url), "network_io": False},
+        )
+
+
+@dataclass(frozen=True)
 class BatchPlan:
     batch_id: str
     created_at_utc: str
@@ -969,6 +1049,8 @@ class BatchPlan:
     generated_config_sha256: str
     selection: BatchSelection
     execution: BatchExecutionPolicy = field(default_factory=BatchExecutionPolicy)
+    guest_agent_url: str = ""
+    desktop_worker_url: str = ""
     single_run_runner_version: str = ""
     multi_run_version: str = ""
     product_profile_version: str = ""
@@ -986,6 +1068,8 @@ class BatchPlan:
             "sample_manifest_path": self.sample_manifest_path,
             "manifest_sha256": self.manifest_sha256,
             "generated_config_sha256": self.generated_config_sha256,
+            "guest_agent_url": self.guest_agent_url,
+            "desktop_worker_url": self.desktop_worker_url,
             "single_run_runner_version": self.single_run_runner_version,
             "multi_run_version": self.multi_run_version,
             "product_profile_version": self.product_profile_version,
@@ -1054,6 +1138,8 @@ def create_multi_run_batch_plan(
         sample_manifest_path=manifest_copy_path.name,
         manifest_sha256=manifest.sha256,
         generated_config_sha256=generated_config_sha256,
+        guest_agent_url=guest_agent_url,
+        desktop_worker_url=desktop_worker_url,
         single_run_runner_version="single-run.v1",
         multi_run_version=MULTI_RUN_VERSION,
         product_profile_version=f"{product_id}.v1",
@@ -1122,6 +1208,48 @@ def create_multi_run_batch_plan(
 def default_batch_id(product_id: str) -> str:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"batch_{stamp}_{_safe_batch_id(product_id or 'product')}"
+
+
+def run_multi_run_preflight(
+    batch_dir: Path | str,
+    *,
+    plan: BatchPlan,
+    manifest: LoadedSampleManifest,
+    batch_plan_sha256: str,
+    runner: SingleRunRunner,
+    checker: MultiRunPreflightChecker | None = None,
+) -> MultiRunPreflightReport:
+    root = Path(batch_dir)
+    active_checker = checker or StaticMultiRunPreflightChecker()
+    checks = [
+        _check_batch_directory_writable(root),
+        _check_manifest_digest(plan, manifest),
+        _check_selected_indexes(plan, manifest),
+        _check_runner_callable(runner),
+        _check_product_profile(plan.product_id),
+        _check_cloud_identifier("instance_id", plan.instance_id),
+        _check_cloud_identifier("snapshot_id", plan.snapshot_id),
+        _check_region(plan.region),
+        _check_http_url("guest_agent_url", plan.guest_agent_url),
+        _check_http_url("desktop_worker_url", plan.desktop_worker_url),
+        _safe_preflight_call(
+            "guest_agent_reachability",
+            lambda: active_checker.check_guest_agent_url(plan.guest_agent_url),
+        ),
+        _safe_preflight_call(
+            "desktop_worker_reachability",
+            lambda: active_checker.check_desktop_worker_url(plan.desktop_worker_url),
+        ),
+        _check_instance_lock_available(root, plan.instance_id, plan.batch_id),
+        _check_evidence_output_writable(root),
+        _check_generated_config_has_no_secrets(root / "multi_run.generated.toml"),
+        _check_batch_plan_sha256(batch_plan_sha256),
+    ]
+    return MultiRunPreflightReport(
+        batch_id=plan.batch_id,
+        generated_at_utc=utc_now(),
+        checks=tuple(checks),
+    )
 
 
 def render_multi_run_generated_config(
@@ -1601,6 +1729,7 @@ def execute_multi_run_batch(
     *,
     runner: SingleRunRunner | None = None,
     execution_mode: MultiRunExecutionMode = "run",
+    preflight_checker: MultiRunPreflightChecker | None = None,
 ) -> MultiRunState:
     root = Path(batch_dir)
     plan_path = root / "batch_plan.json"
@@ -1630,24 +1759,60 @@ def execute_multi_run_batch(
         )
     state = replace(state, batch_state="running", final_status="")
     write_multi_run_state(state_path, state)
+    active_runner = runner or FakeSingleRunRunner()
     append_next_multi_run_event(
         event_log_path,
         batch_id=plan.batch_id,
-        event_type="lightweight_preflight_started",
+        event_type="preflight_started",
         data={"selected_indexes": selected_indexes},
     )
+    preflight_report = run_multi_run_preflight(
+        root,
+        plan=plan,
+        manifest=manifest,
+        batch_plan_sha256=batch_plan_sha256,
+        runner=active_runner,
+        checker=preflight_checker,
+    )
+    preflight_report_path = root / "preflight_report.json"
+    _write_json_atomic(preflight_report_path, preflight_report.to_dict())
+    preflight_failed_messages = [
+        f"{check.name}: {check.message}" for check in preflight_report.failed_checks
+    ]
     append_next_multi_run_event(
         event_log_path,
         batch_id=plan.batch_id,
-        event_type="lightweight_preflight_passed",
+        event_type="preflight_passed"
+        if preflight_report.passed
+        else "preflight_failed",
         data={
             "manifest_sha256": manifest.sha256,
             "batch_plan_sha256": batch_plan_sha256,
             "runner": "fake" if runner is None else type(runner).__name__,
+            "preflight_report_path": preflight_report_path.name,
+            "failed_checks": preflight_failed_messages,
         },
     )
+    if not preflight_report.passed:
+        state = replace(
+            state,
+            batch_state="failed_preflight",
+            final_status="failed_preflight",
+            errors=tuple(preflight_failed_messages),
+        )
+        write_multi_run_state(state_path, state)
+        append_next_multi_run_event(
+            event_log_path,
+            batch_id=plan.batch_id,
+            event_type="batch_finished",
+            data={
+                "final_status": state.final_status,
+                "batch_state": state.batch_state,
+                "preflight_report_path": preflight_report_path.name,
+            },
+        )
+        return state
 
-    active_runner = runner or FakeSingleRunRunner()
     entries_by_index = manifest.by_index()
     cases_by_index = {case.sample_index: case for case in state.cases}
     stop_state: BatchState | None = None
@@ -2018,6 +2183,8 @@ def load_batch_plan(path: Path | str) -> BatchPlan:
         ),
         selection=selection,
         execution=execution,
+        guest_agent_url=str(payload.get("guest_agent_url", "")),
+        desktop_worker_url=str(payload.get("desktop_worker_url", "")),
         single_run_runner_version=str(payload.get("single_run_runner_version", "")),
         multi_run_version=str(payload.get("multi_run_version", "")),
         product_profile_version=str(payload.get("product_profile_version", "")),
@@ -2191,6 +2358,249 @@ def _case_resume_eligible(result: SingleRunRunnerResult) -> bool:
         and result.case_status == "completed"
         and result.single_run_status == "completed"
         and result.cleanup_status == "restored"
+    )
+
+
+def _check_batch_directory_writable(batch_dir: Path) -> MultiRunPreflightCheck:
+    test_path = batch_dir / ".preflight-write-test"
+    try:
+        test_path.write_text("ok", encoding="utf-8")
+        test_path.unlink(missing_ok=True)
+    except OSError as exc:
+        return _preflight_failed(
+            "batch_directory_writable",
+            f"batch directory is not writable: {type(exc).__name__}",
+        )
+    return _preflight_passed("batch_directory_writable", "batch directory is writable")
+
+
+def _check_manifest_digest(
+    plan: BatchPlan,
+    manifest: LoadedSampleManifest,
+) -> MultiRunPreflightCheck:
+    if manifest.sha256 != plan.manifest_sha256:
+        return _preflight_failed(
+            "manifest_digest",
+            "sample manifest sha256 does not match batch plan",
+            {
+                "manifest_sha256": manifest.sha256,
+                "plan_manifest_sha256": plan.manifest_sha256,
+            },
+        )
+    return _preflight_passed(
+        "manifest_digest",
+        "sample manifest digest is present and matches batch plan",
+        {"manifest_sha256": manifest.sha256},
+    )
+
+
+def _check_selected_indexes(
+    plan: BatchPlan,
+    manifest: LoadedSampleManifest,
+) -> MultiRunPreflightCheck:
+    available = set(manifest.indexes)
+    missing = [
+        index for index in plan.selection.selected_indexes if index not in available
+    ]
+    if missing:
+        return _preflight_failed(
+            "selected_indexes_valid",
+            "batch plan selected unavailable sample indexes",
+            {"missing_indexes": missing},
+        )
+    if not plan.selection.selected_indexes:
+        return _preflight_failed("selected_indexes_valid", "no samples selected")
+    return _preflight_passed(
+        "selected_indexes_valid",
+        "selected sample indexes are available in manifest",
+        {"selected_indexes": plan.selection.selected_indexes},
+    )
+
+
+def _check_runner_callable(runner: SingleRunRunner) -> MultiRunPreflightCheck:
+    if not callable(getattr(runner, "run", None)):
+        return _preflight_failed("runner_callable", "single-run runner is not callable")
+    return _preflight_passed("runner_callable", "single-run runner is callable")
+
+
+def _check_product_profile(product_id: str) -> MultiRunPreflightCheck:
+    from .single_run import supported_single_run_products
+
+    supported = supported_single_run_products()
+    if product_id not in supported:
+        return _preflight_failed(
+            "product_profile_known",
+            f"unsupported security product: {product_id}",
+            {"supported_products": supported},
+        )
+    return _preflight_passed(
+        "product_profile_known",
+        "security product profile is available",
+        {"product_id": product_id},
+    )
+
+
+def _check_cloud_identifier(name: str, value: str) -> MultiRunPreflightCheck:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{1,127}", value):
+        return _preflight_failed(
+            f"{name}_format",
+            f"{name} format is invalid",
+            {"value_present": bool(value)},
+        )
+    return _preflight_passed(f"{name}_format", f"{name} format is valid")
+
+
+def _check_region(region: str) -> MultiRunPreflightCheck:
+    if not re.fullmatch(r"[a-z]+(?:-[a-z0-9]+)+", region):
+        return _preflight_failed(
+            "region_format",
+            "region format is invalid",
+            {"value_present": bool(region)},
+        )
+    return _preflight_passed("region_format", "region format is valid")
+
+
+def _check_http_url(name: str, url: str) -> MultiRunPreflightCheck:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return _preflight_failed(
+            f"{name}_format",
+            f"{name} must be an http or https URL with a hostname",
+            {"value_present": bool(url)},
+        )
+    return _preflight_passed(
+        f"{name}_format",
+        f"{name} has a valid URL shape",
+        {"scheme": parsed.scheme, "host_configured": True},
+    )
+
+
+def _safe_preflight_call(
+    name: str,
+    callback: Any,
+) -> MultiRunPreflightCheck:
+    try:
+        check = callback()
+    except Exception as exc:  # noqa: BLE001 - convert checker issues into report data.
+        return _preflight_failed(
+            name, f"preflight checker failed: {type(exc).__name__}"
+        )
+    if not isinstance(check, MultiRunPreflightCheck):
+        return _preflight_failed(name, "preflight checker returned invalid result")
+    return check
+
+
+def _check_instance_lock_available(
+    batch_dir: Path,
+    instance_id: str,
+    batch_id: str,
+) -> MultiRunPreflightCheck:
+    busy_batches: list[str] = []
+    for state_path in batch_dir.parent.glob("*/multi_run_state.json"):
+        try:
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("batch_id") == batch_id:
+            continue
+        if payload.get("instance_id") != instance_id:
+            continue
+        if payload.get("batch_state") in {"running", "stopping"}:
+            busy_batches.append(str(payload.get("batch_id") or state_path.parent.name))
+    if busy_batches:
+        return _preflight_failed(
+            "instance_lock_available",
+            "another running batch uses the same instance",
+            {"busy_batches": busy_batches},
+        )
+    return _preflight_passed(
+        "instance_lock_available",
+        "no running sibling batch uses this instance",
+    )
+
+
+def _check_evidence_output_writable(batch_dir: Path) -> MultiRunPreflightCheck:
+    evidence_probe_dir = batch_dir / "cases"
+    try:
+        evidence_probe_dir.mkdir(parents=True, exist_ok=True)
+        probe_path = evidence_probe_dir / ".preflight-evidence-write-test"
+        probe_path.write_text("ok", encoding="utf-8")
+        probe_path.unlink(missing_ok=True)
+    except OSError as exc:
+        return _preflight_failed(
+            "evidence_output_writable",
+            f"evidence output directory is not writable: {type(exc).__name__}",
+        )
+    return _preflight_passed(
+        "evidence_output_writable",
+        "evidence output directory is writable",
+    )
+
+
+def _check_generated_config_has_no_secrets(path: Path) -> MultiRunPreflightCheck:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return _preflight_failed(
+            "generated_config_no_secrets",
+            f"generated config could not be read: {type(exc).__name__}",
+        )
+    sensitive_markers = (
+        "token",
+        "secret",
+        "password",
+        "credential",
+        "api_key",
+        "cloud_secret",
+        "tencentcloud_secret",
+    )
+    lowered = text.casefold()
+    matched = [marker for marker in sensitive_markers if marker in lowered]
+    if matched:
+        return _preflight_failed(
+            "generated_config_no_secrets",
+            "generated config contains sensitive-looking keys",
+            {"matched_markers": matched},
+        )
+    return _preflight_passed(
+        "generated_config_no_secrets",
+        "generated config contains no sensitive-looking keys",
+    )
+
+
+def _check_batch_plan_sha256(batch_plan_sha256: str) -> MultiRunPreflightCheck:
+    if len(batch_plan_sha256) != 64 or any(
+        ch not in "0123456789abcdef" for ch in batch_plan_sha256
+    ):
+        return _preflight_failed("batch_plan_sha256", "batch plan sha256 is invalid")
+    return _preflight_passed("batch_plan_sha256", "batch plan sha256 is present")
+
+
+def _preflight_passed(
+    name: str,
+    message: str,
+    data: Mapping[str, Any] | None = None,
+) -> MultiRunPreflightCheck:
+    return MultiRunPreflightCheck(
+        name=name,
+        status="passed",
+        message=message,
+        data=data or {},
+    )
+
+
+def _preflight_failed(
+    name: str,
+    message: str,
+    data: Mapping[str, Any] | None = None,
+) -> MultiRunPreflightCheck:
+    return MultiRunPreflightCheck(
+        name=name,
+        status="failed",
+        message=message,
+        data=data or {},
     )
 
 

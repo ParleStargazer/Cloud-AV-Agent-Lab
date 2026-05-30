@@ -489,3 +489,44 @@ raw product logs、不读取 `configs/real.toml`、不触发云操作。
 primary 在内的所有同 hash 原始相对路径。
 
 下一阶段建议进入 Commit 13：preflight checks before execution。
+
+## 2026-05-30 Commit 13：Preflight Checks Before Execution
+
+本阶段完成 `multi-run` 第十三阶段 preflight 检查：
+
+- 新增 `MultiRunPreflightCheck` / `MultiRunPreflightReport` /
+  `MultiRunPreflightChecker` schema。
+- 新增 `preflight_report.json`，在 scheduler 开始 case 前写入。
+- preflight 覆盖：
+  - batch directory 可写。
+  - manifest digest 与 batch plan 一致。
+  - selected indexes 都存在且非空。
+  - single-run runner 可调用。
+  - product profile 存在。
+  - instance id / snapshot id / region 基础格式有效。
+  - Guest Agent / Desktop Worker URL 形状有效。
+  - 同 instance 没有 sibling running / stopping batch。
+  - evidence 输出目录可写。
+  - generated config 不含 token / secret / password / credential 等敏感字段。
+  - batch plan sha256 形状有效。
+- 默认 `StaticMultiRunPreflightChecker` 不做网络 I/O，只把 Guest Agent /
+  Desktop Worker reachability 标记为 `skipped`，为后续真实 checker 预留接口。
+- `execute_multi_run_batch(..., preflight_checker=...)` 支持测试注入 checker。
+- preflight 失败时：
+  - 写入 `preflight_report.json`。
+  - 记录 `preflight_failed` 和 `batch_finished` 事件。
+  - `multi_run_state.json` 设置 `batch_state = failed_preflight`。
+  - 不进入 scheduler，不调用 runner。
+- `BatchPlan` 现在记录 `guest_agent_url` / `desktop_worker_url`，方便 preflight 和后续
+ 真实 runner 使用。
+- 新增 / 更新测试覆盖：
+  - preflight report schema 与关键 check。
+  - checker 注入失败时不调用 runner。
+  - unknown product 在 preflight 阶段失败。
+  - plan-only 不生成 preflight report。
+
+本阶段仍未接入真实 single-run runner，不触发真实云操作，不读取
+`configs/real.toml`，不执行样本；默认 preflight 也不会主动连接 Guest Agent 或
+Desktop Worker。
+
+下一阶段建议进入 Commit 14：real single-run runner adapter。

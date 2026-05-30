@@ -1195,6 +1195,11 @@ def _handle_multi_run(
                     if state is not None
                     else ""
                 ),
+                "preflight_report_path": (
+                    str(artifacts.batch_dir / "preflight_report.json")
+                    if state is not None
+                    else ""
+                ),
                 "aggregate_summary_markdown_path": (
                     str(artifacts.batch_dir / "aggregate_summary.md")
                     if state is not None

@@ -860,6 +860,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(state["cases"][0]["summary_status"], "not_started")
             self.assertEqual(state["cases"][0]["evidence_status"], "not_started")
             self.assertFalse((batch_dir / "cases").exists())
+            self.assertFalse((batch_dir / "preflight_report.json").exists())
 
     def test_multi_run_sample_dir_generates_manifest_and_indexed_mirror(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

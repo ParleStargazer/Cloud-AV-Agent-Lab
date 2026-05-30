@@ -63,6 +63,8 @@ class MultiRunSchemaTests(unittest.TestCase):
             sample_manifest_path="sample_manifest.jsonl",
             manifest_sha256="c" * 64,
             generated_config_sha256="d" * 64,
+            guest_agent_url="http://127.0.0.1:8080",
+            desktop_worker_url="http://127.0.0.1:8001",
             selection=BatchSelection(
                 mode="range",
                 selected_indexes=(1, 2, 3),
@@ -85,6 +87,8 @@ class MultiRunSchemaTests(unittest.TestCase):
 
         self.assertEqual(payload["schema_version"], BATCH_PLAN_SCHEMA_VERSION)
         self.assertEqual(payload["product_id"], "qihoo-360")
+        self.assertEqual(payload["guest_agent_url"], "http://127.0.0.1:8080")
+        self.assertEqual(payload["desktop_worker_url"], "http://127.0.0.1:8001")
         self.assertEqual(payload["selection"]["selected_indexes"], [1, 2, 3])
         self.assertEqual(payload["selection"]["range"], "1-3")
         self.assertTrue(payload["execution"]["dry_run"])
