@@ -23,6 +23,9 @@ MULTI_RUN_VERSION = "multi-run.v1"
 IGNORED_SAMPLE_INDEX_FILENAMES = frozenset(
     {".gitignore", ".gitkeep", "readme", "readme.md", "readme.txt"}
 )
+IGNORED_SAMPLE_INDEX_DIR_NAMES = frozenset(
+    {".git", "__pycache__", "indexed", "runs", "sample_index"}
+)
 
 FailureKind: TypeAlias = Literal[
     "planning_or_policy_failure",
@@ -464,7 +467,13 @@ def _scan_sample_candidates(sample_dir: Path) -> tuple[_IndexedSampleCandidate, 
 def _should_skip_index_path(path: Path, sample_dir: Path) -> bool:
     if path.is_symlink():
         return True
-    if path.name.casefold() in IGNORED_SAMPLE_INDEX_FILENAMES:
+    normalized_name = path.name.casefold()
+    if normalized_name.startswith("."):
+        return True
+    if path.is_dir():
+        if normalized_name in IGNORED_SAMPLE_INDEX_DIR_NAMES:
+            return True
+    elif normalized_name in IGNORED_SAMPLE_INDEX_FILENAMES:
         return True
     if ":" in path.name:
         return True

@@ -148,6 +148,29 @@ class MultiRunSampleDirectoryIndexerTests(unittest.TestCase):
             self.assertEqual(manifest.entries[0].original_filename, "sample.exe")
             self.assertEqual(manifest.entries[0].original_suffix, ".exe")
 
+    def test_indexer_ignores_nested_generated_runtime_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_dir = tmp_path / "raw_sample"
+            nested_generated = raw_dir / "runs" / "batch-old" / "sample_index"
+            nested_generated.mkdir(parents=True)
+            (nested_generated / "sample_manifest.jsonl").write_text(
+                '{"schema_version": "not-a-sample"}\n',
+                encoding="utf-8",
+            )
+            (nested_generated / "indexed").mkdir()
+            (nested_generated / "indexed" / "0001_old.exe").write_bytes(b"old")
+            raw_dir.mkdir(exist_ok=True)
+            (raw_dir / "sample.exe").write_bytes(b"sample")
+
+            artifacts = build_sample_manifest_from_directory(
+                raw_dir, tmp_path / "index"
+            )
+            manifest = load_sample_manifest(artifacts.manifest_path)
+
+            self.assertEqual(len(manifest.entries), 1)
+            self.assertEqual(manifest.entries[0].original_filename, "sample.exe")
+
 
 if __name__ == "__main__":
     unittest.main()

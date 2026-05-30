@@ -1,14 +1,53 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+_WINDOWS_ATOMIC_REPLACE_RETRY_DELAYS_SECONDS = (0.05, 0.1, 0.2, 0.5, 1.0)
+_TRANSIENT_WINDOWS_REPLACE_WINERRORS = {5, 32}
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _is_transient_replace_error(error: OSError) -> bool:
+    return isinstance(error, PermissionError) or (
+        getattr(error, "winerror", None) in _TRANSIENT_WINDOWS_REPLACE_WINERRORS
+    )
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    content = json.dumps(payload, ensure_ascii=False, indent=2)
+
+    with temp_path.open("w", encoding="utf-8") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+    delays = (*_WINDOWS_ATOMIC_REPLACE_RETRY_DELAYS_SECONDS, 0.0)
+    last_error: OSError | None = None
+    for retry_index, delay_seconds in enumerate(delays):
+        try:
+            temp_path.replace(path)
+            return
+        except OSError as error:
+            if not _is_transient_replace_error(error):
+                raise
+            last_error = error
+            if retry_index == len(delays) - 1:
+                break
+            time.sleep(delay_seconds)
+
+    if last_error is not None:
+        raise last_error
 
 
 class RunState:
@@ -178,10 +217,4 @@ class RunState:
 
     def write(self) -> None:
         self.data["updated_at_utc"] = utc_now()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = self.path.with_suffix(self.path.suffix + ".tmp")
-        temp_path.write_text(
-            json.dumps(self.data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temp_path.replace(self.path)
+        _write_json_atomic(self.path, self.data)

@@ -1000,6 +1000,50 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(plan["selection"]["mode"], "all")
             self.assertEqual(plan["selection"]["selected_indexes"], [1])
 
+    def test_multi_run_interactive_defaults_use_project_root_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            raw_dir = project_root / "runs" / "raw_sample"
+            raw_dir.mkdir(parents=True)
+            (raw_dir / "sample-a.txt").write_text("alpha", encoding="utf-8")
+            stdout = StringIO()
+
+            with (
+                redirect_stdout(stdout),
+                patch("sys.stdin.isatty", return_value=True),
+                patch(
+                    "builtins.input",
+                    side_effect=[
+                        "huorong",
+                        "lhins-example",
+                        "lhsnap-example",
+                        "",
+                        "http://127.0.0.1:8080",
+                        "",
+                        "",
+                    ],
+                ),
+                patch(
+                    "cloud_av_agent_lab.cli._project_root_for_multi_run",
+                    return_value=project_root,
+                ),
+            ):
+                exit_code = main(
+                    [
+                        "multi-run",
+                        "--batch-id",
+                        "project-root-defaults-test",
+                        "--plan-only",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            batch_dir = project_root / "runs" / "project-root-defaults-test"
+            self.assertTrue((batch_dir / "batch_plan.json").is_file())
+            self.assertTrue(
+                (batch_dir / "sample_index" / "sample_manifest.jsonl").is_file()
+            )
+
     def test_multi_run_sample_dir_requires_platform_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

@@ -501,8 +501,8 @@ def build_parser() -> argparse.ArgumentParser:
     multi_run.add_argument("--batch-id", default="", help="optional batch id")
     multi_run.add_argument(
         "--batch-root",
-        default="runs",
-        help="batch output root directory",
+        default=_default_multi_run_batch_root(),
+        help="batch output root directory; defaults to project-root runs directory",
     )
     multi_run.add_argument(
         "--dry-run",
@@ -1307,6 +1307,10 @@ def _prompt_into(value: str, label: str, default: str = "") -> str:
 
 def _default_multi_run_sample_dir() -> str:
     return str(_project_root_for_multi_run() / "runs" / "raw_sample")
+
+
+def _default_multi_run_batch_root() -> str:
+    return str(_project_root_for_multi_run() / "runs")
 
 
 def _project_root_for_multi_run() -> Path:
