@@ -573,3 +573,30 @@ Desktop Worker。
 `configs/real.toml`，不执行样本。真实云 smoke 应在本 commit 后手工执行。
 
 下一阶段建议进入 Commit 15：redaction check + docs / smoke。
+
+## 2026-05-30 Commit 15 预检查收口：Real Runner Boundary Hardening
+
+本阶段在进入正式 Commit 15 检查前，补齐 real runner 的边界细节：
+
+- digest mismatch 继续作为 `case_failure`，并保持在 single-run 入口前短路，
+  不会继续触发真实 single-run。
+- 非 `dry_run` 的 `RealSingleRunRunner` 现在要求 `sample_ref` 来自 indexed mirror：
+  - `sample_ref` 必须存在；
+  - `sample_ref` 的父目录必须为 `indexed`；
+  - sha256 / md5 / size 必须与 manifest 一致。
+- single-run 返回的结果路径统一写为 batch-relative path：
+  - `run_state_path`
+  - `case_summary_path`
+  - `evidence_bundle_path`
+- cleanup restore failed 仍保持最高优先级映射：
+  - `failure_kind = environment_failure`
+  - `case_status = stopped_environment_failure`
+  - `unsafe_to_continue = true`
+  - `manual_intervention_required = true`
+- 新增测试覆盖：
+  - real runner 拒绝非 indexed mirror 的 `sample_ref` 且不调用 single-run；
+  - real runner 输出路径不是绝对路径；
+  - digest mismatch 不调用 single-run；
+  - cleanup restore failed 不会被普通 failure 覆盖。
+
+本阶段仍未触发真实云操作，不读取 `configs/real.toml`，不执行样本。

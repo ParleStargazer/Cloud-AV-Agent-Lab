@@ -211,6 +211,12 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
             self.assertEqual(result.evidence_status, "exported")
             self.assertEqual(result.summary_status, "collected")
             self.assertEqual(result.readiness_status, "ok")
+            self.assertEqual(result.run_state_path, "case/run-001/run_state.json")
+            self.assertEqual(result.case_summary_path, "case/run-001/case_summary.json")
+            self.assertEqual(
+                result.evidence_bundle_path, "case/run-001/case_evidence.zip"
+            )
+            self.assertFalse(Path(result.run_state_path).is_absolute())
 
     def test_real_runner_rejects_sample_ref_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -226,6 +232,21 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
             self.assertEqual(result.case_status, "failed")
             self.assertEqual(result.failure_kind, "case_failure")
             self.assertIn("metadata does not match", result.error_summary)
+
+    def test_real_runner_rejects_non_indexed_sample_ref_without_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sample_path = tmp_path / "raw" / "sample.exe"
+            sample_path.parent.mkdir()
+            sample_path.write_bytes(b"harmless")
+
+            result = RealSingleRunRunner(
+                run_single_case_func=lambda _options: self.fail("should not run")
+            ).run(_request_for_sample(sample_path, tmp_path / "case"))
+
+            self.assertEqual(result.case_status, "failed")
+            self.assertEqual(result.failure_kind, "case_failure")
+            self.assertIn("indexed sample mirror", result.error_summary)
 
     def test_real_runner_maps_cleanup_restore_failed_to_environment_failure(
         self,

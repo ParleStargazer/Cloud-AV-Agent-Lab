@@ -1785,6 +1785,10 @@ def _validate_single_run_sample_ref(request: SingleRunRequest) -> None:
     path = Path(request.sample_ref)
     if not path.is_file():
         raise MultiRunPlanError(f"sample_ref does not exist: {path}")
+    if not request.dry_run and path.parent.name != "indexed":
+        raise MultiRunPlanError(
+            "non-dry-run single-run requires sample_ref from an indexed sample mirror"
+        )
     digest = _hash_sample_file(path)
     mismatches = [
         field_name
@@ -1831,13 +1835,37 @@ def _single_run_result_to_runner_result(
         result_source="single_run_runner",
         simulated=request.dry_run,
         error_summary=_first_text(errors),
-        evidence_bundle_path=str(getattr(result, "evidence_bundle_path", "") or ""),
-        run_state_path=str(getattr(result, "run_state_path", "") or ""),
-        case_summary_path=str(getattr(result, "summary_path", "") or ""),
+        evidence_bundle_path=_single_run_result_path(
+            request, getattr(result, "evidence_bundle_path", "")
+        ),
+        run_state_path=_single_run_result_path(
+            request, getattr(result, "run_state_path", "")
+        ),
+        case_summary_path=_single_run_result_path(
+            request, getattr(result, "summary_path", "")
+        ),
         warnings=warnings,
         unsafe_to_continue=cleanup_status == "restore_failed",
         manual_intervention_required=cleanup_status == "restore_failed",
     )
+
+
+def _single_run_result_path(request: SingleRunRequest, value: Any) -> str:
+    if not value:
+        return ""
+    batch_root = _batch_root_for_case_dir(request.case_dir)
+    return _relative_batch_path(batch_root, str(value))
+
+
+def _batch_root_for_case_dir(case_dir: Path) -> Path:
+    try:
+        resolved_case_dir = case_dir.resolve()
+    except OSError:
+        resolved_case_dir = case_dir.absolute()
+    for candidate in (resolved_case_dir, *resolved_case_dir.parents):
+        if candidate.name == "cases":
+            return candidate.parent
+    return resolved_case_dir.parent
 
 
 def _read_optional_json_mapping(path: Path) -> Mapping[str, Any]:
