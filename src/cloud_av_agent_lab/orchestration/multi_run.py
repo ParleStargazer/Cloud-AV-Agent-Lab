@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION = "multi-run-sample.v1"
 BATCH_PLAN_SCHEMA_VERSION = "multi-run-plan.v1"
 MULTI_RUN_STATE_SCHEMA_VERSION = "multi-run-state.v1"
 MULTI_RUN_EVENT_SCHEMA_VERSION = "multi-run-event.v1"
+MULTI_RUN_VERSION = "multi-run.v1"
 
 FailureKind: TypeAlias = Literal[
     "planning_or_policy_failure",
@@ -155,6 +157,12 @@ class MultiRunSelectionError(ValueError):
     failure_kind: FailureKind = "planning_or_policy_failure"
 
 
+class MultiRunPlanError(ValueError):
+    """Raised when immutable multi-run batch planning fails."""
+
+    failure_kind: FailureKind = "planning_or_policy_failure"
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -232,6 +240,10 @@ def compute_manifest_sha256(path: Path | str) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def compute_text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def load_sample_manifest(path: Path | str) -> LoadedSampleManifest:
@@ -649,6 +661,24 @@ class BatchExecutionPolicy:
 
 
 @dataclass(frozen=True)
+class MultiRunPlanArtifacts:
+    batch_dir: Path
+    batch_plan_path: Path
+    generated_config_path: Path
+    manifest_sha256_path: Path
+    batch_plan: BatchPlan
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "batch_dir": str(self.batch_dir),
+            "batch_plan_path": str(self.batch_plan_path),
+            "generated_config_path": str(self.generated_config_path),
+            "manifest_sha256_path": str(self.manifest_sha256_path),
+            "batch_plan": self.batch_plan.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
 class BatchPlan:
     batch_id: str
     created_at_utc: str
@@ -684,6 +714,128 @@ class BatchPlan:
             "selection": self.selection.to_dict(),
             "execution": self.execution.to_dict(),
         }
+
+
+def create_multi_run_batch_plan(
+    *,
+    batch_root: Path | str,
+    batch_id: str,
+    product_id: str,
+    instance_id: str,
+    snapshot_id: str,
+    region: str,
+    guest_agent_url: str,
+    desktop_worker_url: str,
+    manifest: LoadedSampleManifest,
+    selection: BatchSelection,
+    dry_run: bool,
+    failure_policy: str,
+) -> MultiRunPlanArtifacts:
+    resolved_batch_id = _safe_batch_id(batch_id or default_batch_id(product_id))
+    batch_dir = Path(batch_root) / resolved_batch_id
+    batch_dir.mkdir(parents=True, exist_ok=True)
+
+    generated_config = render_multi_run_generated_config(
+        product_id=product_id,
+        instance_id=instance_id,
+        snapshot_id=snapshot_id,
+        region=region,
+        guest_agent_url=guest_agent_url,
+        desktop_worker_url=desktop_worker_url,
+        dry_run=dry_run,
+    )
+    generated_config_sha256 = compute_text_sha256(generated_config)
+    plan = BatchPlan(
+        batch_id=resolved_batch_id,
+        created_at_utc=utc_now(),
+        product_id=product_id,
+        instance_id=instance_id,
+        snapshot_id=snapshot_id,
+        region=region,
+        sample_manifest_path=str(manifest.path),
+        manifest_sha256=manifest.sha256,
+        generated_config_sha256=generated_config_sha256,
+        single_run_runner_version="single-run.v1",
+        multi_run_version=MULTI_RUN_VERSION,
+        product_profile_version=f"{product_id}.v1",
+        selection=selection,
+        execution=BatchExecutionPolicy(
+            mode="serial",
+            failure_policy=failure_policy,
+            dry_run=dry_run,
+        ),
+    )
+
+    batch_plan_path = batch_dir / "batch_plan.json"
+    generated_config_path = batch_dir / "multi_run.generated.toml"
+    manifest_sha256_path = batch_dir / "sample_manifest.sha256"
+
+    batch_plan_path.write_text(
+        json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    generated_config_path.write_text(generated_config, encoding="utf-8")
+    manifest_sha256_path.write_text(
+        f"{manifest.sha256}  {manifest.path.name}\n",
+        encoding="utf-8",
+    )
+
+    return MultiRunPlanArtifacts(
+        batch_dir=batch_dir,
+        batch_plan_path=batch_plan_path,
+        generated_config_path=generated_config_path,
+        manifest_sha256_path=manifest_sha256_path,
+        batch_plan=plan,
+    )
+
+
+def default_batch_id(product_id: str) -> str:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"batch_{stamp}_{_safe_batch_id(product_id or 'product')}"
+
+
+def render_multi_run_generated_config(
+    *,
+    product_id: str,
+    instance_id: str,
+    snapshot_id: str,
+    region: str,
+    guest_agent_url: str,
+    desktop_worker_url: str,
+    dry_run: bool,
+) -> str:
+    return "\n".join(
+        [
+            "# Generated by cloud-av-agent-lab multi-run.",
+            "# Non-sensitive batch metadata only. Do not add private values here.",
+            "",
+            "[multi_run]",
+            f"product_id = {_toml_string(product_id)}",
+            f"instance_id = {_toml_string(instance_id)}",
+            f"snapshot_id = {_toml_string(snapshot_id)}",
+            f"region = {_toml_string(region)}",
+            f"guest_agent_url = {_toml_string(guest_agent_url)}",
+            f"desktop_worker_url = {_toml_string(desktop_worker_url)}",
+            f"dry_run = {_toml_bool(dry_run)}",
+            "",
+        ]
+    )
+
+
+def _safe_batch_id(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip())
+    cleaned = cleaned.strip(".-_")
+    if not cleaned:
+        raise MultiRunPlanError("batch_id cannot be empty")
+    return cleaned
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _toml_bool(value: bool) -> str:
+    return "true" if value else "false"
 
 
 @dataclass(frozen=True)

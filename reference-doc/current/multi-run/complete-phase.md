@@ -141,3 +141,36 @@ single-run 调度；loader 只读取 manifest 文本，不读取样本文件内�
 不读取样本文件内容。
 
 下一阶段建议进入 Commit 5：生成 immutable batch plan 和 generated config。
+
+## 2026-05-30 Commit 5：Batch Plan + Generated Config + Dry-Run
+
+本阶段完成 `multi-run` 第五阶段不可变计划产物生成：
+
+- `multi-run` CLI 从 skeleton 进入 planning 阶段，基于已有
+  `sample_manifest.jsonl` 生成批次计划。
+- 新增 batch plan 产物：
+  - `batch_plan.json`
+  - `multi_run.generated.toml`
+  - `sample_manifest.sha256`
+- 新增 `create_multi_run_batch_plan(...)` 与 `MultiRunPlanArtifacts`。
+- `batch_plan.json` 记录：
+  - `manifest_sha256`
+  - `generated_config_sha256`
+  - `selected_indexes`
+  - product / instance / snapshot / region
+  - serial execution policy
+  - `dry_run`
+- `multi_run.generated.toml` 只写非敏感批次元数据，不写 token、secret、
+  cloud key 或真实配置内容。
+- `--plan-only` 只生成计划产物，不创建 `cases/`，不调用 runner。
+- `--dry-run` 写入 batch plan 的 execution policy，但仍不触发云操作。
+- `--sample-dir` 扫描生成 manifest 尚未实现，本阶段要求显式传入
+  `--manifest`。
+- 补齐 selection 边界测试：
+  - `--max-cases <= 0` 作为 planning failure 拒绝。
+  - 空可选 index 在 batch plan 前拒绝。
+
+本阶段仍未写 `multi_run_state.json` / `multi_run_events.jsonl`，未调用
+single-run runner，未触发云操作，未读取样本文件内容。
+
+下一阶段建议进入 Commit 6：实现 event log 和 atomic state writer。

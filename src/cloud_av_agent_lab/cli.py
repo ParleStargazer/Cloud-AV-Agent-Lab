@@ -31,7 +31,16 @@ from cloud_av_agent_lab.guest_agent_server.security_product_readiness import (
     supported_security_product_readiness_probes,
 )
 from cloud_av_agent_lab.network.client import NetworkClient
-from cloud_av_agent_lab.orchestration import SingleRunOptions, run_single_case
+from cloud_av_agent_lab.orchestration import (
+    MultiRunManifestError,
+    MultiRunPlanError,
+    MultiRunSelectionError,
+    SingleRunOptions,
+    create_multi_run_batch_plan,
+    load_sample_manifest,
+    parse_sample_selection,
+    run_single_case,
+)
 from cloud_av_agent_lab.orchestration.locks import InstanceLockedError
 from cloud_av_agent_lab.orchestration.prompts import prompt_default
 from cloud_av_agent_lab.orchestration.single_run import (
@@ -1039,17 +1048,66 @@ def _handle_multi_run(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
 ) -> int:
-    selection_mode = _multi_run_selection_mode(parser, args)
+    _multi_run_selection_mode(parser, args)
     if args.max_cases is not None and args.max_cases <= 0:
-        parser.exit(2, "error: --max-cases must be greater than 0\n")
+        parser.exit(
+            2, "error: --max-cases must be greater than 0; no samples selected\n"
+        )
+    if not args.manifest:
+        parser.exit(
+            2,
+            "error: --manifest is required until sample-dir manifest generation is "
+            "implemented\n",
+        )
+    for name, value in (
+        ("--product", args.product),
+        ("--instance-id", args.instance_id),
+        ("--snapshot-id", args.snapshot_id),
+        ("--region", args.region),
+        ("--guest-agent-url", args.guest_agent_url),
+    ):
+        if not value:
+            parser.exit(2, f"error: {name} is required for multi-run planning\n")
 
-    print("Multi-run skeleton parsed; execution is not implemented in this phase.")
+    try:
+        manifest = load_sample_manifest(args.manifest)
+        selection = parse_sample_selection(
+            manifest.indexes,
+            all_samples=args.all,
+            range_text=args.sample_range,
+            indexes_text=args.indexes,
+            from_index=args.from_index,
+            to_index=args.to_index,
+            max_cases=args.max_cases,
+        )
+        artifacts = create_multi_run_batch_plan(
+            batch_root=args.batch_root,
+            batch_id=args.batch_id,
+            product_id=args.product,
+            instance_id=args.instance_id,
+            snapshot_id=args.snapshot_id,
+            region=args.region,
+            guest_agent_url=args.guest_agent_url,
+            desktop_worker_url=args.desktop_worker_url,
+            manifest=manifest,
+            selection=selection,
+            dry_run=args.dry_run,
+            failure_policy=args.failure_policy,
+        )
+    except (
+        MultiRunManifestError,
+        MultiRunPlanError,
+        MultiRunSelectionError,
+    ) as exc:
+        parser.exit(2, f"error: {exc}\n")
+
+    print("Multi-run batch plan created; runner execution is not implemented yet.")
     print(
         json.dumps(
             {
-                "status": "skeleton",
+                "status": "planned",
                 "message": (
-                    "multi-run CLI skeleton parsed; manifest, state, and runner "
+                    "multi-run batch plan created; state, event log, and runner "
                     "will be added in later commits"
                 ),
                 "product": args.product,
@@ -1060,11 +1118,17 @@ def _handle_multi_run(
                 "desktop_worker_url": args.desktop_worker_url,
                 "sample_dir": args.sample_dir,
                 "manifest": args.manifest,
-                "batch_id": args.batch_id,
+                "manifest_sha256": manifest.sha256,
+                "batch_id": artifacts.batch_plan.batch_id,
                 "batch_root": args.batch_root,
+                "batch_dir": str(artifacts.batch_dir),
+                "batch_plan_path": str(artifacts.batch_plan_path),
+                "generated_config_path": str(artifacts.generated_config_path),
+                "manifest_sha256_path": str(artifacts.manifest_sha256_path),
                 "dry_run": args.dry_run,
                 "plan_only": args.plan_only,
-                "selection_mode": selection_mode,
+                "selection_mode": selection.mode,
+                "selected_indexes": list(selection.selected_indexes),
                 "range": args.sample_range,
                 "indexes": args.indexes,
                 "from": args.from_index,

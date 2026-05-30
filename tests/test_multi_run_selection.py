@@ -59,6 +59,23 @@ class MultiRunSelectionParserTests(unittest.TestCase):
         self.assertEqual(selection.selected_indexes, (1, 2, 3))
         self.assertEqual(selection.max_cases, 3)
 
+    def test_max_cases_zero_fails_as_planning_error(self) -> None:
+        with self.assertRaisesRegex(
+            MultiRunSelectionError,
+            "--max-cases must be a positive integer",
+        ) as error:
+            parse_sample_selection(
+                range(1, 10),
+                all_samples=True,
+                max_cases=0,
+            )
+
+        self.assertEqual(error.exception.failure_kind, "planning_or_policy_failure")
+
+    def test_empty_available_indexes_fail_before_batch_plan(self) -> None:
+        with self.assertRaisesRegex(MultiRunSelectionError, "no selectable"):
+            parse_sample_selection((), all_samples=True)
+
     def test_range_out_of_bounds_is_planning_failure(self) -> None:
         with self.assertRaisesRegex(
             MultiRunSelectionError,

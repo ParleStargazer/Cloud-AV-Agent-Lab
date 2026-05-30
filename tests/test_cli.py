@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import hashlib
 import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -22,7 +24,10 @@ from cloud_av_agent_lab.adapters.guest_agent_client import (
     GuestAgentError,
     GuestAgentResponse,
 )
-from cloud_av_agent_lab.orchestration import SingleRunResult
+from cloud_av_agent_lab.orchestration import (
+    SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION,
+    SingleRunResult,
+)
 
 
 class CloudLifecycleCliGuardTests(TestCase):
@@ -683,65 +688,111 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(exit_error.exception.code, 2)
         self.assertIn("invalid choice", stderr.getvalue())
 
-    def test_multi_run_skeleton_accepts_manifest_range_dry_run(self) -> None:
-        stdout = StringIO()
-
-        with redirect_stdout(stdout):
-            exit_code = main(
-                [
-                    "multi-run",
-                    "--product",
-                    "tencent-pc-manager",
-                    "--instance-id",
-                    "lhins-example",
-                    "--snapshot-id",
-                    "lhsnap-example",
-                    "--region",
-                    "ap-singapore",
-                    "--guest-agent-url",
-                    "http://127.0.0.1:8080",
-                    "--desktop-worker-url",
-                    "http://127.0.0.1:8001",
-                    "--manifest",
-                    "sample_manifest.jsonl",
-                    "--range",
-                    "1-10",
-                    "--dry-run",
-                ]
+    def test_multi_run_creates_batch_plan_for_manifest_range_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            manifest_path = tmp_path / "sample_manifest.jsonl"
+            _write_multi_run_manifest(
+                manifest_path,
+                [_multi_run_manifest_entry(1), _multi_run_manifest_entry(2, "b")],
             )
+            stdout = StringIO()
 
-        self.assertEqual(exit_code, 0)
-        output = stdout.getvalue()
-        self.assertIn("Multi-run skeleton parsed", output)
-        self.assertIn('"status": "skeleton"', output)
-        self.assertIn('"selection_mode": "range"', output)
-        self.assertIn('"manifest": "sample_manifest.jsonl"', output)
-        self.assertIn('"product": "tencent-pc-manager"', output)
+            with (
+                redirect_stdout(stdout),
+                patch(
+                    "cloud_av_agent_lab.cli.run_single_case",
+                ) as runner,
+            ):
+                exit_code = main(
+                    [
+                        "multi-run",
+                        "--product",
+                        "tencent-pc-manager",
+                        "--instance-id",
+                        "lhins-example",
+                        "--snapshot-id",
+                        "lhsnap-example",
+                        "--region",
+                        "ap-singapore",
+                        "--guest-agent-url",
+                        "http://127.0.0.1:8080",
+                        "--desktop-worker-url",
+                        "http://127.0.0.1:8001",
+                        "--manifest",
+                        str(manifest_path),
+                        "--batch-root",
+                        str(tmp_path / "batches"),
+                        "--batch-id",
+                        "batch-test",
+                        "--range",
+                        "1-2",
+                        "--dry-run",
+                    ]
+                )
 
-    def test_multi_run_skeleton_accepts_sample_dir_all_plan_only(self) -> None:
-        stdout = StringIO()
+            self.assertEqual(exit_code, 0)
+            runner.assert_not_called()
+            output = stdout.getvalue()
+            self.assertIn("Multi-run batch plan created", output)
+            self.assertIn('"status": "planned"', output)
+            self.assertIn('"selection_mode": "range"', output)
+            self.assertIn('"selected_indexes": [\n    1,\n    2\n  ]', output)
+            plan_path = tmp_path / "batches" / "batch-test" / "batch_plan.json"
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(plan["manifest_sha256"], _sha256_file(manifest_path))
+            self.assertEqual(plan["selection"]["selected_indexes"], [1, 2])
+            self.assertTrue(plan["execution"]["dry_run"])
 
-        with redirect_stdout(stdout):
-            exit_code = main(
-                [
-                    "multi-run",
-                    "--product",
-                    "huorong",
-                    "--sample-dir",
-                    "C:\\CloudAvSamples\\raw_sample",
-                    "--all",
-                    "--plan-only",
-                    "--failure-policy",
-                    "stop-on-case-failure",
-                ]
+    def test_multi_run_plan_only_writes_config_without_secret_or_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            manifest_path = tmp_path / "sample_manifest.jsonl"
+            _write_multi_run_manifest(manifest_path, [_multi_run_manifest_entry(1)])
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "multi-run",
+                        "--product",
+                        "huorong",
+                        "--instance-id",
+                        "lhins-example",
+                        "--snapshot-id",
+                        "lhsnap-example",
+                        "--region",
+                        "ap-singapore",
+                        "--guest-agent-url",
+                        "http://127.0.0.1:8080",
+                        "--manifest",
+                        str(manifest_path),
+                        "--batch-root",
+                        str(tmp_path / "batches"),
+                        "--batch-id",
+                        "plan-only-test",
+                        "--all",
+                        "--plan-only",
+                        "--failure-policy",
+                        "stop-on-case-failure",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            batch_dir = tmp_path / "batches" / "plan-only-test"
+            generated_config = (batch_dir / "multi_run.generated.toml").read_text(
+                encoding="utf-8"
             )
-
-        self.assertEqual(exit_code, 0)
-        output = stdout.getvalue()
-        self.assertIn('"selection_mode": "all"', output)
-        self.assertIn('"sample_dir": "C:\\\\CloudAvSamples\\\\raw_sample"', output)
-        self.assertIn('"plan_only": true', output)
-        self.assertIn('"failure_policy": "stop-on-case-failure"', output)
+            self.assertNotIn("token", generated_config.casefold())
+            self.assertNotIn("secret", generated_config.casefold())
+            self.assertNotIn("credential", generated_config.casefold())
+            self.assertFalse((batch_dir / "cases").exists())
+            plan = json.loads((batch_dir / "batch_plan.json").read_text("utf-8"))
+            self.assertEqual(
+                plan["execution"]["failure_policy"], "stop-on-case-failure"
+            )
+            self.assertEqual(plan["selection"]["selected_indexes"], [1])
+            self.assertTrue((batch_dir / "sample_manifest.sha256").is_file())
 
     def test_multi_run_rejects_conflicting_selection_options(self) -> None:
         stderr = StringIO()
@@ -2356,6 +2407,48 @@ class _FailingGuestAgentClient:
         run_id: str = "",
     ) -> GuestAgentResponse:
         raise self.error
+
+
+def _multi_run_manifest_entry(index: int, sha_char: str = "a") -> dict[str, object]:
+    sha256 = sha_char * 64
+    return {
+        "schema_version": SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION,
+        "manifest_id": "manifest-cli-test",
+        "manifest_created_at_utc": "2026-05-30T10:00:00Z",
+        "manifest_tool_version": "0.1.0",
+        "sample_index": index,
+        "sample_id": sha256,
+        "case_name": sha256[:16],
+        "sha256": sha256,
+        "md5": sha_char * 32,
+        "size": 100 + index,
+        "original_filename": f"sample-{index}.exe",
+        "original_suffix": ".exe",
+        "normalized_suffix": ".exe",
+        "renamed_filename": f"{index:04d}_{sha256[:16]}.exe",
+        "sample_source_kind": "local_platform_path",
+        "sample_ref": f"C:\\CloudAvSamples\\indexed\\{index:04d}_{sha256[:16]}.exe",
+        "duplicate_group_id": f"sha256:{sha256}",
+        "duplicate_of_sample_index": None,
+        "aliases": [f"sample-{index}.exe"],
+        "entry_status": "ready",
+        "skip_reason": None,
+        "created_at_utc": "2026-05-30T10:01:00Z",
+    }
+
+
+def _write_multi_run_manifest(
+    path: Path,
+    entries: list[dict[str, object]],
+) -> None:
+    path.write_text(
+        "".join(json.dumps(entry, sort_keys=True) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _guest_agent_enabled_config() -> str:
