@@ -18,6 +18,9 @@ from cloud_av_agent_lab.guest_agent_server.collectors.huorong import HuorongLogC
 from cloud_av_agent_lab.guest_agent_server.collectors.qihoo_360 import (
     Qihoo360LogCollector,
 )
+from cloud_av_agent_lab.guest_agent_server.collectors.tencent_pc_manager import (
+    TencentPcManagerLogCollector,
+)
 from cloud_av_agent_lab.guest_agent_server.collectors.windows_defender import (
     WindowsDefenderLogCollector,
 )
@@ -48,6 +51,12 @@ class CollectorRegistryTests(TestCase):
 
         self.assertIsInstance(collector, Qihoo360LogCollector)
         self.assertIn("qihoo-360", supported_product_log_collectors())
+
+    def test_registry_returns_tencent_pc_manager_collector(self) -> None:
+        collector = get_product_log_collector("tencent-pc-manager")
+
+        self.assertIsInstance(collector, TencentPcManagerLogCollector)
+        self.assertIn("tencent-pc-manager", supported_product_log_collectors())
 
     def test_registry_import_does_not_require_pywin32(self) -> None:
         from cloud_av_agent_lab.guest_agent_server.collectors import registry
@@ -84,4 +93,5 @@ class CollectorRegistryTests(TestCase):
         self.assertIn("unknown-product", message)
         self.assertIn("huorong", message)
         self.assertIn("qihoo-360", message)
+        self.assertIn("tencent-pc-manager", message)
         self.assertIn("windows-defender", message)

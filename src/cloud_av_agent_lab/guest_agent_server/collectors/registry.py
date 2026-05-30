@@ -5,6 +5,7 @@ from collections.abc import Callable
 from .base import ProductLogCollector
 from .huorong import HuorongLogCollector
 from .qihoo_360 import Qihoo360LogCollector
+from .tencent_pc_manager import TencentPcManagerLogCollector
 from .windows_defender import WindowsDefenderLogCollector
 
 CollectorFactory = Callable[[], ProductLogCollector]
@@ -12,6 +13,7 @@ CollectorFactory = Callable[[], ProductLogCollector]
 SUPPORTED_COLLECTORS: dict[str, CollectorFactory] = {
     "huorong": HuorongLogCollector,
     "qihoo-360": Qihoo360LogCollector,
+    "tencent-pc-manager": TencentPcManagerLogCollector,
     "windows-defender": WindowsDefenderLogCollector,
 }
 
