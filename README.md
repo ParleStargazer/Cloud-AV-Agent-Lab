@@ -394,6 +394,7 @@ Evaluation / Evidence Export MVP 在 collection 之后运行。collector 只负�
 - 客户机适配器：实现 `GuestAutomationAdapter`，在云端 VM 内完成从云对象拉取样本、启动测试、采集日志。
 - 产品扩展：Huorong、Windows Defender、Qihoo 360 和 Tencent PC Manager 四个产品的 MVP 接入已经完成。后续新增产品继续按 `docs/PRODUCT_ONBOARDING.md` 接入 readiness probe、collector registry 条目、artifact policy 和产品归因规则，避免在 CLI、evaluator 或 exporter 中写死产品分支。
 - Multi-run：下一阶段重点是复用现有 `single-run` 编排，增加多样本、多产品、多 VM profile 的批量调度、实例锁复用、失败续跑、批量 summary 聚合和报告索引。详细计划见 [MULTI_RUN_PLAN.md](docs/MULTI_RUN_PLAN.md)。
+- `multi-run` 已支持交互式引导：直接运行 `python -m cloud_av_agent_lab multi-run` 会提示填写产品、实例、快照、region、Guest Agent、Desktop Worker 和云端平台机样本目录。云端平台机可用 `--platform-sample-dir runs\raw_sample` 作为 `--sample-dir runs\raw_sample --platform-sample-dir` 的简写；开发机仍应使用预生成 `--manifest`，不要扫描本地样本目录。
 - 报告增强：加入人工测试基线对比、误报/漏报复核字段和趋势统计。
 
 ## 本地验证

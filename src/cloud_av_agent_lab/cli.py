@@ -483,8 +483,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     multi_run.add_argument(
         "--platform-sample-dir",
-        action="store_true",
-        help=("confirm --sample-dir is being indexed on the cloud platform host"),
+        nargs="?",
+        const="__confirmed__",
+        default="",
+        metavar="PATH",
+        help=(
+            "confirm --sample-dir is being indexed on the cloud platform host; "
+            "optionally pass PATH as shorthand for --sample-dir PATH "
+            "--platform-sample-dir"
+        ),
     )
     multi_run.add_argument(
         "--manifest",
@@ -506,6 +513,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--plan-only",
         action="store_true",
         help="only parse options and plan; do not schedule cases",
+    )
+    multi_run.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm real multi-run execution without an interactive prompt",
     )
     multi_run.add_argument(
         "--all",
@@ -1060,6 +1072,8 @@ def _handle_multi_run(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
 ) -> int:
+    _normalize_multi_run_platform_sample_dir(parser, args)
+    _multi_run_prompt_missing_inputs(parser, args)
     _multi_run_selection_mode(parser, args)
     execution_mode = _multi_run_execution_mode(parser, args)
     if args.max_cases is not None and args.max_cases <= 0:
@@ -1156,6 +1170,7 @@ def _handle_multi_run(
         status = "planned"
         message = "multi-run batch plan created; scheduler skipped by --plan-only"
     else:
+        _confirm_multi_run_real_operation(parser, args, artifacts.batch_plan.batch_id)
         try:
             runner = (
                 FakeSingleRunRunner()
@@ -1238,6 +1253,98 @@ def _handle_multi_run(
         )
     )
     return 0
+
+
+def _normalize_multi_run_platform_sample_dir(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> None:
+    platform_value = str(args.platform_sample_dir or "")
+    if platform_value and platform_value != "__confirmed__":
+        if args.sample_dir and Path(args.sample_dir) != Path(platform_value):
+            parser.exit(
+                2,
+                "error: --sample-dir conflicts with path passed to "
+                "--platform-sample-dir\n",
+            )
+        args.sample_dir = platform_value
+    args.platform_sample_dir = bool(platform_value)
+
+
+def _multi_run_prompt_missing_inputs(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> None:
+    if _multi_run_execution_mode(parser, args) != "run" or not sys.stdin.isatty():
+        return
+    args.product = _single_run_product_or_prompt(parser, args.product)
+    args.instance_id = _prompt_into(args.instance_id, "Lighthouse instance id")
+    args.snapshot_id = _prompt_into(args.snapshot_id, "Baseline snapshot id")
+    args.region = _prompt_into(args.region, "Region", default="ap-singapore")
+    args.guest_agent_url = _prompt_into(
+        args.guest_agent_url,
+        "Guest Agent base URL",
+        default="http://127.0.0.1:8080",
+    )
+    args.desktop_worker_url = _prompt_into(
+        args.desktop_worker_url,
+        "Desktop Worker URL",
+        default="http://127.0.0.1:8001",
+    )
+    if not args.manifest and not args.sample_dir:
+        args.sample_dir = prompt_default(
+            "Cloud platform sample directory",
+            default=r"runs\raw_sample",
+        )
+        args.platform_sample_dir = True
+    if not _has_multi_run_selection(args):
+        args.all = True
+
+
+def _prompt_into(value: str, label: str, default: str = "") -> str:
+    return prompt_default(label, current=value, default=default)
+
+
+def _has_multi_run_selection(args: argparse.Namespace) -> bool:
+    return any(
+        (
+            args.all,
+            bool(args.sample_range),
+            bool(args.indexes),
+            args.from_index is not None,
+            args.to_index is not None,
+        )
+    )
+
+
+def _confirm_multi_run_real_operation(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    batch_id: str,
+) -> None:
+    if args.dry_run or args.yes:
+        return
+    print(f"Batch ID: {batch_id}")
+    print(f"Product: {args.product}")
+    print(f"Instance ID: {args.instance_id}")
+    print(f"Snapshot ID: {args.snapshot_id}")
+    print(f"Region: {args.region}")
+    print(f"Guest Agent: {args.guest_agent_url}")
+    print(f"Desktop Worker: {args.desktop_worker_url or '<not configured>'}")
+    print(f"Sample source: {args.manifest or args.sample_dir}")
+    if not sys.stdin.isatty():
+        parser.exit(
+            2,
+            "error: [Local Check] multi-run 默认会进行实例真实操作；"
+            "当前终端不可交互，无法完成风险确认。需要演练请使用 --dry-run，"
+            "自动化真实执行请显式传入 --yes。\n",
+        )
+    answer = input(
+        "此操作会进行多轮实例真实操作，请务必检查 instance id、快照 id、"
+        "样本目录和产品是否正确，并了解此操作的风险，是否确认？[yes/no]: "
+    ).strip()
+    if answer.casefold() not in {"y", "yes"}:
+        parser.exit(1, "aborted: user declined multi-run real operation\n")
 
 
 def _multi_run_selection_mode(

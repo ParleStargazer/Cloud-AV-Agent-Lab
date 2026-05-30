@@ -24,6 +24,33 @@ evidence export logic.
 python -m cloud_av_agent_lab multi-run --plan runs\plans\batch.toml
 ```
 
+Current MVP CLI also supports an interactive guided mode:
+
+```powershell
+python -m cloud_av_agent_lab multi-run
+```
+
+When required fields are omitted in an interactive terminal, the CLI prompts for
+product, Lighthouse instance, baseline snapshot, region, Guest Agent URL,
+Desktop Worker URL, and the cloud platform sample directory. The default sample
+directory is `runs\raw_sample`, and the default selection is `--all`.
+
+On the cloud platform host, sample directory indexing can be written either as:
+
+```powershell
+python -m cloud_av_agent_lab multi-run --sample-dir runs\raw_sample --platform-sample-dir
+```
+
+or with the shorthand:
+
+```powershell
+python -m cloud_av_agent_lab multi-run --platform-sample-dir runs\raw_sample
+```
+
+Development hosts should continue to use `--manifest` and must not scan a local
+sample directory. Real execution requires an interactive confirmation unless
+`--dry-run`, `--plan-only`, or explicit `--yes` is used.
+
 The first version can also accept a generated CSV/JSON plan, but TOML should
 stay close to the existing lab profile model:
 

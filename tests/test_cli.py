@@ -909,6 +909,93 @@ class CloudLifecycleCliGuardTests(TestCase):
             output = stdout.getvalue()
             self.assertIn('"manifest_sha256"', output)
 
+    def test_multi_run_platform_sample_dir_accepts_path_shorthand(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_dir = tmp_path / "raw_sample"
+            raw_dir.mkdir()
+            (raw_dir / "sample-a.txt").write_text("alpha", encoding="utf-8")
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "multi-run",
+                        "--product",
+                        "huorong",
+                        "--instance-id",
+                        "lhins-example",
+                        "--snapshot-id",
+                        "lhsnap-example",
+                        "--region",
+                        "ap-singapore",
+                        "--guest-agent-url",
+                        "http://127.0.0.1:8080",
+                        "--platform-sample-dir",
+                        str(raw_dir),
+                        "--batch-root",
+                        str(tmp_path / "batches"),
+                        "--batch-id",
+                        "sample-dir-shorthand-test",
+                        "--all",
+                        "--plan-only",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            batch_dir = tmp_path / "batches" / "sample-dir-shorthand-test"
+            self.assertTrue(
+                (batch_dir / "sample_index" / "sample_manifest.jsonl").is_file()
+            )
+            output = stdout.getvalue()
+            payload = json.loads(output[output.index("{") :])
+            self.assertEqual(payload["sample_dir"], str(raw_dir))
+
+    def test_multi_run_interactive_guided_mode_prompts_for_missing_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_dir = tmp_path / "raw_sample"
+            raw_dir.mkdir()
+            (raw_dir / "sample-a.txt").write_text("alpha", encoding="utf-8")
+            stdout = StringIO()
+
+            with (
+                redirect_stdout(stdout),
+                patch("sys.stdin.isatty", return_value=True),
+                patch(
+                    "builtins.input",
+                    side_effect=[
+                        "huorong",
+                        "lhins-example",
+                        "lhsnap-example",
+                        "",
+                        "http://127.0.0.1:8080",
+                        "",
+                        str(raw_dir),
+                    ],
+                ),
+            ):
+                exit_code = main(
+                    [
+                        "multi-run",
+                        "--batch-root",
+                        str(tmp_path / "batches"),
+                        "--batch-id",
+                        "guided-test",
+                        "--plan-only",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            batch_dir = tmp_path / "batches" / "guided-test"
+            plan = json.loads((batch_dir / "batch_plan.json").read_text("utf-8"))
+            self.assertEqual(plan["product_id"], "huorong")
+            self.assertEqual(plan["instance_id"], "lhins-example")
+            self.assertEqual(plan["snapshot_id"], "lhsnap-example")
+            self.assertEqual(plan["region"], "ap-singapore")
+            self.assertEqual(plan["selection"]["mode"], "all")
+            self.assertEqual(plan["selection"]["selected_indexes"], [1])
+
     def test_multi_run_sample_dir_requires_platform_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
