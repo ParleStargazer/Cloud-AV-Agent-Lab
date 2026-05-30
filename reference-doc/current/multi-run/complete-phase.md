@@ -332,3 +332,46 @@ fake scheduler 只用于压稳 state/event/failure-policy 语义。
 
 下一阶段建议进入 Commit 10：接入真实 single-run runner adapter 前的
 preflight / resume 设计收口。
+
+## 2026-05-30 Commit 10：Aggregate Summary
+
+本阶段完成 `multi-run` 第十阶段 aggregate summary MVP：
+
+- 新增 `multi-run-aggregate-summary.v1` schema。
+- batch scheduler 在最终状态落盘后生成：
+  - `aggregate_summary.json`
+  - `aggregate_summary.md`
+- `aggregate_summary.json` 汇总：
+  - `selected_samples`
+  - `planned_cases`
+  - `completed_cases`
+  - `evaluable_cases`
+  - `not_evaluable_cases`
+  - `case_failures`
+  - `environment_failures`
+  - `environment_stopped`
+  - verdict breakdown
+  - readiness breakdown
+  - case / cleanup / evidence / summary status breakdown
+  - case error summary
+  - relative case summary / run state / evidence bundle path
+- detection rate denominator 只统计可评测 case；`not_evaluable`、case failure、
+  environment failure 不进入检测率分母。
+- `aggregate_summary.md` 提供简洁人类可读摘要，便于快速查看 batch 结果。
+- `multi-run` CLI 在 scheduler 路径输出：
+  - `aggregate_summary_path`
+  - `aggregate_summary_markdown_path`
+- 新增 `aggregate_summary_written` event，并保持最终事件仍为
+  `batch_finished`。
+- 新增 / 更新测试覆盖：
+  - aggregate summary 文件写入。
+  - selected samples / evaluable cases / case failures 统计。
+  - environment stopped 单独统计。
+  - verdict / readiness breakdown。
+  - evidence bundle path 使用 batch-relative path。
+  - CLI 输出 aggregate summary 路径。
+
+本阶段只聚合 multi-run state 与单轮结果元数据路径，不读取样本本体、不读取
+raw product logs、不读取 `configs/real.toml`、不触发云操作。
+
+下一阶段建议进入 Commit 11：resume / rerun / force-rerun 模式。

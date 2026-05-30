@@ -14,6 +14,7 @@ SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION = "multi-run-sample.v1"
 BATCH_PLAN_SCHEMA_VERSION = "multi-run-plan.v1"
 MULTI_RUN_STATE_SCHEMA_VERSION = "multi-run-state.v1"
 MULTI_RUN_EVENT_SCHEMA_VERSION = "multi-run-event.v1"
+MULTI_RUN_AGGREGATE_SUMMARY_SCHEMA_VERSION = "multi-run-aggregate-summary.v1"
 MULTI_RUN_VERSION = "multi-run.v1"
 
 FailureKind: TypeAlias = Literal[
@@ -705,6 +706,20 @@ class MultiRunPlanArtifacts:
             "event_log_path": str(self.event_log_path),
             "batch_plan_sha256": self.batch_plan_sha256,
             "batch_plan": self.batch_plan.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class MultiRunAggregateArtifacts:
+    summary_json_path: Path
+    summary_markdown_path: Path
+    summary: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "summary_json_path": str(self.summary_json_path),
+            "summary_markdown_path": str(self.summary_markdown_path),
+            "summary": _jsonable(self.summary),
         }
 
 
@@ -1503,6 +1518,16 @@ def execute_multi_run_batch(
         )
         write_multi_run_state(state_path, state)
 
+    aggregate = write_multi_run_aggregate_summary(root, state)
+    append_next_multi_run_event(
+        event_log_path,
+        batch_id=plan.batch_id,
+        event_type="aggregate_summary_written",
+        data={
+            "aggregate_summary_path": aggregate.summary_json_path.name,
+            "aggregate_summary_markdown_path": aggregate.summary_markdown_path.name,
+        },
+    )
     append_next_multi_run_event(
         event_log_path,
         batch_id=plan.batch_id,
@@ -1515,6 +1540,157 @@ def execute_multi_run_batch(
         },
     )
     return state
+
+
+def write_multi_run_aggregate_summary(
+    batch_dir: Path | str,
+    state: MultiRunState,
+) -> MultiRunAggregateArtifacts:
+    root = Path(batch_dir)
+    summary = build_multi_run_aggregate_summary(root, state)
+    summary_json_path = root / "aggregate_summary.json"
+    summary_markdown_path = root / "aggregate_summary.md"
+    _write_json_atomic(summary_json_path, summary)
+    summary_markdown_path.write_text(
+        render_multi_run_aggregate_markdown(summary),
+        encoding="utf-8",
+    )
+    return MultiRunAggregateArtifacts(
+        summary_json_path=summary_json_path,
+        summary_markdown_path=summary_markdown_path,
+        summary=summary,
+    )
+
+
+def build_multi_run_aggregate_summary(
+    batch_dir: Path | str,
+    state: MultiRunState,
+) -> dict[str, Any]:
+    root = Path(batch_dir)
+    cases = list(state.cases)
+    selected_samples = len(state.selected_indexes)
+    case_failures = [case for case in cases if case.failure_kind == "case_failure"]
+    environment_failures = [
+        case for case in cases if case.failure_kind == "environment_failure"
+    ]
+    completed_cases = [case for case in cases if case.case_status == "completed"]
+    evaluable_cases = [
+        case
+        for case in completed_cases
+        if case.failure_kind is None and case.verdict != "not_evaluable"
+    ]
+    detected_cases = [
+        case for case in evaluable_cases if case.verdict == "detected_or_blocked"
+    ]
+    not_evaluable_cases = [
+        case
+        for case in cases
+        if case.verdict == "not_evaluable" or case.failure_kind is not None
+    ]
+    denominator = {
+        "selected_samples": selected_samples,
+        "planned_cases": len(cases),
+        "completed_cases": len(completed_cases),
+        "evaluable_cases": len(evaluable_cases),
+        "not_evaluable_cases": len(not_evaluable_cases),
+        "case_failures": len(case_failures),
+        "environment_failures": len(environment_failures),
+        "environment_stopped": bool(
+            environment_failures
+            or state.batch_state == "stopped_for_environment_failure"
+            or state.unsafe_to_continue
+        ),
+    }
+    detection_rate = {
+        "detected_or_blocked": len(detected_cases),
+        "denominator": len(evaluable_cases),
+        "rate": (
+            round(len(detected_cases) / len(evaluable_cases), 6)
+            if evaluable_cases
+            else None
+        ),
+    }
+    return {
+        "schema_version": MULTI_RUN_AGGREGATE_SUMMARY_SCHEMA_VERSION,
+        "batch_id": state.batch_id,
+        "generated_at_utc": utc_now(),
+        "product_id": state.product_id,
+        "instance_id": state.instance_id,
+        "snapshot_id": state.snapshot_id,
+        "region": state.region,
+        "batch_state": state.batch_state,
+        "final_status": state.final_status,
+        "manifest_sha256": state.manifest_sha256,
+        "batch_plan_sha256": state.batch_plan_sha256,
+        "selected_indexes": list(state.selected_indexes),
+        "denominator": denominator,
+        "detection_rate": detection_rate,
+        "verdict_breakdown": _count_case_field(cases, "verdict"),
+        "readiness_breakdown": _count_case_field(cases, "readiness_status"),
+        "status_breakdown": {
+            "case_status": _count_case_field(cases, "case_status"),
+            "cleanup_status": _count_case_field(cases, "cleanup_status"),
+            "evidence_status": _count_case_field(cases, "evidence_status"),
+            "summary_status": _count_case_field(cases, "summary_status"),
+        },
+        "case_errors": _aggregate_case_errors(cases),
+        "cases": [_aggregate_case_payload(root, case) for case in cases],
+        "paths": {
+            "state": "multi_run_state.json",
+            "events": "multi_run_events.jsonl",
+            "aggregate_summary": "aggregate_summary.json",
+            "aggregate_summary_markdown": "aggregate_summary.md",
+        },
+    }
+
+
+def render_multi_run_aggregate_markdown(summary: Mapping[str, Any]) -> str:
+    denominator = _mapping_or_empty(summary.get("denominator"))
+    detection_rate = _mapping_or_empty(summary.get("detection_rate"))
+    case_errors = summary.get("case_errors")
+    error_count = len(case_errors) if isinstance(case_errors, list) else 0
+    lines = [
+        "# Multi-Run Aggregate Summary",
+        "",
+        f"- Batch: {summary.get('batch_id', '')}",
+        f"- Product: {summary.get('product_id', '')}",
+        f"- Final status: {summary.get('final_status', '')}",
+        f"- Selected samples: {denominator.get('selected_samples', 0)}",
+        f"- Evaluable cases: {denominator.get('evaluable_cases', 0)}",
+        f"- Case failures: {denominator.get('case_failures', 0)}",
+        f"- Environment failures: {denominator.get('environment_failures', 0)}",
+        (
+            "- Detection rate: "
+            f"{detection_rate.get('detected_or_blocked', 0)}/"
+            f"{detection_rate.get('denominator', 0)}"
+        ),
+        f"- Case errors: {error_count}",
+        "",
+        "## Verdict Breakdown",
+        "",
+    ]
+    verdict_breakdown = _mapping_or_empty(summary.get("verdict_breakdown"))
+    if verdict_breakdown:
+        lines.extend(
+            f"- {verdict}: {count}"
+            for verdict, count in sorted(verdict_breakdown.items())
+        )
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Case Errors", ""])
+    if isinstance(case_errors, list) and case_errors:
+        for item in case_errors:
+            if isinstance(item, dict):
+                lines.append(
+                    "- "
+                    f"{item.get('case_id', '')}: "
+                    f"{item.get('failure_kind', '')} "
+                    f"{item.get('error_summary', '')}".rstrip()
+                )
+    else:
+        lines.append("- none")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def load_batch_plan(path: Path | str) -> BatchPlan:
@@ -1740,6 +1916,81 @@ def _completed_batch_state(state: MultiRunState) -> BatchState:
     if warnings or state.warnings:
         return "completed_with_warnings"
     return "completed"
+
+
+def _count_case_field(cases: Iterable[CaseState], field_name: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for case in cases:
+        value = getattr(case, field_name)
+        key = str(value) if value not in (None, "") else "none"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _aggregate_case_payload(root: Path, case: CaseState) -> dict[str, Any]:
+    return {
+        "sample_index": case.sample_index,
+        "sample_id": case.sample_id,
+        "case_name": case.case_name,
+        "case_id": case.case_id,
+        "run_id": case.run_id,
+        "case_status": case.case_status,
+        "single_run_status": case.single_run_status,
+        "cleanup_status": case.cleanup_status,
+        "evidence_status": case.evidence_status,
+        "summary_status": case.summary_status,
+        "readiness_status": case.readiness_status,
+        "verdict": case.verdict,
+        "confidence": case.confidence,
+        "failure_kind": case.failure_kind,
+        "result_source": case.result_source,
+        "simulated": case.simulated,
+        "resume_eligible": case.resume_eligible,
+        "error_summary": case.error_summary,
+        "warnings": list(case.warnings),
+        "paths": {
+            "case_summary": _relative_batch_path(root, case.case_summary_path),
+            "run_state": _relative_batch_path(root, case.run_state_path),
+            "evidence_bundle": _relative_batch_path(root, case.evidence_bundle_path),
+        },
+    }
+
+
+def _aggregate_case_errors(cases: Iterable[CaseState]) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    for case in cases:
+        if not case.error_summary and case.failure_kind is None:
+            continue
+        errors.append(
+            {
+                "sample_index": case.sample_index,
+                "sample_id": case.sample_id,
+                "case_name": case.case_name,
+                "case_id": case.case_id,
+                "case_status": case.case_status,
+                "failure_kind": case.failure_kind,
+                "cleanup_status": case.cleanup_status,
+                "summary_status": case.summary_status,
+                "error_summary": case.error_summary,
+            }
+        )
+    return errors
+
+
+def _relative_batch_path(root: Path, value: str) -> str:
+    if not value:
+        return ""
+    path = Path(value)
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return path.as_posix()
+
+
+def _mapping_or_empty(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    return {}
 
 
 def _initial_multi_run_state(

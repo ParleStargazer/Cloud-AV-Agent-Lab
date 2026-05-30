@@ -740,6 +740,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertIn('"status": "completed"', output)
             self.assertIn('"selection_mode": "range"', output)
             self.assertIn('"selected_indexes": [\n    1,\n    2\n  ]', output)
+            self.assertIn('"aggregate_summary_path"', output)
             plan_path = tmp_path / "batches" / "batch-test" / "batch_plan.json"
             plan = json.loads(plan_path.read_text(encoding="utf-8"))
             self.assertEqual(plan["manifest_sha256"], _sha256_file(manifest_path))
@@ -778,6 +779,14 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(state["cases"][0]["summary_status"], "collected")
             self.assertEqual(state["cases"][0]["evidence_status"], "exported")
             self.assertEqual(state["batch_state"], "completed")
+            self.assertTrue(
+                (
+                    tmp_path / "batches" / "batch-test" / "aggregate_summary.json"
+                ).is_file()
+            )
+            self.assertTrue(
+                (tmp_path / "batches" / "batch-test" / "aggregate_summary.md").is_file()
+            )
             self.assertTrue(
                 (
                     tmp_path / "batches" / "batch-test" / "cases" / ("0001_" + "a" * 16)

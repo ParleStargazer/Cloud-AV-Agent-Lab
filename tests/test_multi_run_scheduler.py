@@ -122,7 +122,62 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertIn("single_run_started", event_types)
             self.assertIn("single_run_completed", event_types)
             self.assertIn("case_finalized", event_types)
+            self.assertIn("aggregate_summary_written", event_types)
             self.assertEqual(event_types[-1], "batch_finished")
+
+    def test_scheduler_writes_aggregate_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(
+                tmp,
+                scenarios={1: "completed", 2: "summary_missing", 3: "completed"},
+                indexes=(1, 2, 3),
+            )
+
+            summary_path = batch_dir / "aggregate_summary.json"
+            markdown_path = batch_dir / "aggregate_summary.md"
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            markdown = markdown_path.read_text(encoding="utf-8")
+
+            self.assertEqual(
+                summary["schema_version"], "multi-run-aggregate-summary.v1"
+            )
+            self.assertEqual(summary["denominator"]["selected_samples"], 3)
+            self.assertEqual(summary["denominator"]["case_failures"], 1)
+            self.assertEqual(summary["denominator"]["environment_failures"], 0)
+            self.assertEqual(summary["denominator"]["evaluable_cases"], 2)
+            self.assertEqual(summary["detection_rate"]["detected_or_blocked"], 2)
+            self.assertEqual(summary["detection_rate"]["denominator"], 2)
+            self.assertEqual(summary["verdict_breakdown"]["detected_or_blocked"], 2)
+            self.assertEqual(summary["verdict_breakdown"]["not_evaluable"], 1)
+            self.assertEqual(summary["readiness_breakdown"]["ok"], 2)
+            self.assertEqual(summary["case_errors"][0]["failure_kind"], "case_failure")
+            self.assertEqual(
+                summary["cases"][0]["paths"]["evidence_bundle"],
+                "cases/0001_aaaaaaaaaaaaaaaa/single_run/"
+                "case_evidence_0001_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                "aaaaaaaaaaaaaaaa__huorong.zip",
+            )
+            self.assertNotIn("\\", summary["cases"][0]["paths"]["evidence_bundle"])
+            self.assertIn("Multi-Run Aggregate Summary", markdown)
+            self.assertIn("Case failures: 1", markdown)
+
+    def test_aggregate_counts_environment_stopped_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(
+                tmp,
+                scenarios={1: "cleanup_restore_failed", 2: "completed"},
+            )
+
+            summary = json.loads(
+                (batch_dir / "aggregate_summary.json").read_text(encoding="utf-8")
+            )
+
+            self.assertEqual(summary["final_status"], "stopped_for_environment_failure")
+            self.assertTrue(summary["denominator"]["environment_stopped"])
+            self.assertEqual(summary["denominator"]["environment_failures"], 1)
+            self.assertEqual(summary["denominator"]["case_failures"], 0)
+            self.assertEqual(summary["denominator"]["evaluable_cases"], 0)
+            self.assertEqual(summary["detection_rate"]["denominator"], 0)
 
 
 def _plan_and_execute(

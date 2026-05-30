@@ -1139,6 +1139,16 @@ def _handle_multi_run(
                 "manifest_sha256_path": str(artifacts.manifest_sha256_path),
                 "state_path": str(artifacts.state_path),
                 "event_log_path": str(artifacts.event_log_path),
+                "aggregate_summary_path": (
+                    str(artifacts.batch_dir / "aggregate_summary.json")
+                    if state is not None
+                    else ""
+                ),
+                "aggregate_summary_markdown_path": (
+                    str(artifacts.batch_dir / "aggregate_summary.md")
+                    if state is not None
+                    else ""
+                ),
                 "batch_plan_sha256": artifacts.batch_plan_sha256,
                 "batch_state": state.batch_state if state is not None else "",
                 "final_status": state.final_status if state is not None else "",
