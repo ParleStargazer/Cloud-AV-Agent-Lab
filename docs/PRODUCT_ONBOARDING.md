@@ -42,6 +42,7 @@ Each product must choose a stable lowercase `product_id`, for example:
 ```text
 huorong
 windows-defender
+qihoo-360
 tencent-pc-manager
 ```
 

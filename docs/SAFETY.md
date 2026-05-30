@@ -1,21 +1,26 @@
 # Safety Model
 
-This repository is designed for local automation development without local malware handling.
+This repository is designed for local automation development without local
+malware handling. Real-sample validation, when approved for a later phase or a
+manual smoke test, must stay inside the cloud-isolated guest or cloud-side
+controlled storage; the local control plane still must not execute, open,
+extract, scan, or parse the sample.
 
 ## Allowed Locally
 
 - Store source code, TOML configs, generated reports, and sanitized logs.
 - Store cloud object references to already approved samples.
-- Read a user-explicit EICAR or harmless test file path for the upload MVP.
+- Read a user-explicit EICAR or harmless test file path for development upload
+  validation.
 - Analyze structured observations collected from isolated VMs.
 - Compare AV products by detection signal, confidence, and evidence.
 
 ## Not Allowed Locally
 
 - Store executable samples or archives containing samples.
-- Read, receive, upload, download, save, open, extract, scan, parse, or execute
-  real malware samples in the current development phase.
-- Download samples from cloud storage to the developer machine.
+- Execute, open, extract, scan, parse, or inspect real malware samples on the
+  local host.
+- Download real samples from cloud storage to the developer machine.
 - Execute samples on the developer machine.
 - Add instructions whose purpose is to bypass, disable, or evade AV products.
 - Mix multiple test cases in one dirty VM state.

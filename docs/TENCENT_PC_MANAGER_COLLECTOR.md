@@ -134,3 +134,14 @@ It must not include:
 - `TAVCacheFullEx.db` bytes;
 - tokens, cloud secrets, environment variables, or real cloud config.
 
+## Smoke Result
+
+2026-05-30: Tencent PC Manager MVP was validated with a cloud-isolated
+`single-run` smoke test. The run used `product_id = tencent-pc-manager`,
+readiness returned `ready`, delivery remained `stable`, collection returned
+`collected / intercepted`, and normalized evidence contained strong attribution
+from the current sample MD5 quarantine container, the case time window, and a
+small container size delta. The evaluator produced
+`detected_or_blocked / high`, cleanup restored the baseline snapshot, and the
+evidence bundle excluded raw TAV artifacts, uploaded sample bytes, tokens,
+cloud credentials, and `configs/real.toml`.

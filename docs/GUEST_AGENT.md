@@ -3,10 +3,11 @@
 Guest Agent runs inside the cloud-isolated Windows Lighthouse instance. The local
 host only calls it over HTTP through the existing control plane.
 
-Current safety boundary: this development phase does not touch real malware
-samples. The local control plane may only read a user-explicit EICAR or harmless
-test file path for upload. It must not read, receive, upload, download, save,
-open, extract, scan, parse, or execute real malware samples.
+Current safety boundary: development upload validation uses user-explicit EICAR
+or harmless test files. If a later approved smoke test uses a real sample, that
+sample must stay inside the cloud-isolated guest or cloud-side controlled
+storage. The local control plane must not execute, open, extract, scan, parse,
+or inspect real samples.
 
 ## Boundary
 
@@ -14,8 +15,8 @@ The Guest Agent is a guest-side helper, not a general remote shell. It is
 intended to expose narrowly scoped workflow endpoints that the local orchestrator
 can call after the cloud VM has been restored to a clean snapshot and started.
 
-The MVP supports harmless connectivity, workspace preparation, and a safe upload
-chain for EICAR or harmless test files:
+The MVP supports connectivity, workspace preparation, and a bounded upload
+chain for user-explicit test files:
 
 - `GET /health`: check that the agent process is reachable.
 - `GET /system-info`: return basic host and environment metadata.
@@ -62,8 +63,10 @@ cloud-isolated guest and must never download samples to the local host.
 
 - Local code must not download samples.
 - Local code must not execute samples.
-- Local code must not touch real malware samples in this phase.
-- Local upload code may only read a user-explicit EICAR or harmless file path.
+- Local code must not execute, open, extract, scan, parse, or inspect real
+  malware samples.
+- Development upload code should use a user-explicit EICAR or harmless file
+  path. Real-sample validation belongs in the cloud-isolated workflow.
 - Guest Agent upload code must only save bytes and metadata; it must not open,
   analyze, scan, unpack, or execute the uploaded file.
 - Guest Agent must not expose an arbitrary command execution endpoint.

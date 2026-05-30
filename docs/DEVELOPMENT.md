@@ -283,7 +283,7 @@ python -m cloud_av_agent_lab guest-collect-logs --config configs/lab.local.toml 
 
 2026-05-16 阶段完成了日志收集、简易评测和证据导出的 MVP：杀毒软件日志收集框架负责 product collector 插件与统一证据 schema；火绒 collector 作为首个实现负责读取和归一化火绒拦截日志；Guest Agent 提供 collection、summary 和 evidence-bundle 接口；本地 CLI 对应提供 `guest-collect-logs`、`guest-case-summary` 和 `guest-export-evidence`。
 
-收集阶段已新增 `docs/COLLECTION_MODEL.md` 和 Guest Agent collector 插件模型。统一 schema 位于 `src/cloud_av_agent_lab/guest_agent_server/collectors/base.py`，collector 注册入口位于 `collectors/registry.py`，新增产品接入清单位于 `docs/PRODUCT_ONBOARDING.md`。当前产品实现包括 `collectors/huorong/`、`collectors/windows_defender/`、`collectors/qihoo_360/` 和 `collectors/tencent_pc_manager/`。`guest-collect-logs --product huorong|windows-defender|qihoo-360|tencent-pc-manager` 会调用云端对应 collection endpoint。Huorong collector 在 Guest Agent 内复制火绒 `C:\ProgramData\Huorong\sysdiag\log.db*` 到当前 case 的 `collection/huorong/` artifact 目录，再只读打开 SQLite 并自动发现最新的 `HrLogV3_*` 表。JSON payload 列会优先按 `detail`、`raw_json`、`payload`、`data`、`event_json` 等名称识别；真实火绒表中通常是 DB 列 `detail`，且该列 JSON 里还有嵌套 `detail` 对象。Windows Defender collector 通过 reader 抽象读取 Defender Operational channel；pywin32 缺失时返回结构化 `failed/unknown`，不抛 500。Qihoo 360 collector 复制 `360safe.Summary.dat` 快照后只读解析 `FI/FQ`，按 case path、baseline delta、时间窗口、hash 和威胁字段保守归因；FILETIME-like 时间字段会按 UTC+8 本地墙钟时间归一化为 UTC，并保留 warning。Tencent PC Manager collector 只观察 QQPCMgr/TAV 隔离 metadata：`Quarantine\<md5>` 容器、`<md5>.ico` sidecar 和 `TAVCacheFullEx.db` baseline/current stat；它不解密、不复制 raw TAV 容器进 evidence bundle，也不会把单独 TAV cache 活动直接当成检出。2026-05-29 的云端隔离 `single-run` smoke 已确认管理员账号 Desktop Worker 能触发当前 case 样本、360 写入 `Summary.dat` 隔离记录、collector 读取到 `av_quarantined` normalized evidence，summary 生成 `detected_or_blocked / high` 结论。raw SQLite、union metadata、q3q、TAV raw artifact 和样本本体默认都不进入 redacted evidence bundle。输出写入 `case_collection.json`，包含 normalized product events、统一时间线、时间窗口、collection_state、保守 verdict 和 collector artifact policy。只有产品日志或产品 metadata 中的 hash/path/pid/time-window 证据才会产生 `intercepted`；单独的 `removed_after_save`、TAV cache 活动或进程消失不会被直接判定为拦截。SQLite 读取失败会返回安全诊断信息，例如可用表名，不返回样本内容或 token。Raw product log 文件会被声明为 `raw_product_log` / `raw_blocked`，默认不进入 redacted evidence bundle。
+收集阶段已新增 `docs/COLLECTION_MODEL.md` 和 Guest Agent collector 插件模型。统一 schema 位于 `src/cloud_av_agent_lab/guest_agent_server/collectors/base.py`，collector 注册入口位于 `collectors/registry.py`，新增产品接入清单位于 `docs/PRODUCT_ONBOARDING.md`。当前产品实现包括 `collectors/huorong/`、`collectors/windows_defender/`、`collectors/qihoo_360/` 和 `collectors/tencent_pc_manager/`。`guest-collect-logs --product huorong|windows-defender|qihoo-360|tencent-pc-manager` 会调用云端对应 collection endpoint。Huorong collector 在 Guest Agent 内复制火绒 `C:\ProgramData\Huorong\sysdiag\log.db*` 到当前 case 的 `collection/huorong/` artifact 目录，再只读打开 SQLite 并自动发现最新的 `HrLogV3_*` 表。JSON payload 列会优先按 `detail`、`raw_json`、`payload`、`data`、`event_json` 等名称识别；真实火绒表中通常是 DB 列 `detail`，且该列 JSON 里还有嵌套 `detail` 对象。Windows Defender collector 通过 reader 抽象读取 Defender Operational channel；pywin32 缺失时返回结构化 `failed/unknown`，不抛 500。Qihoo 360 collector 复制 `360safe.Summary.dat` 快照后只读解析 `FI/FQ`，按 case path、baseline delta、时间窗口、hash 和威胁字段保守归因；FILETIME-like 时间字段会按 UTC+8 本地墙钟时间归一化为 UTC，并保留 warning。Tencent PC Manager collector 只观察 QQPCMgr/TAV 隔离 metadata：`Quarantine\<md5>` 容器、`<md5>.ico` sidecar 和 `TAVCacheFullEx.db` baseline/current stat；它不解密、不复制 raw TAV 容器进 evidence bundle，也不会把单独 TAV cache 活动直接当成检出。2026-05-29 的云端隔离 `single-run` smoke 已确认管理员账号 Desktop Worker 能触发当前 case 样本、360 写入 `Summary.dat` 隔离记录、collector 读取到 `av_quarantined` normalized evidence，summary 生成 `detected_or_blocked / high` 结论。2026-05-30 的 Tencent PC Manager 云端隔离 `single-run` smoke 已确认 `tencent-pc-manager` readiness 为 `ready`、collection 读取到 TAV 隔离容器 metadata、strong attribution 包含 `md5_quarantine_filename`、`time_window` 和 `size_delta`，summary 生成 `detected_or_blocked / high` 结论，cleanup restore 正常完成。raw SQLite、union metadata、q3q、TAV raw artifact 和样本本体默认都不进入 redacted evidence bundle。输出写入 `case_collection.json`，包含 normalized product events、统一时间线、时间窗口、collection_state、保守 verdict 和 collector artifact policy。只有产品日志或产品 metadata 中的 hash/path/pid/time-window 证据才会产生 `intercepted`；单独的 `removed_after_save`、TAV cache 活动或进程消失不会被直接判定为拦截。SQLite 读取失败会返回安全诊断信息，例如可用表名，不返回样本内容或 token。Raw product log 文件会被声明为 `raw_product_log` / `raw_blocked`，默认不进入 redacted evidence bundle。
 
 Evaluation / Evidence Export MVP 新增两条 Guest Agent CLI：`guest-case-summary` 和 `guest-export-evidence`。`guest-case-summary` 调用 `GET /cases/{case_id}/summary`，由 `cloud_av_agent_lab.evaluation` 汇总投送、执行、readiness 和 collection 证据，生成 `case_summary.json` / `case_summary.md`。CLI 默认输出简洁结论，显式加 `--json` 时才打印完整结构；summary timeline 会折叠重复轮询事件，只保留关键状态变化、collection 边界和产品日志证据，完整审计仍在 `events.jsonl`。结论采用保守 verdict：产品日志证据优先给出 `detected_or_blocked`；只有文件消失但缺少日志证据时给出 `suspiciously_removed`；执行未发生或不可观察时不会武断判定未检出；只有 `security_product_readiness.state == ready` 时才允许 `no_detection_observed`。`guest-export-evidence` 调用 `GET /cases/{case_id}/evidence-bundle`，保存 redacted guest-reported `case_evidence_<case_id>.zip`。证据包包含 manifest、脱敏后的 case metadata、`case_security_product_readiness.json`、summary、events、`sample/sample.json`、Worker state 和 normalized evidence，不包含上传样本本体、token、环境变量、云密钥、真实云配置文件、`security-product-readiness/` readiness snapshot 或 raw copied log DB。manifest 会记录 `trust_model=dirty_instance_untrusted`、`forensic_grade=false`、`raw_binary_included=false`、redaction policy、redacted files、excluded raw artifacts 和 bundle 内每个文件的 SHA-256，便于后续归档核验。
 
@@ -372,6 +372,25 @@ zip、真实云配置、token/credential/key 命名文件、symlink/junction、�
 新增安全原则：样本投送或触发后，测试实例内的静态文件、日志、工具、解释器、Guest Agent、Desktop Worker 和临时目录都视为不可信。Redaction MVP 只提供 `guest-reported` 的脱敏观察结果，适合开发、EICAR/无害样本验证和课程交付，不宣称 forensic-grade。若后续需要 raw 证据，应停止实例后通过云快照/克隆盘进入干净取证环境只读挂载，再用可信 collector/redactor 提取和脱敏，不应让脏实例自我打包 raw 日志后回传本地。
 
 Manifest 中的 `redaction_policy` 是结构化自描述对象：当前默认开启文本脱敏、关闭二进制脱敏、保留 hash 关联字段，并记录 bundle 文件数、单文件大小、总未压缩大小和文本脱敏大小上限。产品语义级脱敏由 collector 声明，exporter 只做全局兜底脱敏和打包安全裁决；这些值先保持代码常量，不开放绕过 redaction 或包含 raw binary 的配置开关。
+
+## Multi-Run 下一步计划
+
+四个安全产品的 MVP 接入和 smoke 封板完成后，下一阶段主线转为
+`multi-run`。`multi-run` 不应重写一套执行流程，而应把现有
+`single-run` 作为单 case 原语进行调度：
+
+- 从 batch plan 读取样本、产品和 VM profile 矩阵；
+- 复用 single-run 的实例锁、快照回滚、Guest Agent ready、Desktop Worker
+  gate、readiness、上传、受控触发、collection、summary 和 evidence 导出；
+- 同一个 Lighthouse `instance_id` 下的不同产品快照必须串行执行；
+- 只有不同 `instance_id` 才考虑并行；
+- 输出 `multi_run_state.json`、`aggregate_summary.json` 和
+  `aggregate_summary.md`；
+- 聚合层只读取每个 run 的 `run_state.json`、`case_summary.json` 和 evidence
+  metadata，不读取样本本体、raw product logs、token、云密钥或
+  `configs/real.toml`。
+
+详细设计草案见 `docs/MULTI_RUN_PLAN.md`。
 
 ## 结构拆分记录
 

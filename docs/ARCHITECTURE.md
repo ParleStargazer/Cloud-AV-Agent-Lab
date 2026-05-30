@@ -85,20 +85,21 @@ vendor-log parsing should not be coupled into upload or trigger endpoints.
 
 Security product readiness is a separate case-scoped pre-delivery observation
 stage. Current probes are selected by `product_id` through the readiness
-registry and support Huorong and Windows Defender log observability. The result
-writes `case_security_product_readiness.json`,
+registry and support Huorong, Windows Defender, Qihoo 360, and Tencent PC
+Manager. The result writes `case_security_product_readiness.json`,
 `case_state.security_product_readiness`, and a `case_report.json` summary. It is
-read-only: Huorong checks copied `log.db` metadata, while Windows Defender uses
-the Windows Event Log reader abstraction to check Operational channel
-observability. Readiness does not parse interception logs, does not read sample
-bytes, does not modify product services, and does not prove real-time
-protection is enabled. The evaluator uses readiness only to gate the optimistic
-`no_detection_observed` verdict: `ready` is required before claiming no
-detection was observed, while explicit product-log detections still win. The
-evidence exporter may include only the redacted
+read-only: Huorong checks copied `log.db` metadata, Windows Defender uses the
+Windows Event Log reader abstraction to check Operational channel
+observability, Qihoo 360 checks `Summary.dat` observability, and Tencent PC
+Manager checks TAV quarantine metadata observability. Readiness does not parse
+interception logs, does not read sample bytes, does not modify product services,
+and does not prove real-time protection is enabled. The evaluator uses
+readiness only to gate the optimistic `no_detection_observed` verdict: `ready`
+is required before claiming no detection was observed, while explicit product
+evidence still wins. The evidence exporter may include only the redacted
 `case_security_product_readiness.json` metadata; copied readiness snapshot
 directories are raw product log material and remain excluded. Collection remains
-responsible for product-log detection evidence.
+responsible for product detection evidence.
 
 ## Adapter Contracts
 
@@ -156,8 +157,9 @@ correctness. The Worker runs in the interactive desktop session and is queried
 through Control Agent `/worker/status`; it binds only to localhost and is
 authenticated with `CLOUD_AV_DESKTOP_WORKER_TOKEN`. Current real process launch
 and process-tree observation are routed through Worker with a short-lived
-single-use execution lease, run-bound metadata, `.exe`-only enforcement, and
-minimal child-process environment. See `docs/DESKTOP_WORKER.md`.
+single-use execution lease, run-bound metadata, controlled `.exe` and
+`.bat/.cmd` handlers, disabled-by-default PowerShell handling, and a minimal
+child-process environment. See `docs/DESKTOP_WORKER.md`.
 
 The Guest Agent MVP is documented in `docs/GUEST_AGENT.md`. It currently covers
 `/health`, `/system-info`, `/prepare-case`, an EICAR/harmless-file upload
@@ -167,7 +169,7 @@ status proxy, and a default-disabled
 controlled action endpoint. The default workflow does not execute samples; the
 real trigger path is available only when execution is explicitly enabled,
 Desktop Worker is ready, and the request is restricted to the current case's
-registered uploaded EICAR or harmless `.exe`.
+registered uploaded sample.
 
 The trigger-stage design is documented in `docs/EXECUTION_MODEL.md`. It forbids
 arbitrary command execution, client-supplied guest paths, shell/cmd/PowerShell
@@ -208,6 +210,18 @@ requires forensic-grade raw evidence, the trust root should move to an offline
 workflow: stop the test instance, clone or snapshot the disk, mount it read-only
 in a clean forensic environment, run a trusted collector/redactor there, and
 export redacted text artifacts from that environment.
+
+## Multi-Run Direction
+
+The next orchestration layer should be `multi-run`. It should schedule a matrix
+of samples, products, and VM profiles by invoking the existing `single-run`
+case primitive instead of reimplementing cloud lifecycle or Guest Agent logic.
+Runs sharing the same Lighthouse `instance_id` must remain serial because every
+case restores that instance to a product baseline snapshot. Future parallelism
+is safe only across distinct instance ids. Aggregate reports should read
+`run_state.json`, `case_summary.json`, and evidence metadata from per-case run
+directories; they should not read uploaded sample bodies, raw product logs,
+tokens, cloud credentials, or real cloud configs. See `docs/MULTI_RUN_PLAN.md`.
 
 `VmProfile` represents a recoverable test environment profile, not necessarily a unique cloud machine. Multiple profiles may share the same Lighthouse `instance_id` when each profile points to a different `baseline_snapshot` and `product_id`. This single-instance, multi-snapshot layout is supported as long as orchestration remains serial or future schedulers lock by `instance_id`.
 
