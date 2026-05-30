@@ -147,6 +147,7 @@ class GuestAgentClientTests(TestCase):
         self.assertEqual(
             payload["sample"]["cloud_object_uri"], case.sample.cloud_object_uri
         )
+        self.assertEqual(payload["sample"]["md5"], case.sample.md5)
         self.assertEqual(
             network.calls[0]["url"], "http://guest-agent.local:8080/prepare-case"
         )
@@ -944,6 +945,7 @@ class GuestAgentClientTests(TestCase):
                 sample_id="case-001",
                 file_path=file_path,
                 sha256="0" * 64,
+                md5="1" * 32,
             )
 
         self.assertEqual(response.message, "sample uploaded")
@@ -964,6 +966,7 @@ class GuestAgentClientTests(TestCase):
         self.assertEqual(headers["X-Upload-Token"], "upload-secret")
         self.assertEqual(headers["X-Sample-Id"], "case-001")
         self.assertEqual(headers["X-Sample-Sha256"], "0" * 64)
+        self.assertEqual(headers["X-Sample-Md5"], "1" * 32)
         self.assertEqual(headers["X-Original-Filename"], "eicar.txt")
 
     def test_upload_sample_error_does_not_leak_tokens_or_path(self) -> None:

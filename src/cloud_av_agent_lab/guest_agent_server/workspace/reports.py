@@ -83,6 +83,11 @@ def _build_case_report(workspace: Path, max_events: int) -> dict[str, Any]:
             or sample_metadata.get("sha256")
             or _mapping_value(case_data, "sample", "sha256")
         ),
+        "md5": str(
+            sample_state.get("md5")
+            or sample_metadata.get("md5")
+            or _mapping_value(case_data, "sample", "md5")
+        ),
         "size": _coerce_int(sample_state.get("size") or sample_metadata.get("size")),
         "prepared_at_utc": _first_event_time(all_events, "case_prepared"),
         "uploaded_at_utc": str(

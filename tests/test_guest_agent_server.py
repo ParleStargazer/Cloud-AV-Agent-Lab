@@ -70,6 +70,7 @@ class GuestAgentServerTests(unittest.TestCase):
             "X-Upload-Token": UPLOAD_TOKEN,
             "X-Sample-Id": "case-001",
             "X-Sample-Sha256": "0" * 64,
+            "X-Sample-Md5": "1" * 32,
             "X-Original-Filename": "eicar.txt",
         }
 
@@ -261,6 +262,9 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertIn("cos://bucket/redacted/case-001.bin", saved_text)
         self.assertNotIn("local_path", saved_text)
         self.assertNotIn("execute", saved_text.casefold())
+        state = json.loads((workspace / "case_state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["sample"]["sha256"], "0" * 64)
+        self.assertEqual(state["sample"]["md5"], "1" * 32)
 
     def test_upload_sample_success(self) -> None:
         self.client.post(
@@ -281,6 +285,7 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(payload["message"], "sample uploaded")
         self.assertEqual(payload["data"]["sample_id"], "case-001")
         self.assertEqual(payload["data"]["upload_state"], "uploaded")
+        self.assertEqual(payload["data"]["md5"], "1" * 32)
         self.assertTrue(payload["data"]["saved_once"])
         self.assertTrue(payload["data"]["metadata_saved"])
         self.assertTrue(payload["data"]["post_write_exists"])
@@ -292,7 +297,30 @@ class GuestAgentServerTests(unittest.TestCase):
         metadata = json.loads((sample_dir / "sample.json").read_text(encoding="utf-8"))
         self.assertEqual(metadata["size"], len(b"EICAR harmless placeholder"))
         self.assertEqual(metadata["original_filename"], "eicar.txt")
+        self.assertEqual(metadata["md5"], "1" * 32)
         self.assertEqual(metadata["upload_state"], "uploaded")
+
+    def test_upload_sample_computes_md5_from_received_bytes_when_header_missing(
+        self,
+    ) -> None:
+        self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        content = b"EICAR harmless placeholder"
+        headers = dict(self._upload_headers())
+        headers.pop("X-Sample-Md5")
+
+        response = self.client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=headers,
+            content=content,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["data"]["md5"], hashlib.md5(content).hexdigest())
 
     def test_upload_sample_writes_observable_logs(self) -> None:
         self.client.post(
@@ -602,6 +630,7 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertTrue(report["stable"])
         self.assertEqual(report["original_filename"], "eicar.txt")
         self.assertEqual(report["sha256"], "0" * 64)
+        self.assertEqual(report["md5"], "1" * 32)
         self.assertEqual(report["size"], len(b"EICAR harmless placeholder"))
         self.assertTrue(report["prepared_at_utc"])
         self.assertTrue(report["uploaded_at_utc"])
@@ -2058,6 +2087,7 @@ def _prepare_payload() -> dict[str, object]:
         "sample": {
             "id": "case-001",
             "sha256": "0" * 64,
+            "md5": "1" * 32,
             "category": "persistence",
             "cloud_object_uri": "cos://bucket/redacted/case-001.bin",
             "expected_behaviors": ["persistence"],

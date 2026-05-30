@@ -300,6 +300,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="optional expected sha256 metadata for the uploaded test file",
     )
+    guest_upload.add_argument(
+        "--md5",
+        default="",
+        help="optional expected md5 metadata for the uploaded test file",
+    )
 
     _add_lifecycle_parser(
         subparsers,
@@ -774,6 +779,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sample_id=sample.id,
                 file_path=args.file,
                 sha256=args.sha256,
+                md5=args.md5,
             )
         except GuestAgentError as exc:
             parser.exit(2, _format_guest_error(exc))

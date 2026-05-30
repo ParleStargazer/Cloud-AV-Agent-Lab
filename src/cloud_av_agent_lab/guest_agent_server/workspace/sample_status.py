@@ -138,6 +138,7 @@ def refresh_sample_status(
             "current_size": probe.size,
             "original_filename": str(metadata.get("original_filename", "")),
             "sha256": str(metadata.get("sha256", "")),
+            "md5": str(metadata.get("md5", "")),
         },
         product_id=str(state.get("product_id", "")),
     )

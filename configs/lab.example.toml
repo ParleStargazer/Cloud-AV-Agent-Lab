@@ -211,11 +211,12 @@ instance_id = "lhins-replace-tencent-manager"
 # 样本引用
 # ---------------------------------------------------------------------------
 # 这里只能写云端对象引用，不能写本地路径。
-# sha256 用于报告和核对；示例值是占位，不代表真实样本。
+# sha256/md5 用于报告和核对；示例值是占位，不代表真实样本。
 
 [[samples]]
 id = "case-001"
 sha256 = "0000000000000000000000000000000000000000000000000000000000000001"
+md5 = "00000000000000000000000000000001"
 category = "persistence"
 cloud_object_uri = "cos://replace-me-sample-bucket/redacted/case-001.bin"
 expected_behaviors = ["persistence"]
@@ -224,6 +225,7 @@ notes = "Synthetic placeholder. Replace with an approved cloud object reference 
 [[samples]]
 id = "case-002"
 sha256 = "0000000000000000000000000000000000000000000000000000000000000002"
+md5 = "00000000000000000000000000000002"
 category = "privilege-escalation"
 cloud_object_uri = "cos://replace-me-sample-bucket/redacted/case-002.bin"
 expected_behaviors = ["privilege_escalation"]

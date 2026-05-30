@@ -206,6 +206,9 @@ def _build_case_context(
             sample_metadata.get("sha256")
             or _mapping_value(case_data, "sample", "sha256")
         ),
+        "sample_md5": str(
+            sample_metadata.get("md5") or _mapping_value(case_data, "sample", "md5")
+        ),
         "sample_dir": str(sample_dir),
         "stored_filename": str(sample_metadata.get("stored_filename", "")),
         "original_filename": str(sample_metadata.get("original_filename", "")),

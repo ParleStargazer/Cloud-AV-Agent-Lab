@@ -300,6 +300,7 @@ def _delivery_summary(case_report: Mapping[str, Any]) -> dict[str, Any]:
         "stable",
         "original_filename",
         "sha256",
+        "md5",
         "size",
         "prepared_at_utc",
         "uploaded_at_utc",

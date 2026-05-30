@@ -32,6 +32,7 @@ class ConfigTests(TestCase):
         )
         self.assertEqual(config.vms["win10-qihoo-360"].product_id, "qihoo-360")
         self.assertEqual(cases[0].sample.id, "case-001")
+        self.assertEqual(cases[0].sample.md5, "00000000000000000000000000000001")
         self.assertIn(cases[0].product.id, config.products)
         self.assertFalse(config.network.proxy.enabled)
         self.assertFalse(config.guest_agent.enabled)
@@ -53,6 +54,26 @@ class ConfigTests(TestCase):
         )
         self.assertTrue(config.guest_agent.desktop_worker.required_for_execution)
         self.assertTrue(config.guest_agent.desktop_worker.require_interactive_session)
+
+    def test_sample_md5_is_optional_but_validated_when_present(self) -> None:
+        config_text = (ROOT / "configs" / "lab.example.toml").read_text(
+            encoding="utf-8"
+        )
+        invalid_config = config_text.replace(
+            'md5 = "00000000000000000000000000000001"',
+            'md5 = "not-a-valid-md5"',
+        )
+
+        tmp_dir = ROOT / "state" / "tests"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        config_path = tmp_dir / "lab.invalid-md5.toml"
+        config_path.write_text(invalid_config, encoding="utf-8")
+        try:
+            config = load_config(config_path)
+            with self.assertRaisesRegex(ValueError, "md5"):
+                assert_safe_config(config)
+        finally:
+            config_path.unlink(missing_ok=True)
 
     def test_enabled_proxy_config_parses(self) -> None:
         config_text = (ROOT / "configs" / "lab.example.toml").read_text(

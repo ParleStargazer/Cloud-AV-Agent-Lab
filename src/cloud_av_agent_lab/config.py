@@ -194,6 +194,7 @@ def load_config(path: str | Path) -> LabConfig:
             sha256=str(item["sha256"]),
             category=str(item["category"]),
             cloud_object_uri=str(item["cloud_object_uri"]),
+            md5=str(item.get("md5", "")),
             expected_behaviors=_tuple(item.get("expected_behaviors")),
             notes=str(item.get("notes", "")),
         )

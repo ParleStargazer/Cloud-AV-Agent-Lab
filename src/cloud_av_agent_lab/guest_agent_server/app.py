@@ -168,6 +168,7 @@ def create_app(
         x_upload_token: str | None = Header(default=None),
         x_sample_id: str = Header(...),
         x_sample_sha256: str = Header(default=""),
+        x_sample_md5: str = Header(default=""),
         x_original_filename: str = Header(default="sample.bin"),
     ) -> dict[str, Any]:
         authorize_upload(authorization, x_upload_token)
@@ -179,6 +180,7 @@ def create_app(
                 content=content,
                 sample_id=x_sample_id,
                 sha256=x_sample_sha256,
+                md5=x_sample_md5,
                 original_filename=x_original_filename,
             )
         except WorkspaceNotFoundError as exc:
@@ -207,6 +209,7 @@ def create_app(
                 "locked_or_busy": metadata["locked_or_busy"],
                 "stable": metadata["stable"],
                 "sha256": metadata["sha256"],
+                "md5": metadata["md5"],
                 "size": metadata["size"],
                 "original_filename": metadata["original_filename"],
                 "workspace": str(sample_path.parent.parent),

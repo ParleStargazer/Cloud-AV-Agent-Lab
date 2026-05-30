@@ -1236,11 +1236,14 @@ class CloudLifecycleCliGuardTests(TestCase):
                         str(upload_path),
                         "--sha256",
                         "0" * 64,
+                        "--md5",
+                        "1" * 32,
                     ]
                 )
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(fake_client.upload_calls, 1)
+        self.assertEqual(fake_client.upload_md5s, ["1" * 32])
         self.assertGreater(fake_client.case_status_calls, 1)
         self.assertEqual(sleep_mock.call_args_list[0], call(10.0))
         self.assertIn(call(2.0), sleep_mock.call_args_list)
@@ -1733,6 +1736,7 @@ class _FakeGuestAgentClient:
         self.readiness_status_products: list[str] = []
         self.execute_calls: list[dict[str, object]] = []
         self.execute_called = False
+        self.upload_md5s: list[str] = []
 
     def upload_sample(
         self,
@@ -1740,8 +1744,10 @@ class _FakeGuestAgentClient:
         sample_id: str,
         file_path: str,
         sha256: str = "",
+        md5: str = "",
     ) -> GuestAgentResponse:
         self.upload_calls += 1
+        self.upload_md5s.append(md5)
         return GuestAgentResponse(
             status="ok",
             message="sample uploaded",
@@ -1749,6 +1755,7 @@ class _FakeGuestAgentClient:
                 "case_id": case_id,
                 "sample_id": sample_id,
                 "sha256": sha256,
+                "md5": md5,
                 "upload_state": "uploaded",
                 "workspace": "C:\\CloudAvAgentLab\\cases\\case-001",
             },
@@ -2016,6 +2023,7 @@ class _FailingGuestAgentClient:
         sample_id: str,
         file_path: str,
         sha256: str = "",
+        md5: str = "",
     ) -> GuestAgentResponse:
         raise self.error
 

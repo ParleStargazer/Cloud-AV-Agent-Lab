@@ -302,6 +302,7 @@ class GuestAgentClient:
         sample_id: str,
         file_path: str | Path,
         sha256: str = "",
+        md5: str = "",
         upload_token_env: str = UPLOAD_TOKEN_ENV,
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
@@ -338,6 +339,7 @@ class GuestAgentClient:
                     "X-Upload-Token": upload_token,
                     "X-Sample-Id": sample_id,
                     "X-Sample-Sha256": sha256,
+                    "X-Sample-Md5": md5,
                     "X-Original-Filename": path.name,
                 },
                 timeout_seconds=(
@@ -411,6 +413,7 @@ def _prepare_case_payload(case: TestCase) -> dict[str, Any]:
         "sample": {
             "id": case.sample.id,
             "sha256": case.sample.sha256,
+            "md5": case.sample.md5,
             "category": case.sample.category,
             "cloud_object_uri": case.sample.cloud_object_uri,
             "expected_behaviors": list(case.sample.expected_behaviors),

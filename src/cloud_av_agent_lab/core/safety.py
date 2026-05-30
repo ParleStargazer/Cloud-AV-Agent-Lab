@@ -36,6 +36,8 @@ def validate_sample_reference(sample: SampleReference) -> list[str]:
         )
     if not re.fullmatch(r"[0-9a-fA-F]{64}", sample.sha256):
         errors.append(f"sample {sample.id!r} sha256 must be 64 hex characters")
+    if sample.md5 and not re.fullmatch(r"[0-9a-fA-F]{32}", sample.md5):
+        errors.append(f"sample {sample.id!r} md5 must be 32 hex characters")
     return errors
 
 

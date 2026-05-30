@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -45,6 +46,8 @@ def prepare_case_workspace(
     )
 
     sample_id = _payload_sample_id(payload)
+    sample_sha256 = _payload_sample_sha256(payload)
+    sample_md5 = _payload_sample_md5(payload)
     product_id = _payload_product_id(payload)
     state = _base_case_state(
         case_id=case_id,
@@ -60,6 +63,8 @@ def prepare_case_workspace(
             "stable": False,
             "size": None,
             "original_filename": "",
+            "sha256": sample_sha256,
+            "md5": sample_md5,
         },
         product_id=product_id,
     )
@@ -83,6 +88,7 @@ def save_uploaded_sample(
     sample_id: str,
     sha256: str,
     original_filename: str,
+    md5: str = "",
 ) -> tuple[Path, dict[str, Any]]:
     safe_id = safe_case_id(case_id)
     workspace = _case_workspace(workdir, safe_id)
@@ -107,7 +113,11 @@ def save_uploaded_sample(
         case_id=safe_id,
         sample_id=sample_id,
         message="sample upload request received",
-        data={"original_filename": safe_name, "declared_sha256": sha256},
+        data={
+            "original_filename": safe_name,
+            "declared_sha256": sha256,
+            "declared_md5": md5,
+        },
     )
 
     sample_path.write_bytes(content)
@@ -128,10 +138,12 @@ def save_uploaded_sample(
         data={"size": len(content), "original_filename": safe_name},
     )
 
+    resolved_md5 = str(md5).strip().casefold() or hashlib.md5(content).hexdigest()
     metadata = {
         "case_id": safe_id,
         "sample_id": str(sample_id),
         "sha256": str(sha256),
+        "md5": resolved_md5,
         "size": len(content),
         "original_filename": safe_name,
         "stored_filename": safe_name,
@@ -168,6 +180,7 @@ def save_uploaded_sample(
             "size": len(content),
             "original_filename": safe_name,
             "sha256": str(sha256),
+            "md5": resolved_md5,
         },
         product_id=product_id,
     )
@@ -180,6 +193,20 @@ def _payload_sample_id(payload: Mapping[str, Any]) -> str:
     sample_value = payload.get("sample")
     if isinstance(sample_value, Mapping):
         return str(sample_value.get("id", ""))
+    return ""
+
+
+def _payload_sample_sha256(payload: Mapping[str, Any]) -> str:
+    sample_value = payload.get("sample")
+    if isinstance(sample_value, Mapping):
+        return str(sample_value.get("sha256", "")).strip()
+    return ""
+
+
+def _payload_sample_md5(payload: Mapping[str, Any]) -> str:
+    sample_value = payload.get("sample")
+    if isinstance(sample_value, Mapping):
+        return str(sample_value.get("md5", "")).strip().casefold()
     return ""
 
 

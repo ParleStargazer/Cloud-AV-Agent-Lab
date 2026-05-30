@@ -44,6 +44,7 @@ class RunState:
                 "name": sample_name,
                 "path": sample_path,
                 "sha256": "",
+                "md5": "",
                 "size": None,
             },
             "environment": dict(environment),
@@ -77,10 +78,11 @@ class RunState:
         }
         self.write()
 
-    def set_sample_hash(self, sha256: str, size: int) -> None:
+    def set_sample_hash(self, sha256: str, size: int, md5: str = "") -> None:
         sample = self.data.setdefault("sample", {})
         if isinstance(sample, dict):
             sample["sha256"] = sha256
+            sample["md5"] = md5
             sample["size"] = size
         self.write()
 

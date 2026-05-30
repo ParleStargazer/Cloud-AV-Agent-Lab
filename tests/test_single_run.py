@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -75,12 +76,20 @@ class SingleRunTests(TestCase):
             self.assertIn("enabled = true", generated_config)
             self.assertIn("[guest_agent.desktop_worker]", generated_config)
             self.assertIn('base_url = "http://127.0.0.1:8001"', generated_config)
+            self.assertIn(
+                f'md5 = "{hashlib.md5(b"harmless placeholder").hexdigest()}"',
+                generated_config,
+            )
             self.assertNotIn("agent-secret", generated_config)
 
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
             self.assertEqual(run_state["final_status"], "completed")
             self.assertEqual(run_state["status"], "completed")
             self.assertEqual(run_state["selected_product_id"], "huorong")
+            self.assertEqual(
+                run_state["sample"]["md5"],
+                hashlib.md5(b"harmless placeholder").hexdigest(),
+            )
             self.assertEqual(run_state["test_verdict"], "detected_or_blocked")
             self.assertEqual(run_state["evidence_export_status"], "saved")
             self.assertEqual(run_state["cleanup_status"], "dry_run")
@@ -127,6 +136,10 @@ class SingleRunTests(TestCase):
             )
             self.assertEqual(run_state["stages"]["evidence"]["status"], "saved")
             self.assertIn("evidence_bundle", run_state["artifacts"])
+            self.assertEqual(
+                client.upload_md5s,
+                [hashlib.md5(b"harmless placeholder").hexdigest()],
+            )
 
     def test_cli_single_run_entry_executes_readiness_before_upload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -891,6 +904,7 @@ class FakeGuestClient:
         self.prepare_products: list[str] = []
         self.readiness_products: list[str] = []
         self.collection_products: list[str] = []
+        self.upload_md5s: list[str] = []
 
     def health(self, timeout_seconds: float | None = None) -> GuestAgentResponse:
         self.health_calls += 1
@@ -954,9 +968,11 @@ class FakeGuestClient:
         sample_id: str,
         file_path: Path,
         sha256: str = "",
+        md5: str = "",
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
         self.calls.append("upload_sample")
+        self.upload_md5s.append(md5)
         return GuestAgentResponse(
             status="ok",
             message="uploaded",

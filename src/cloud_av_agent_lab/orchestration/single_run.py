@@ -380,9 +380,10 @@ def _run_single_case_locked(
 
     try:
         with state.step("hash_sample"):
-            sha256, size = _hash_file(Path(options.sample_path))
-            state.set_sample_hash(sha256, size)
+            sha256, md5, size = _hash_file(Path(options.sample_path))
+            state.set_sample_hash(sha256, size, md5=md5)
             state.mark_stage("delivery", "sample_sha256", sha256)
+            state.mark_stage("delivery", "sample_md5", md5)
             state.mark_stage("delivery", "sample_size", size)
             LOGGER.info("sample metadata calculated: name=%s size=%d", sample_id, size)
 
@@ -393,6 +394,7 @@ def _run_single_case_locked(
                     sample_id=sample_id,
                     product_id=product_id,
                     sha256=sha256,
+                    md5=md5,
                 ),
                 encoding="utf-8",
             )
@@ -515,6 +517,7 @@ def _run_single_case_locked(
                 sample_id=sample_id,
                 file_path=options.sample_path,
                 sha256=sha256,
+                md5=md5,
                 timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
             )
             upload_response = _poll_upload_status(
@@ -1316,14 +1319,16 @@ def _write_summary_outputs(run_dir: Path, summary: dict[str, Any]) -> Path:
     return summary_json
 
 
-def _hash_file(path: Path) -> tuple[str, int]:
-    digest = hashlib.sha256()
+def _hash_file(path: Path) -> tuple[str, str, int]:
+    sha256_digest = hashlib.sha256()
+    md5_digest = hashlib.md5()
     size = 0
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             size += len(chunk)
-            digest.update(chunk)
-    return digest.hexdigest(), size
+            sha256_digest.update(chunk)
+            md5_digest.update(chunk)
+    return sha256_digest.hexdigest(), md5_digest.hexdigest(), size
 
 
 def _render_generated_config(
@@ -1332,6 +1337,7 @@ def _render_generated_config(
     sample_id: str,
     product_id: str,
     sha256: str,
+    md5: str,
 ) -> str:
     product = _product_profile(product_id)
     mode = "mock" if options.dry_run else "real"
@@ -1410,6 +1416,7 @@ instance_id = {_toml_string(options.instance_id)}
 [[samples]]
 id = {_toml_string(sample_id)}
 sha256 = {_toml_string(sha256)}
+md5 = {_toml_string(md5)}
 category = "harmless-test"
 cloud_object_uri = {_toml_string(f"cos://single-run-placeholder/{sample_id}")}
 expected_behaviors = ["upload_observation"]

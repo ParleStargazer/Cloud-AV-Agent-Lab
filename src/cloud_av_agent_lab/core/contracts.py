@@ -112,6 +112,7 @@ class SampleReference:
     sha256: str
     category: str
     cloud_object_uri: str
+    md5: str = ""
     expected_behaviors: tuple[str, ...] = ()
     notes: str = ""
 
