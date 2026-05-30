@@ -971,8 +971,12 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "",
                         "http://127.0.0.1:8080",
                         "",
-                        str(raw_dir),
+                        "",
                     ],
+                ),
+                patch(
+                    "cloud_av_agent_lab.cli._default_multi_run_sample_dir",
+                    return_value=str(raw_dir),
                 ),
             ):
                 exit_code = main(

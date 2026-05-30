@@ -20,6 +20,9 @@ MULTI_RUN_EVENT_SCHEMA_VERSION = "multi-run-event.v1"
 MULTI_RUN_AGGREGATE_SUMMARY_SCHEMA_VERSION = "multi-run-aggregate-summary.v1"
 MULTI_RUN_PREFLIGHT_REPORT_SCHEMA_VERSION = "multi-run-preflight-report.v1"
 MULTI_RUN_VERSION = "multi-run.v1"
+IGNORED_SAMPLE_INDEX_FILENAMES = frozenset(
+    {".gitignore", ".gitkeep", "readme", "readme.md", "readme.txt"}
+)
 
 FailureKind: TypeAlias = Literal[
     "planning_or_policy_failure",
@@ -460,6 +463,8 @@ def _scan_sample_candidates(sample_dir: Path) -> tuple[_IndexedSampleCandidate, 
 
 def _should_skip_index_path(path: Path, sample_dir: Path) -> bool:
     if path.is_symlink():
+        return True
+    if path.name.casefold() in IGNORED_SAMPLE_INDEX_FILENAMES:
         return True
     if ":" in path.name:
         return True

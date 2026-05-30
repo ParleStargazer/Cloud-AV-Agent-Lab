@@ -1294,7 +1294,7 @@ def _multi_run_prompt_missing_inputs(
     if not args.manifest and not args.sample_dir:
         args.sample_dir = prompt_default(
             "Cloud platform sample directory",
-            default=r"runs\raw_sample",
+            default=_default_multi_run_sample_dir(),
         )
         args.platform_sample_dir = True
     if not _has_multi_run_selection(args):
@@ -1303,6 +1303,20 @@ def _multi_run_prompt_missing_inputs(
 
 def _prompt_into(value: str, label: str, default: str = "") -> str:
     return prompt_default(label, current=value, default=default)
+
+
+def _default_multi_run_sample_dir() -> str:
+    return str(_project_root_for_multi_run() / "runs" / "raw_sample")
+
+
+def _project_root_for_multi_run() -> Path:
+    search_roots = (Path.cwd(), *Path.cwd().parents, *Path(__file__).resolve().parents)
+    for candidate in search_roots:
+        if (candidate / "pyproject.toml").is_file() and (
+            candidate / "src" / "cloud_av_agent_lab"
+        ).is_dir():
+            return candidate
+    return Path.cwd()
 
 
 def _has_multi_run_selection(args: argparse.Namespace) -> bool:

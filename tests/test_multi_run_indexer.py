@@ -130,6 +130,24 @@ class MultiRunSampleDirectoryIndexerTests(unittest.TestCase):
             self.assertEqual(payloads[0]["entry_status"], "ready")
             self.assertNotIn("sample_bytes", payloads[0])
 
+    def test_indexer_ignores_workspace_placeholder_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_dir = tmp_path / "raw_sample"
+            raw_dir.mkdir()
+            (raw_dir / ".gitkeep").write_text("", encoding="utf-8")
+            (raw_dir / "README.md").write_text("operator notes", encoding="utf-8")
+            (raw_dir / "sample.exe").write_bytes(b"sample")
+
+            artifacts = build_sample_manifest_from_directory(
+                raw_dir, tmp_path / "index"
+            )
+            manifest = load_sample_manifest(artifacts.manifest_path)
+
+            self.assertEqual(len(manifest.entries), 1)
+            self.assertEqual(manifest.entries[0].original_filename, "sample.exe")
+            self.assertEqual(manifest.entries[0].original_suffix, ".exe")
+
 
 if __name__ == "__main__":
     unittest.main()

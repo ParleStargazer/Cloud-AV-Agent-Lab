@@ -13,5 +13,7 @@ Safety notes:
 - Do not commit any file placed in this directory.
 - Directory contents are ignored by Git; only this README and `.gitkeep` are
   tracked.
+- The multi-run indexer ignores this README, `.gitkeep`, and similar workspace
+  placeholder files.
 - Development hosts should consume a prebuilt `sample_manifest.jsonl` with
   `--manifest` instead of scanning a local sample directory.
