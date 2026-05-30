@@ -21,10 +21,12 @@ from .multi_run import (
     LoadedSampleManifest,
     MultiRunEvent,
     MultiRunManifestError,
+    MultiRunSelectionError,
     MultiRunState,
     SampleManifestEntry,
     compute_manifest_sha256,
     load_sample_manifest,
+    parse_sample_selection,
 )
 from .single_run import SingleRunOptions, SingleRunResult, run_single_case
 
@@ -49,11 +51,13 @@ __all__ = [
     "LoadedSampleManifest",
     "MultiRunEvent",
     "MultiRunManifestError",
+    "MultiRunSelectionError",
     "MultiRunState",
     "SampleManifestEntry",
     "SingleRunOptions",
     "SingleRunResult",
     "compute_manifest_sha256",
     "load_sample_manifest",
+    "parse_sample_selection",
     "run_single_case",
 ]

@@ -108,3 +108,36 @@ single-run runner 调度；没有触发云操作，没有读取样本内容。
 single-run 调度；loader 只读取 manifest 文本，不读取样本文件内容。
 
 下一阶段建议进入 Commit 4：实现 sample selection parser。
+
+## 2026-05-30 Commit 4：Selection Parser
+
+本阶段完成 `multi-run` 第四阶段 sample selection parser：
+
+- 新增 `parse_sample_selection(...)`，输入 manifest 已有 index 集合和 CLI
+  selection 形态，输出冻结的 `BatchSelection.selected_indexes`。
+- 支持第一版选择模式：
+  - `--all`
+  - `--range START-END`
+  - `--indexes 1,3,7`
+  - `--from N --to M`
+  - `--max-cases N`
+- 固定选择语义：
+  - `--range` / `--from --to` 为闭区间。
+  - `--indexes 7,3,3,1` 会去重并排序为 `(1, 3, 7)`。
+  - `--all` 只选择 manifest 中实际存在的 index。
+  - `--max-cases` 在排序 / 闭区间展开后截断。
+  - 选择不存在的 index 会抛出 `MultiRunSelectionError`，其
+    `failure_kind = planning_or_policy_failure`。
+  - 同时传入多个互斥 selection 模式会失败。
+- 保持 Commit 3 补查要求：
+  - manifest loader 只要求 `sample_index` 为 1-based 正整数且唯一，不要求连续。
+  - manifest digest 继续按原始 bytes 计算。
+  - manifest loader 错误信息包含 manifest 路径和行号。
+  - `sample_ref` 仍只做类型校验，不检查文件是否存在。
+- 新增 `tests/test_multi_run_selection.py`，覆盖闭区间、去重排序、越界、
+  非连续 manifest 缺失 index、互斥模式、`--from/--to` 配对和非法 index。
+
+本阶段仍未生成 batch plan，不写 state/event log，不调用 single-run runner，
+不读取样本文件内容。
+
+下一阶段建议进入 Commit 5：生成 immutable batch plan 和 generated config。

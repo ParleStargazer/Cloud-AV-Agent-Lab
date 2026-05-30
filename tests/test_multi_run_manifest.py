@@ -17,14 +17,14 @@ class MultiRunManifestLoaderTests(unittest.TestCase):
     def test_valid_manifest_loads_entries_and_digest(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest_path = Path(tmpdir) / "sample_manifest.jsonl"
-            entries = [_manifest_entry(1), _manifest_entry(2, sha_char="b")]
+            entries = [_manifest_entry(1), _manifest_entry(3, sha_char="b")]
             _write_manifest(manifest_path, entries)
 
             manifest = load_sample_manifest(manifest_path)
 
-            self.assertEqual(manifest.indexes, (1, 2))
+            self.assertEqual(manifest.indexes, (1, 3))
             self.assertEqual(manifest.by_index()[1].sample_id, "a" * 64)
-            self.assertEqual(manifest.by_index()[2].sha256, "b" * 64)
+            self.assertEqual(manifest.by_index()[3].sha256, "b" * 64)
             self.assertEqual(manifest.sha256, compute_manifest_sha256(manifest_path))
 
     def test_duplicate_sample_index_fails(self) -> None:
@@ -48,8 +48,22 @@ class MultiRunManifestLoaderTests(unittest.TestCase):
             del entry["sha256"]
             _write_manifest(manifest_path, [entry])
 
-            with self.assertRaisesRegex(MultiRunManifestError, "sha256"):
+            with self.assertRaisesRegex(
+                MultiRunManifestError,
+                r"sample_manifest\.jsonl: line 1: .*sha256",
+            ):
                 load_sample_manifest(manifest_path)
+
+    def test_sample_ref_is_not_checked_for_file_existence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manifest_path = Path(tmpdir) / "sample_manifest.jsonl"
+            entry = _manifest_entry(1)
+            entry["sample_ref"] = r"Z:\does\not\exist\sample.exe"
+            _write_manifest(manifest_path, [entry])
+
+            manifest = load_sample_manifest(manifest_path)
+
+            self.assertEqual(manifest.entries[0].sample_ref, entry["sample_ref"])
 
     def test_invalid_sample_source_kind_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

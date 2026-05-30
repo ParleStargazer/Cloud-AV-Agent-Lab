@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -148,6 +149,12 @@ class MultiRunManifestError(ValueError):
     """Raised when a multi-run sample manifest is malformed."""
 
 
+class MultiRunSelectionError(ValueError):
+    """Raised when multi-run sample selection cannot produce a safe plan."""
+
+    failure_kind: FailureKind = "planning_or_policy_failure"
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -231,22 +238,26 @@ def load_sample_manifest(path: Path | str) -> LoadedSampleManifest:
     manifest_path = Path(path)
     entries: list[SampleManifestEntry] = []
     seen_indexes: set[int] = set()
-    with manifest_path.open("r", encoding="utf-8") as handle:
-        for line_number, raw_line in enumerate(handle, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            payload = _load_manifest_line(line, line_number)
-            entry = _parse_manifest_entry(payload, line_number)
-            if entry.sample_index in seen_indexes:
-                raise MultiRunManifestError(
-                    f"line {line_number}: duplicate sample_index {entry.sample_index}"
-                )
-            seen_indexes.add(entry.sample_index)
-            entries.append(entry)
+    try:
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            for line_number, raw_line in enumerate(handle, start=1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                payload = _load_manifest_line(line, line_number)
+                entry = _parse_manifest_entry(payload, line_number)
+                if entry.sample_index in seen_indexes:
+                    raise MultiRunManifestError(
+                        f"line {line_number}: duplicate sample_index "
+                        f"{entry.sample_index}"
+                    )
+                seen_indexes.add(entry.sample_index)
+                entries.append(entry)
 
-    if not entries:
-        raise MultiRunManifestError("sample manifest is empty")
+        if not entries:
+            raise MultiRunManifestError("sample manifest is empty")
+    except MultiRunManifestError as exc:
+        raise MultiRunManifestError(f"{manifest_path}: {exc}") from exc
 
     return LoadedSampleManifest(
         path=manifest_path,
@@ -442,6 +453,161 @@ def _optional_str_list(
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise MultiRunManifestError(f"line {line_number}: invalid {key}")
     return value
+
+
+def parse_sample_selection(
+    available_indexes: Iterable[int],
+    *,
+    all_samples: bool = False,
+    range_text: str = "",
+    indexes_text: str = "",
+    from_index: int | None = None,
+    to_index: int | None = None,
+    max_cases: int | None = None,
+) -> BatchSelection:
+    available = _normalize_available_indexes(available_indexes)
+    if not available:
+        raise MultiRunSelectionError("manifest has no selectable sample indexes")
+    if max_cases is not None and max_cases < 1:
+        raise MultiRunSelectionError("--max-cases must be a positive integer")
+
+    has_from_to = from_index is not None or to_index is not None
+    modes = [
+        name
+        for name, enabled in (
+            ("all", all_samples),
+            ("range", bool(range_text)),
+            ("indexes", bool(indexes_text)),
+            ("from_to", has_from_to),
+        )
+        if enabled
+    ]
+    if len(modes) != 1:
+        raise MultiRunSelectionError(
+            "exactly one selection mode is required: --all, --range, "
+            "--indexes, or --from/--to"
+        )
+
+    mode = modes[0]
+    if mode == "all":
+        selected = available
+        selection = BatchSelection(
+            mode="all",
+            selected_indexes=_apply_max_cases(selected, max_cases),
+            max_cases=max_cases,
+        )
+    elif mode == "range":
+        start, end = _parse_closed_range(range_text, "--range")
+        selected = tuple(range(start, end + 1))
+        _ensure_selected_indexes_available(selected, available)
+        selection = BatchSelection(
+            mode="range",
+            selected_indexes=_apply_max_cases(selected, max_cases),
+            range_text=f"{start}-{end}",
+            max_cases=max_cases,
+        )
+    elif mode == "indexes":
+        selected = _parse_indexes_text(indexes_text)
+        _ensure_selected_indexes_available(selected, available)
+        selection = BatchSelection(
+            mode="indexes",
+            selected_indexes=_apply_max_cases(selected, max_cases),
+            max_cases=max_cases,
+        )
+    else:
+        if from_index is None or to_index is None:
+            raise MultiRunSelectionError("--from and --to must be provided together")
+        start = _positive_index(from_index, "--from")
+        end = _positive_index(to_index, "--to")
+        if start > end:
+            raise MultiRunSelectionError("--from must be <= --to")
+        selected = tuple(range(start, end + 1))
+        _ensure_selected_indexes_available(selected, available)
+        selection = BatchSelection(
+            mode="from_to",
+            selected_indexes=_apply_max_cases(selected, max_cases),
+            from_index=start,
+            to_index=end,
+            max_cases=max_cases,
+        )
+
+    if not selection.selected_indexes:
+        raise MultiRunSelectionError("selection produced no sample indexes")
+    return selection
+
+
+def _normalize_available_indexes(available_indexes: Iterable[int]) -> tuple[int, ...]:
+    indexes: set[int] = set()
+    for value in available_indexes:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise MultiRunSelectionError(
+                "available sample indexes must be positive integers"
+            )
+        indexes.add(value)
+    return tuple(sorted(indexes))
+
+
+def _apply_max_cases(
+    selected_indexes: tuple[int, ...],
+    max_cases: int | None,
+) -> tuple[int, ...]:
+    if max_cases is None:
+        return selected_indexes
+    return selected_indexes[:max_cases]
+
+
+def _parse_closed_range(value: str, option_name: str) -> tuple[int, int]:
+    parts = [part.strip() for part in value.split("-", maxsplit=1)]
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise MultiRunSelectionError(f"{option_name} must use START-END syntax")
+    try:
+        start = int(parts[0])
+        end = int(parts[1])
+    except ValueError as exc:
+        raise MultiRunSelectionError(
+            f"{option_name} must contain integer indexes"
+        ) from exc
+    start = _positive_index(start, f"{option_name} start")
+    end = _positive_index(end, f"{option_name} end")
+    if start > end:
+        raise MultiRunSelectionError(f"{option_name} start must be <= end")
+    return start, end
+
+
+def _parse_indexes_text(value: str) -> tuple[int, ...]:
+    raw_parts = [part.strip() for part in value.split(",")]
+    if not raw_parts or any(not part for part in raw_parts):
+        raise MultiRunSelectionError("--indexes must be a comma-separated list")
+    indexes: set[int] = set()
+    for part in raw_parts:
+        try:
+            parsed = int(part)
+        except ValueError as exc:
+            raise MultiRunSelectionError(
+                "--indexes must contain integer indexes"
+            ) from exc
+        indexes.add(_positive_index(parsed, "--indexes"))
+    return tuple(sorted(indexes))
+
+
+def _positive_index(value: int, label: str) -> int:
+    if value < 1:
+        raise MultiRunSelectionError(f"{label} must be a positive 1-based index")
+    return value
+
+
+def _ensure_selected_indexes_available(
+    selected_indexes: tuple[int, ...],
+    available_indexes: tuple[int, ...],
+) -> None:
+    available = set(available_indexes)
+    missing = [value for value in selected_indexes if value not in available]
+    if missing:
+        formatted = ", ".join(str(value) for value in missing[:5])
+        suffix = "" if len(missing) <= 5 else ", ..."
+        raise MultiRunSelectionError(
+            f"selection references unavailable sample_index values: {formatted}{suffix}"
+        )
 
 
 @dataclass(frozen=True)
