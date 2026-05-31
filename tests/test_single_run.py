@@ -141,6 +141,31 @@ class SingleRunTests(TestCase):
                 [hashlib.md5(b"harmless placeholder").hexdigest()],
             )
 
+    def test_single_run_can_defer_final_cleanup_after_evidence_saved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.exe"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            client = FakeGuestClient()
+            adapter = FakeCloudAdapter()
+
+            result = run_single_case(
+                _options(root, sample_path, defer_final_cleanup=True),
+                cloud_adapter_factory=lambda *args, **kwargs: adapter,
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(result.cleanup_status, "deferred_to_next_case")
+            self.assertEqual(adapter.calls.count("restore_snapshot"), 1)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_state["cleanup_status"], "deferred_to_next_case")
+            self.assertEqual(
+                run_state["stages"]["cleanup"]["deferred_reason"],
+                "next_case_initial_restore_required",
+            )
+
     def test_cli_single_run_entry_executes_readiness_before_upload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1123,6 +1148,7 @@ def _options(
     guest_ready_timeout_seconds: float = 180.0,
     guest_ready_successes: int = 2,
     post_execution_collection_delay_seconds: float = 45.0,
+    defer_final_cleanup: bool = False,
 ) -> SingleRunOptions:
     return SingleRunOptions(
         instance_id="lhins-example",
@@ -1145,4 +1171,5 @@ def _options(
             post_execution_collection_delay_seconds
         ),
         salvage_timeout=salvage_timeout or NetworkTimeoutProfile(2, 5),
+        defer_final_cleanup=defer_final_cleanup,
     )

@@ -192,6 +192,7 @@ class SingleRunOptions:
     lock_heartbeat_stale_seconds: float = 900.0
     normal_evidence_timeout: NetworkTimeoutProfile = EVIDENCE_EXPORT_TIMEOUT
     salvage_timeout: NetworkTimeoutProfile = SALVAGE_TIMEOUT
+    defer_final_cleanup: bool = False
 
 
 @dataclass(frozen=True)
@@ -738,9 +739,17 @@ def _run_single_case_locked(
             if salvaged_path is not None:
                 evidence_path = salvaged_path
                 evidence_saved = True
-        cleanup_failed = _cleanup_instance(
-            adapter=locals().get("adapter"), vm=locals().get("vm"), state=state
-        )
+        if _should_defer_final_cleanup(
+            options,
+            case_error=case_error,
+            evidence_saved=evidence_saved,
+        ):
+            _mark_final_cleanup_deferred(state)
+            cleanup_failed = False
+        else:
+            cleanup_failed = _cleanup_instance(
+                adapter=locals().get("adapter"), vm=locals().get("vm"), state=state
+            )
 
     warning_count = max(
         warning_count,
@@ -857,6 +866,28 @@ def _cleanup_instance(adapter: object, vm: object, state: RunState) -> bool:
             state.add_fatal_error("emergency_poweroff", stop_error)
             LOGGER.critical("emergency poweroff failed: %s", stop_error)
             return True
+
+
+def _should_defer_final_cleanup(
+    options: SingleRunOptions,
+    *,
+    case_error: BaseException | None,
+    evidence_saved: bool,
+) -> bool:
+    return options.defer_final_cleanup and case_error is None and evidence_saved
+
+
+def _mark_final_cleanup_deferred(state: RunState) -> None:
+    state.mark("cleanup_status", "deferred_to_next_case")
+    state.mark("emergency_poweroff_status", "not_needed")
+    state.mark_stage("cleanup", "status", "deferred_to_next_case")
+    state.mark_stage(
+        "cleanup",
+        "deferred_reason",
+        "next_case_initial_restore_required",
+    )
+    state.mark_stage("cleanup", "emergency_poweroff_status", "not_needed")
+    LOGGER.info("final cleanup deferred to next case initial restore")
 
 
 def _try_fast_fail_salvage(
