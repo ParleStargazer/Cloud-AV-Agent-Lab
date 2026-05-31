@@ -76,6 +76,7 @@ class MultiRunSchemaTests(unittest.TestCase):
                 failure_policy="stop-on-case-failure",
                 dry_run=True,
                 plan_only=True,
+                fastmode=True,
                 case_timeout_seconds=1800.0,
                 cleanup_strategy="deferred",
             ),
@@ -94,6 +95,7 @@ class MultiRunSchemaTests(unittest.TestCase):
         self.assertEqual(payload["selection"]["range"], "1-3")
         self.assertTrue(payload["execution"]["dry_run"])
         self.assertTrue(payload["execution"]["plan_only"])
+        self.assertTrue(payload["execution"]["fastmode"])
         self.assertEqual(payload["execution"]["mode"], "serial")
         self.assertEqual(payload["execution"]["cleanup_strategy"], "deferred")
         json.dumps(payload)
@@ -135,6 +137,7 @@ class MultiRunSchemaTests(unittest.TestCase):
             started_at_utc="2026-05-30T14:00:00Z",
             batch_cleanup_status="restored",
             emergency_poweroff_status="not_needed",
+            fastmode_enabled=True,
         )
 
         payload = state.to_dict()
@@ -143,6 +146,7 @@ class MultiRunSchemaTests(unittest.TestCase):
         self.assertEqual(payload["selected_indexes"], [7])
         self.assertEqual(payload["batch_cleanup_status"], "restored")
         self.assertEqual(payload["emergency_poweroff_status"], "not_needed")
+        self.assertTrue(payload["fastmode_enabled"])
         self.assertFalse(payload["unsafe_to_continue"])
         self.assertEqual(payload["cases"][0]["case_name"], "sample-007")
         self.assertEqual(payload["cases"][0]["cleanup_status"], "restored")

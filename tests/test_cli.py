@@ -730,6 +730,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "--dry-run",
                         "--cleanup-strategy",
                         "deferred",
+                        "--fastmode",
                     ]
                 )
 
@@ -755,6 +756,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertTrue(plan["execution"]["dry_run"])
             self.assertFalse(plan["execution"]["plan_only"])
             self.assertEqual(plan["execution"]["cleanup_strategy"], "deferred")
+            self.assertTrue(plan["execution"]["fastmode"])
             self.assertEqual(
                 plan["generated_config_sha256"],
                 _sha256_file(
@@ -770,12 +772,14 @@ class CloudLifecycleCliGuardTests(TestCase):
                 tmp_path / "batches" / "batch-test" / "multi_run.generated.toml"
             ).read_text(encoding="utf-8")
             self.assertIn('cleanup_strategy = "deferred"', generated_config)
+            self.assertIn("fastmode = true", generated_config)
             state = json.loads(
                 (
                     tmp_path / "batches" / "batch-test" / "multi_run_state.json"
                 ).read_text(encoding="utf-8")
             )
             self.assertEqual(state["sample_manifest_path"], "sample_manifest.jsonl")
+            self.assertTrue(state["fastmode_enabled"])
             self.assertEqual(state["selected_indexes"], [1, 2])
             self.assertEqual(state["cases"][0]["case_name"], "aaaaaaaaaaaaaaaa")
             self.assertEqual(state["cases"][0]["case_status"], "completed")
@@ -983,6 +987,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "http://127.0.0.1:8080",
                         "",
                         "",
+                        "",
                     ],
                 ),
                 patch(
@@ -1030,6 +1035,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "lhsnap-example",
                         "",
                         "http://127.0.0.1:8080",
+                        "",
                         "",
                         "",
                     ],

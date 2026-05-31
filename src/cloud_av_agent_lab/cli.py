@@ -49,7 +49,7 @@ from cloud_av_agent_lab.orchestration import (
     run_single_case,
 )
 from cloud_av_agent_lab.orchestration.locks import InstanceLockedError
-from cloud_av_agent_lab.orchestration.prompts import prompt_default
+from cloud_av_agent_lab.orchestration.prompts import prompt_bool, prompt_default
 from cloud_av_agent_lab.orchestration.single_run import (
     SingleRunError,
     supported_single_run_products,
@@ -568,6 +568,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "batch cleanup strategy; per_case restores after every case, "
             "deferred is an explicit opt-in optimization"
+        ),
+    )
+    multi_run.add_argument(
+        "--fastmode",
+        action="store_true",
+        default=None,
+        help=(
+            "explicit experimental fast mode; may improve speed but can reduce "
+            "result accuracy"
         ),
     )
     multi_run.add_argument(
@@ -1154,6 +1163,7 @@ def _handle_multi_run(
                 failure_policy=args.failure_policy,
                 plan_only=args.plan_only,
                 cleanup_strategy=args.cleanup_strategy,
+                fastmode=bool(args.fastmode),
             )
         else:
             artifacts = load_existing_multi_run_batch(
@@ -1254,6 +1264,7 @@ def _handle_multi_run(
                 "max_cases": args.max_cases,
                 "failure_policy": args.failure_policy,
                 "cleanup_strategy": args.cleanup_strategy,
+                "fastmode": bool(args.fastmode),
                 "execution_mode": execution_mode,
                 "resume": args.resume,
                 "rerun_failed": args.rerun_failed,
@@ -1310,6 +1321,11 @@ def _multi_run_prompt_missing_inputs(
         args.platform_sample_dir = True
     if not _has_multi_run_selection(args):
         args.all = True
+    if args.fastmode is None:
+        args.fastmode = prompt_bool(
+            "是否开启快速模式？yes/no：可提升测试速度，但结果准确性可能下降",
+            default=False,
+        )
 
 
 def _prompt_into(value: str, label: str, default: str = "") -> str:

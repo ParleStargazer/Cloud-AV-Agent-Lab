@@ -962,6 +962,7 @@ class BatchExecutionPolicy:
     failure_policy: str = "continue"
     dry_run: bool = False
     plan_only: bool = False
+    fastmode: bool = False
     case_timeout_seconds: float | None = None
     environment_failure_policy: str = "stop"
     cleanup_strategy: CleanupStrategy = "per_case"
@@ -972,6 +973,7 @@ class BatchExecutionPolicy:
             "failure_policy": self.failure_policy,
             "dry_run": self.dry_run,
             "plan_only": self.plan_only,
+            "fastmode": self.fastmode,
             "case_timeout_seconds": self.case_timeout_seconds,
             "environment_failure_policy": self.environment_failure_policy,
             "cleanup_strategy": self.cleanup_strategy,
@@ -1151,6 +1153,7 @@ def create_multi_run_batch_plan(
     failure_policy: str,
     plan_only: bool = False,
     cleanup_strategy: CleanupStrategy = "per_case",
+    fastmode: bool = False,
 ) -> MultiRunPlanArtifacts:
     resolved_batch_id = _safe_batch_id(batch_id or default_batch_id(product_id))
     if cleanup_strategy not in CLEANUP_STRATEGIES:
@@ -1187,6 +1190,7 @@ def create_multi_run_batch_plan(
         dry_run=dry_run,
         plan_only=plan_only,
         cleanup_strategy=cleanup_strategy,
+        fastmode=fastmode,
     )
     generated_config_bytes = generated_config.encode("utf-8")
     generated_config_sha256 = compute_bytes_sha256(generated_config_bytes)
@@ -1211,6 +1215,7 @@ def create_multi_run_batch_plan(
             failure_policy=failure_policy,
             dry_run=dry_run,
             plan_only=plan_only,
+            fastmode=fastmode,
             cleanup_strategy=cleanup_strategy,
         ),
     )
@@ -1253,6 +1258,7 @@ def create_multi_run_batch_plan(
             "dry_run": dry_run,
             "plan_only": plan_only,
             "cleanup_strategy": cleanup_strategy,
+            "fastmode": fastmode,
         },
     )
 
@@ -1329,6 +1335,7 @@ def render_multi_run_generated_config(
     batch_plan_path: str = "batch_plan.json",
     plan_only: bool = False,
     cleanup_strategy: CleanupStrategy = "per_case",
+    fastmode: bool = False,
 ) -> str:
     return "\n".join(
         [
@@ -1347,6 +1354,7 @@ def render_multi_run_generated_config(
             f"dry_run = {_toml_bool(dry_run)}",
             f"plan_only = {_toml_bool(plan_only)}",
             f"cleanup_strategy = {_toml_string(cleanup_strategy)}",
+            f"fastmode = {_toml_bool(fastmode)}",
             "",
         ]
     )
@@ -1464,6 +1472,7 @@ class MultiRunState:
     final_status: str = ""
     batch_cleanup_status: BatchCleanupStatus = "not_started"
     emergency_poweroff_status: EmergencyPoweroffStatus = "not_started"
+    fastmode_enabled: bool = False
     errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     schema_version: str = MULTI_RUN_STATE_SCHEMA_VERSION
@@ -1489,6 +1498,7 @@ class MultiRunState:
             "final_status": self.final_status,
             "batch_cleanup_status": self.batch_cleanup_status,
             "emergency_poweroff_status": self.emergency_poweroff_status,
+            "fastmode_enabled": self.fastmode_enabled,
             "timing": _build_multi_run_timing_summary(self.cases),
             "cases": [case.to_dict() for case in self.cases],
             "errors": list(self.errors),
@@ -2303,6 +2313,7 @@ def execute_multi_run_batch(
                 "batch_state": state.batch_state,
                 "batch_cleanup_status": state.batch_cleanup_status,
                 "emergency_poweroff_status": state.emergency_poweroff_status,
+                "fastmode_enabled": state.fastmode_enabled,
                 "preflight_report_path": preflight_report_path.name,
             },
         )
@@ -2517,6 +2528,7 @@ def execute_multi_run_batch(
             "final_status": state.final_status,
             "batch_cleanup_status": state.batch_cleanup_status,
             "emergency_poweroff_status": state.emergency_poweroff_status,
+            "fastmode_enabled": state.fastmode_enabled,
             "unsafe_to_continue": state.unsafe_to_continue,
             "manual_intervention_required": state.manual_intervention_required,
         },
@@ -2610,6 +2622,7 @@ def build_multi_run_aggregate_summary(
         "final_status": state.final_status,
         "batch_cleanup_status": state.batch_cleanup_status,
         "emergency_poweroff_status": state.emergency_poweroff_status,
+        "fastmode_enabled": state.fastmode_enabled,
         "manifest_sha256": state.manifest_sha256,
         "batch_plan_sha256": state.batch_plan_sha256,
         "selected_indexes": list(state.selected_indexes),
@@ -2654,6 +2667,7 @@ def render_multi_run_aggregate_markdown(summary: Mapping[str, Any]) -> str:
         f"- Final status: {summary.get('final_status', '')}",
         f"- Batch cleanup: {summary.get('batch_cleanup_status', '')}",
         f"- Emergency poweroff: {summary.get('emergency_poweroff_status', '')}",
+        f"- Fastmode enabled: {summary.get('fastmode_enabled', False)}",
         f"- Selected samples: {denominator.get('selected_samples', 0)}",
         f"- Evaluable cases: {denominator.get('evaluable_cases', 0)}",
         f"- Case failures: {denominator.get('case_failures', 0)}",
@@ -2743,6 +2757,7 @@ def load_batch_plan(path: Path | str) -> BatchPlan:
         failure_policy=str(execution_payload.get("failure_policy", "continue")),
         dry_run=bool(execution_payload.get("dry_run", False)),
         plan_only=bool(execution_payload.get("plan_only", False)),
+        fastmode=bool(execution_payload.get("fastmode", False)),
         case_timeout_seconds=_optional_float(
             execution_payload.get("case_timeout_seconds"), plan_path
         ),
@@ -3672,6 +3687,7 @@ def _initial_multi_run_state(
         selected_indexes=plan.selection.selected_indexes,
         cases=cases,
         started_at_utc=plan.created_at_utc,
+        fastmode_enabled=plan.execution.fastmode,
     )
 
 
@@ -3729,6 +3745,7 @@ def load_multi_run_state(path: Path | str) -> MultiRunState:
         emergency_poweroff_status=_emergency_poweroff_status_from_payload(
             payload.get("emergency_poweroff_status")
         ),
+        fastmode_enabled=bool(payload.get("fastmode_enabled", False)),
         errors=tuple(str(item) for item in payload.get("errors", [])),
         warnings=tuple(str(item) for item in payload.get("warnings", [])),
     )
