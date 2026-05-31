@@ -1432,6 +1432,7 @@ class MultiRunState:
             "started_at_utc": self.started_at_utc,
             "finished_at_utc": self.finished_at_utc,
             "final_status": self.final_status,
+            "timing": _build_multi_run_timing_summary(self.cases),
             "cases": [case.to_dict() for case in self.cases],
             "errors": list(self.errors),
             "warnings": list(self.warnings),
@@ -2498,6 +2499,7 @@ def build_multi_run_aggregate_summary(
             "evidence_status": _count_case_field(cases, "evidence_status"),
             "summary_status": _count_case_field(cases, "summary_status"),
         },
+        "timing": _build_multi_run_timing_summary(cases),
         "case_errors": _aggregate_case_errors(cases),
         "cases": [_aggregate_case_payload(root, case) for case in cases],
         "paths": {
@@ -2512,6 +2514,8 @@ def build_multi_run_aggregate_summary(
 def render_multi_run_aggregate_markdown(summary: Mapping[str, Any]) -> str:
     denominator = _mapping_or_empty(summary.get("denominator"))
     detection_rate = _mapping_or_empty(summary.get("detection_rate"))
+    timing = _mapping_or_empty(summary.get("timing"))
+    stages = _mapping_or_empty(timing.get("stages"))
     case_errors = summary.get("case_errors")
     error_count = len(case_errors) if isinstance(case_errors, list) else 0
     lines = [
@@ -2540,6 +2544,23 @@ def render_multi_run_aggregate_markdown(summary: Mapping[str, Any]) -> str:
             f"- {verdict}: {count}"
             for verdict, count in sorted(verdict_breakdown.items())
         )
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Timing", ""])
+    if timing:
+        lines.append(f"- Average case seconds: {timing.get('average_case_seconds', 0)}")
+        lines.append(f"- P95 case seconds: {timing.get('p95_case_seconds', 0)}")
+        lines.append(f"- Timed cases: {timing.get('timed_cases', 0)}")
+        if stages:
+            lines.extend(["", "### Stage Timing", ""])
+            for stage_name, stage_payload in sorted(stages.items()):
+                if isinstance(stage_payload, Mapping):
+                    lines.append(
+                        "- "
+                        f"{stage_name}: avg={stage_payload.get('average_seconds', 0)}s "
+                        f"p95={stage_payload.get('p95_seconds', 0)}s "
+                        f"count={stage_payload.get('count', 0)}"
+                    )
     else:
         lines.append("- none")
     lines.extend(["", "## Case Errors", ""])
@@ -3197,6 +3218,91 @@ def _count_case_field(cases: Iterable[CaseState], field_name: str) -> dict[str, 
         key = str(value) if value not in (None, "") else "none"
         counts[key] = counts.get(key, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _build_multi_run_timing_summary(cases: Iterable[CaseState]) -> dict[str, Any]:
+    case_list = list(cases)
+    case_durations = [
+        float(case.duration_seconds)
+        for case in case_list
+        if case.duration_seconds is not None
+    ]
+    stage_values: dict[str, list[float]] = {}
+    scheduler_durations: list[float] = []
+    for case in case_list:
+        timing = case.timing
+        scheduler_duration = _optional_duration_seconds(
+            timing.get("scheduler_duration_seconds")
+        )
+        if scheduler_duration is not None:
+            scheduler_durations.append(scheduler_duration)
+        stages = timing.get("stages")
+        if not isinstance(stages, Mapping):
+            continue
+        for stage_name, value in stages.items():
+            duration = _optional_duration_seconds(value)
+            if duration is None:
+                continue
+            stage_values.setdefault(str(stage_name), []).append(duration)
+    if scheduler_durations:
+        stage_values.setdefault("scheduler", []).extend(scheduler_durations)
+
+    duration_stats = _duration_stats(case_durations)
+    return {
+        "schema_version": "multi-run-timing-summary.v1",
+        "timed_cases": duration_stats["count"],
+        "average_case_seconds": duration_stats["average_seconds"],
+        "p95_case_seconds": duration_stats["p95_seconds"],
+        "case_duration": duration_stats,
+        "stages": {
+            name: _duration_stats(values)
+            for name, values in sorted(stage_values.items())
+        },
+        "slowest_cases": _slowest_cases(case_list),
+    }
+
+
+def _duration_stats(values: Iterable[float]) -> dict[str, Any]:
+    durations = sorted(_round_duration_seconds(value) for value in values)
+    count = len(durations)
+    total = _round_duration_seconds(sum(durations))
+    return {
+        "count": count,
+        "total_seconds": total,
+        "average_seconds": _round_duration_seconds(total / count) if count else 0,
+        "p95_seconds": _percentile(durations, 0.95) if durations else 0,
+    }
+
+
+def _percentile(sorted_values: list[float], percentile: float) -> float:
+    if not sorted_values:
+        return 0
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    index = int(round((len(sorted_values) - 1) * percentile))
+    index = max(0, min(index, len(sorted_values) - 1))
+    return sorted_values[index]
+
+
+def _slowest_cases(
+    cases: Iterable[CaseState], *, limit: int = 5
+) -> list[dict[str, Any]]:
+    timed_cases = [case for case in cases if case.duration_seconds is not None]
+    timed_cases.sort(
+        key=lambda case: float(case.duration_seconds or 0),
+        reverse=True,
+    )
+    return [
+        {
+            "sample_index": case.sample_index,
+            "sample_id": case.sample_id,
+            "case_id": case.case_id,
+            "duration_seconds": _round_duration_seconds(
+                float(case.duration_seconds or 0)
+            ),
+        }
+        for case in timed_cases[:limit]
+    ]
 
 
 def _aggregate_case_payload(root: Path, case: CaseState) -> dict[str, Any]:

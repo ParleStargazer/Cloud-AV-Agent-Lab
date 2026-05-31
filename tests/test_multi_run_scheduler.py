@@ -43,6 +43,9 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
                 "scheduler_duration_seconds",
                 state["cases"][0]["timing"],
             )
+            self.assertEqual(state["timing"]["timed_cases"], 3)
+            self.assertEqual(state["timing"]["average_case_seconds"], 1.0)
+            self.assertIn("fake_runner", state["timing"]["stages"])
             self.assertFalse(state["cases"][0]["resume_eligible"])
 
     def test_case_failure_default_policy_continues(self) -> None:
@@ -250,6 +253,11 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertEqual(summary["verdict_breakdown"]["detected_or_blocked"], 2)
             self.assertEqual(summary["verdict_breakdown"]["not_evaluable"], 1)
             self.assertEqual(summary["readiness_breakdown"]["ok"], 2)
+            self.assertEqual(summary["timing"]["timed_cases"], 3)
+            self.assertEqual(summary["timing"]["average_case_seconds"], 1.0)
+            self.assertEqual(summary["timing"]["p95_case_seconds"], 1.0)
+            self.assertEqual(summary["timing"]["stages"]["fake_runner"]["count"], 3)
+            self.assertTrue(summary["timing"]["slowest_cases"])
             self.assertEqual(summary["cases"][0]["duration_seconds"], 1.0)
             self.assertEqual(summary["cases"][0]["timing"]["total_seconds"], 1.0)
             self.assertEqual(summary["case_errors"][0]["failure_kind"], "case_failure")
@@ -262,6 +270,8 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertNotIn("\\", summary["cases"][0]["paths"]["evidence_bundle"])
             self.assertIn("Multi-Run Aggregate Summary", markdown)
             self.assertIn("Case failures: 1", markdown)
+            self.assertIn("## Timing", markdown)
+            self.assertIn("Average case seconds: 1.0", markdown)
 
     def test_aggregate_counts_environment_stopped_separately(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
