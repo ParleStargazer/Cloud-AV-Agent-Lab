@@ -731,6 +731,10 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "--cleanup-strategy",
                         "deferred",
                         "--fastmode",
+                        "--settling-cooldown-seconds",
+                        "9",
+                        "--post-execution-collection-delay-seconds",
+                        "77",
                     ]
                 )
 
@@ -757,6 +761,11 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertFalse(plan["execution"]["plan_only"])
             self.assertEqual(plan["execution"]["cleanup_strategy"], "deferred")
             self.assertTrue(plan["execution"]["fastmode"])
+            self.assertEqual(plan["execution"]["settling_cooldown_seconds"], 9.0)
+            self.assertEqual(
+                plan["execution"]["post_execution_collection_delay_seconds"],
+                77.0,
+            )
             self.assertEqual(
                 plan["generated_config_sha256"],
                 _sha256_file(
@@ -773,6 +782,11 @@ class CloudLifecycleCliGuardTests(TestCase):
             ).read_text(encoding="utf-8")
             self.assertIn('cleanup_strategy = "deferred"', generated_config)
             self.assertIn("fastmode = true", generated_config)
+            self.assertIn("settling_cooldown_seconds = 9", generated_config)
+            self.assertIn(
+                "post_execution_collection_delay_seconds = 77",
+                generated_config,
+            )
             state = json.loads(
                 (
                     tmp_path / "batches" / "batch-test" / "multi_run_state.json"
@@ -863,6 +877,11 @@ class CloudLifecycleCliGuardTests(TestCase):
             )
             self.assertFalse(plan["execution"]["dry_run"])
             self.assertTrue(plan["execution"]["plan_only"])
+            self.assertEqual(plan["execution"]["settling_cooldown_seconds"], 15.0)
+            self.assertEqual(
+                plan["execution"]["post_execution_collection_delay_seconds"],
+                45.0,
+            )
             self.assertEqual(plan["selection"]["selected_indexes"], [1])
             self.assertTrue((batch_dir / "sample_manifest.sha256").is_file())
             state = json.loads(
@@ -988,6 +1007,8 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "",
                         "",
                         "",
+                        "",
+                        "",
                     ],
                 ),
                 patch(
@@ -1013,6 +1034,11 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(plan["instance_id"], "lhins-example")
             self.assertEqual(plan["snapshot_id"], "lhsnap-example")
             self.assertEqual(plan["region"], "ap-singapore")
+            self.assertEqual(plan["execution"]["settling_cooldown_seconds"], 15.0)
+            self.assertEqual(
+                plan["execution"]["post_execution_collection_delay_seconds"],
+                45.0,
+            )
             self.assertEqual(plan["selection"]["mode"], "all")
             self.assertEqual(plan["selection"]["selected_indexes"], [1])
 
@@ -1035,6 +1061,8 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "lhsnap-example",
                         "",
                         "http://127.0.0.1:8080",
+                        "",
+                        "",
                         "",
                         "",
                         "",
@@ -1536,6 +1564,10 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "huorong",
                         "--guest-agent-url",
                         "http://127.0.0.1:8080",
+                        "--settling-cooldown-seconds",
+                        "8",
+                        "--post-execution-collection-delay-seconds",
+                        "66",
                         "--runs-dir",
                         str(root / "runs"),
                     ]
@@ -1547,6 +1579,8 @@ class CloudLifecycleCliGuardTests(TestCase):
         options = run_single.call_args.args[0]
         self.assertEqual(options.instance_id, "lhins-example")
         self.assertFalse(options.dry_run)
+        self.assertEqual(options.settling_cooldown_seconds, 8.0)
+        self.assertEqual(options.post_execution_collection_delay_seconds, 66.0)
         output = stdout.getvalue()
         self.assertIn("Single-run finished: completed", output)
         self.assertIn("Verdict: detected_or_blocked", output)
@@ -1757,6 +1791,8 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "eicar",
                         str(sample_path),
                         "http://127.0.0.1:8080",
+                        "",
+                        "",
                     ],
                 ) as input_mock,
                 redirect_stdout(StringIO()),
@@ -1776,6 +1812,11 @@ class CloudLifecycleCliGuardTests(TestCase):
             "Security product id [huorong]: ",
         )
         self.assertEqual(run_single.call_args.args[0].product_id, "windows-defender")
+        self.assertEqual(run_single.call_args.args[0].settling_cooldown_seconds, 15.0)
+        self.assertEqual(
+            run_single.call_args.args[0].post_execution_collection_delay_seconds,
+            45.0,
+        )
 
     def test_single_run_missing_input_exits_clearly(self) -> None:
         stderr = StringIO()

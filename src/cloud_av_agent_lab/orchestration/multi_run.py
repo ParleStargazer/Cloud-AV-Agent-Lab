@@ -21,6 +21,8 @@ MULTI_RUN_EVENT_SCHEMA_VERSION = "multi-run-event.v1"
 MULTI_RUN_AGGREGATE_SUMMARY_SCHEMA_VERSION = "multi-run-aggregate-summary.v1"
 MULTI_RUN_PREFLIGHT_REPORT_SCHEMA_VERSION = "multi-run-preflight-report.v1"
 MULTI_RUN_VERSION = "multi-run.v1"
+DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS = 15.0
+DEFAULT_MULTI_RUN_POST_EXECUTION_COLLECTION_DELAY_SECONDS = 45.0
 IGNORED_SAMPLE_INDEX_FILENAMES = frozenset(
     {".gitignore", ".gitkeep", "readme", "readme.md", "readme.txt"}
 )
@@ -964,6 +966,10 @@ class BatchExecutionPolicy:
     plan_only: bool = False
     fastmode: bool = False
     case_timeout_seconds: float | None = None
+    settling_cooldown_seconds: float = DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS
+    post_execution_collection_delay_seconds: float = (
+        DEFAULT_MULTI_RUN_POST_EXECUTION_COLLECTION_DELAY_SECONDS
+    )
     environment_failure_policy: str = "stop"
     cleanup_strategy: CleanupStrategy = "per_case"
 
@@ -975,6 +981,10 @@ class BatchExecutionPolicy:
             "plan_only": self.plan_only,
             "fastmode": self.fastmode,
             "case_timeout_seconds": self.case_timeout_seconds,
+            "settling_cooldown_seconds": self.settling_cooldown_seconds,
+            "post_execution_collection_delay_seconds": (
+                self.post_execution_collection_delay_seconds
+            ),
             "environment_failure_policy": self.environment_failure_policy,
             "cleanup_strategy": self.cleanup_strategy,
         }
@@ -1154,11 +1164,20 @@ def create_multi_run_batch_plan(
     plan_only: bool = False,
     cleanup_strategy: CleanupStrategy = "per_case",
     fastmode: bool = False,
+    settling_cooldown_seconds: float = DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS,
+    post_execution_collection_delay_seconds: float = (
+        DEFAULT_MULTI_RUN_POST_EXECUTION_COLLECTION_DELAY_SECONDS
+    ),
 ) -> MultiRunPlanArtifacts:
     resolved_batch_id = _safe_batch_id(batch_id or default_batch_id(product_id))
     if cleanup_strategy not in CLEANUP_STRATEGIES:
         allowed = ", ".join(CLEANUP_STRATEGIES)
         raise MultiRunPlanError(f"cleanup_strategy must be one of: {allowed}")
+    _ensure_non_negative_delay("settling_cooldown_seconds", settling_cooldown_seconds)
+    _ensure_non_negative_delay(
+        "post_execution_collection_delay_seconds",
+        post_execution_collection_delay_seconds,
+    )
     batch_dir = Path(batch_root) / resolved_batch_id
     batch_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1191,6 +1210,10 @@ def create_multi_run_batch_plan(
         plan_only=plan_only,
         cleanup_strategy=cleanup_strategy,
         fastmode=fastmode,
+        settling_cooldown_seconds=settling_cooldown_seconds,
+        post_execution_collection_delay_seconds=(
+            post_execution_collection_delay_seconds
+        ),
     )
     generated_config_bytes = generated_config.encode("utf-8")
     generated_config_sha256 = compute_bytes_sha256(generated_config_bytes)
@@ -1216,6 +1239,10 @@ def create_multi_run_batch_plan(
             dry_run=dry_run,
             plan_only=plan_only,
             fastmode=fastmode,
+            settling_cooldown_seconds=settling_cooldown_seconds,
+            post_execution_collection_delay_seconds=(
+                post_execution_collection_delay_seconds
+            ),
             cleanup_strategy=cleanup_strategy,
         ),
     )
@@ -1259,6 +1286,10 @@ def create_multi_run_batch_plan(
             "plan_only": plan_only,
             "cleanup_strategy": cleanup_strategy,
             "fastmode": fastmode,
+            "settling_cooldown_seconds": settling_cooldown_seconds,
+            "post_execution_collection_delay_seconds": (
+                post_execution_collection_delay_seconds
+            ),
         },
     )
 
@@ -1336,6 +1367,10 @@ def render_multi_run_generated_config(
     plan_only: bool = False,
     cleanup_strategy: CleanupStrategy = "per_case",
     fastmode: bool = False,
+    settling_cooldown_seconds: float = DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS,
+    post_execution_collection_delay_seconds: float = (
+        DEFAULT_MULTI_RUN_POST_EXECUTION_COLLECTION_DELAY_SECONDS
+    ),
 ) -> str:
     return "\n".join(
         [
@@ -1355,6 +1390,9 @@ def render_multi_run_generated_config(
             f"plan_only = {_toml_bool(plan_only)}",
             f"cleanup_strategy = {_toml_string(cleanup_strategy)}",
             f"fastmode = {_toml_bool(fastmode)}",
+            f"settling_cooldown_seconds = {float(settling_cooldown_seconds):g}",
+            "post_execution_collection_delay_seconds = "
+            f"{float(post_execution_collection_delay_seconds):g}",
             "",
         ]
     )
@@ -1381,6 +1419,11 @@ def _ensure_plan_artifacts_do_not_exist(*paths: Path) -> None:
     if existing:
         formatted = ", ".join(sorted(existing))
         raise MultiRunPlanError(f"batch plan artifact already exists: {formatted}")
+
+
+def _ensure_non_negative_delay(name: str, value: float) -> None:
+    if value < 0:
+        raise MultiRunPlanError(f"{name} must be greater than or equal to 0")
 
 
 def _copy_manifest_bytes(source: Path, destination: Path) -> None:
@@ -1571,6 +1614,10 @@ class SingleRunRequest:
     defer_final_cleanup: bool = False
     skip_initial_restore: bool = False
     environment_reused_from_case_id: str = ""
+    settling_cooldown_seconds: float = DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS
+    post_execution_collection_delay_seconds: float = (
+        DEFAULT_MULTI_RUN_POST_EXECUTION_COLLECTION_DELAY_SECONDS
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1599,6 +1646,10 @@ class SingleRunRequest:
             "defer_final_cleanup": self.defer_final_cleanup,
             "skip_initial_restore": self.skip_initial_restore,
             "environment_reused_from_case_id": self.environment_reused_from_case_id,
+            "settling_cooldown_seconds": self.settling_cooldown_seconds,
+            "post_execution_collection_delay_seconds": (
+                self.post_execution_collection_delay_seconds
+            ),
         }
 
 
@@ -1746,6 +1797,10 @@ class RealSingleRunRunner:
                     dry_run=request.dry_run,
                     defer_final_cleanup=request.defer_final_cleanup,
                     skip_initial_restore=request.skip_initial_restore,
+                    settling_cooldown_seconds=request.settling_cooldown_seconds,
+                    post_execution_collection_delay_seconds=(
+                        request.post_execution_collection_delay_seconds
+                    ),
                     runs_dir=request.case_dir,
                 )
             )
@@ -2820,6 +2875,16 @@ def load_batch_plan(path: Path | str) -> BatchPlan:
         case_timeout_seconds=_optional_float(
             execution_payload.get("case_timeout_seconds"), plan_path
         ),
+        settling_cooldown_seconds=_optional_float_with_default(
+            execution_payload.get("settling_cooldown_seconds"),
+            plan_path,
+            DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS,
+        ),
+        post_execution_collection_delay_seconds=_optional_float_with_default(
+            execution_payload.get("post_execution_collection_delay_seconds"),
+            plan_path,
+            DEFAULT_MULTI_RUN_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
+        ),
         environment_failure_policy=str(
             execution_payload.get("environment_failure_policy", "stop")
         ),
@@ -2942,6 +3007,11 @@ def _optional_float(value: Any, path: Path) -> float | None:
     return float(value)
 
 
+def _optional_float_with_default(value: Any, path: Path, default: float) -> float:
+    parsed = _optional_float(value, path)
+    return default if parsed is None else parsed
+
+
 def _cleanup_strategy_from_json(value: Any, path: Path) -> CleanupStrategy:
     if value is None:
         return "per_case"
@@ -2991,6 +3061,10 @@ def _single_run_request_for_entry(
         defer_final_cleanup=defer_final_cleanup,
         skip_initial_restore=skip_initial_restore,
         environment_reused_from_case_id=environment_reused_from_case_id,
+        settling_cooldown_seconds=plan.execution.settling_cooldown_seconds,
+        post_execution_collection_delay_seconds=(
+            plan.execution.post_execution_collection_delay_seconds
+        ),
     )
 
 

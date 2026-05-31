@@ -78,6 +78,8 @@ class MultiRunSchemaTests(unittest.TestCase):
                 plan_only=True,
                 fastmode=True,
                 case_timeout_seconds=1800.0,
+                settling_cooldown_seconds=8.0,
+                post_execution_collection_delay_seconds=66.0,
                 cleanup_strategy="deferred",
             ),
             single_run_runner_version="single-run.v1",
@@ -97,6 +99,11 @@ class MultiRunSchemaTests(unittest.TestCase):
         self.assertTrue(payload["execution"]["plan_only"])
         self.assertTrue(payload["execution"]["fastmode"])
         self.assertEqual(payload["execution"]["mode"], "serial")
+        self.assertEqual(payload["execution"]["settling_cooldown_seconds"], 8.0)
+        self.assertEqual(
+            payload["execution"]["post_execution_collection_delay_seconds"],
+            66.0,
+        )
         self.assertEqual(payload["execution"]["cleanup_strategy"], "deferred")
         json.dumps(payload)
 

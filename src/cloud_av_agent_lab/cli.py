@@ -51,6 +51,8 @@ from cloud_av_agent_lab.orchestration import (
 from cloud_av_agent_lab.orchestration.locks import InstanceLockedError
 from cloud_av_agent_lab.orchestration.prompts import prompt_bool, prompt_default
 from cloud_av_agent_lab.orchestration.single_run import (
+    DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
+    DEFAULT_SETTLING_COOLDOWN_SECONDS,
     SingleRunError,
     supported_single_run_products,
 )
@@ -417,7 +419,7 @@ def build_parser() -> argparse.ArgumentParser:
     single_run.add_argument(
         "--settling-cooldown-seconds",
         type=float,
-        default=15.0,
+        default=None,
         help="cooldown after Guest Agent is ready",
     )
     single_run.add_argument(
@@ -435,7 +437,7 @@ def build_parser() -> argparse.ArgumentParser:
     single_run.add_argument(
         "--post-execution-collection-delay-seconds",
         type=float,
-        default=45.0,
+        default=None,
         help=(
             "seconds to wait after sample execution exits before product log collection"
         ),
@@ -560,6 +562,18 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("continue", "stop-on-case-failure"),
         default="continue",
         help="case failure policy for the future serial scheduler",
+    )
+    multi_run.add_argument(
+        "--settling-cooldown-seconds",
+        type=float,
+        default=None,
+        help="per-case cooldown after Guest Agent and Desktop Worker are ready",
+    )
+    multi_run.add_argument(
+        "--post-execution-collection-delay-seconds",
+        type=float,
+        default=None,
+        help="per-case delay after execution settles before product log collection",
     )
     multi_run.add_argument(
         "--cleanup-strategy",
@@ -1092,6 +1106,22 @@ def _handle_multi_run(
 ) -> int:
     _normalize_multi_run_platform_sample_dir(parser, args)
     _multi_run_prompt_missing_inputs(parser, args)
+    settling_cooldown_seconds = _delay_value_or_default(
+        parser,
+        "--settling-cooldown-seconds",
+        args.settling_cooldown_seconds,
+        DEFAULT_SETTLING_COOLDOWN_SECONDS,
+    )
+    post_execution_collection_delay_seconds = _delay_value_or_default(
+        parser,
+        "--post-execution-collection-delay-seconds",
+        args.post_execution_collection_delay_seconds,
+        DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
+    )
+    args.settling_cooldown_seconds = settling_cooldown_seconds
+    args.post_execution_collection_delay_seconds = (
+        post_execution_collection_delay_seconds
+    )
     _multi_run_selection_mode(parser, args)
     execution_mode = _multi_run_execution_mode(parser, args)
     if args.max_cases is not None and args.max_cases <= 0:
@@ -1164,6 +1194,10 @@ def _handle_multi_run(
                 plan_only=args.plan_only,
                 cleanup_strategy=args.cleanup_strategy,
                 fastmode=bool(args.fastmode),
+                settling_cooldown_seconds=settling_cooldown_seconds,
+                post_execution_collection_delay_seconds=(
+                    post_execution_collection_delay_seconds
+                ),
             )
         else:
             artifacts = load_existing_multi_run_batch(
@@ -1184,6 +1218,14 @@ def _handle_multi_run(
     ) as exc:
         parser.exit(2, f"error: {exc}\n")
 
+    settling_cooldown_seconds = artifacts.batch_plan.execution.settling_cooldown_seconds
+    post_execution_collection_delay_seconds = (
+        artifacts.batch_plan.execution.post_execution_collection_delay_seconds
+    )
+    args.settling_cooldown_seconds = settling_cooldown_seconds
+    args.post_execution_collection_delay_seconds = (
+        post_execution_collection_delay_seconds
+    )
     state = None
     if args.plan_only:
         print("Multi-run batch plan created; scheduler skipped by --plan-only.")
@@ -1265,6 +1307,10 @@ def _handle_multi_run(
                 "failure_policy": args.failure_policy,
                 "cleanup_strategy": args.cleanup_strategy,
                 "fastmode": bool(args.fastmode),
+                "settling_cooldown_seconds": settling_cooldown_seconds,
+                "post_execution_collection_delay_seconds": (
+                    post_execution_collection_delay_seconds
+                ),
                 "execution_mode": execution_mode,
                 "resume": args.resume,
                 "rerun_failed": args.rerun_failed,
@@ -1313,6 +1359,18 @@ def _multi_run_prompt_missing_inputs(
         "Desktop Worker URL",
         default="http://127.0.0.1:8001",
     )
+    args.settling_cooldown_seconds = _delay_value_or_prompt(
+        parser,
+        "Settling cooldown seconds",
+        args.settling_cooldown_seconds,
+        DEFAULT_SETTLING_COOLDOWN_SECONDS,
+    )
+    args.post_execution_collection_delay_seconds = _delay_value_or_prompt(
+        parser,
+        "Post-execution collection delay seconds",
+        args.post_execution_collection_delay_seconds,
+        DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
+    )
     if not args.manifest and not args.sample_dir:
         args.sample_dir = prompt_default(
             "Cloud platform sample directory",
@@ -1330,6 +1388,36 @@ def _multi_run_prompt_missing_inputs(
 
 def _prompt_into(value: str, label: str, default: str = "") -> str:
     return prompt_default(label, current=value, default=default)
+
+
+def _delay_value_or_prompt(
+    parser: argparse.ArgumentParser,
+    label: str,
+    value: float | None,
+    default: float,
+) -> float:
+    if value is not None:
+        return _delay_value_or_default(parser, label, value, default)
+    if not sys.stdin.isatty():
+        return default
+    prompted = prompt_default(label, default=f"{default:g}")
+    try:
+        parsed = float(prompted)
+    except ValueError:
+        parser.exit(2, f"error: {label} must be numeric\n")
+    return _delay_value_or_default(parser, label, parsed, default)
+
+
+def _delay_value_or_default(
+    parser: argparse.ArgumentParser,
+    label: str,
+    value: float | None,
+    default: float,
+) -> float:
+    resolved = default if value is None else float(value)
+    if resolved < 0:
+        parser.exit(2, f"error: {label} must be greater than or equal to 0\n")
+    return resolved
 
 
 def _default_multi_run_sample_dir() -> str:
@@ -1376,6 +1464,11 @@ def _confirm_multi_run_real_operation(
     print(f"Region: {args.region}")
     print(f"Guest Agent: {args.guest_agent_url}")
     print(f"Desktop Worker: {args.desktop_worker_url or '<not configured>'}")
+    print(f"Settling cooldown seconds: {args.settling_cooldown_seconds:g}")
+    print(
+        "Post-execution collection delay seconds: "
+        f"{args.post_execution_collection_delay_seconds:g}"
+    )
     print(f"Sample source: {args.manifest or args.sample_dir}")
     if not sys.stdin.isatty():
         parser.exit(
@@ -1465,6 +1558,18 @@ def _single_run_options_from_args(
         args.guest_agent_url,
         default="http://127.0.0.1:8080",
     )
+    settling_cooldown_seconds = _delay_value_or_prompt(
+        parser,
+        "Settling cooldown seconds",
+        args.settling_cooldown_seconds,
+        DEFAULT_SETTLING_COOLDOWN_SECONDS,
+    )
+    post_execution_collection_delay_seconds = _delay_value_or_prompt(
+        parser,
+        "Post-execution collection delay seconds",
+        args.post_execution_collection_delay_seconds,
+        DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
+    )
     return SingleRunOptions(
         instance_id=instance_id,
         snapshot_id=snapshot_id,
@@ -1481,11 +1586,11 @@ def _single_run_options_from_args(
         guest_ready_timeout_seconds=args.guest_ready_timeout_seconds,
         guest_ready_interval_seconds=args.guest_ready_interval_seconds,
         guest_ready_successes=args.guest_ready_successes,
-        settling_cooldown_seconds=args.settling_cooldown_seconds,
+        settling_cooldown_seconds=settling_cooldown_seconds,
         execution_poll_timeout_seconds=args.execution_poll_timeout_seconds,
         execution_poll_interval_seconds=args.execution_poll_interval_seconds,
         post_execution_collection_delay_seconds=(
-            args.post_execution_collection_delay_seconds
+            post_execution_collection_delay_seconds
         ),
         salvage_timeout=NetworkTimeoutProfile(
             connect_seconds=args.salvage_connect_timeout_seconds,
@@ -1526,6 +1631,11 @@ def _confirm_single_run_real_operation(
     print(
         "Desktop Worker gate: "
         + ("enabled" if options.require_desktop_worker else "disabled")
+    )
+    print(f"Settling cooldown seconds: {options.settling_cooldown_seconds:g}")
+    print(
+        "Post-execution collection delay seconds: "
+        f"{options.post_execution_collection_delay_seconds:g}"
     )
     if not sys.stdin.isatty():
         parser.exit(

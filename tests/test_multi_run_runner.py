@@ -145,6 +145,8 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
         self.assertFalse(payload["defer_final_cleanup"])
         self.assertFalse(payload["skip_initial_restore"])
         self.assertEqual(payload["environment_reused_from_case_id"], "")
+        self.assertEqual(payload["settling_cooldown_seconds"], 15.0)
+        self.assertEqual(payload["post_execution_collection_delay_seconds"], 45.0)
         self.assertNotIn("sample_bytes", payload)
         self.assertNotIn("content", payload)
 
@@ -169,6 +171,12 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
                 )
                 captured["skip_initial_restore"] = getattr(
                     options, "skip_initial_restore"
+                )
+                captured["settling_cooldown_seconds"] = getattr(
+                    options, "settling_cooldown_seconds"
+                )
+                captured["post_execution_collection_delay_seconds"] = getattr(
+                    options, "post_execution_collection_delay_seconds"
                 )
                 run_dir = Path(getattr(options, "runs_dir")) / "run-001"
                 run_dir.mkdir(parents=True)
@@ -215,6 +223,8 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
             self.assertEqual(captured["desktop_worker_url"], "http://127.0.0.1:8001")
             self.assertFalse(captured["defer_final_cleanup"])
             self.assertFalse(captured["skip_initial_restore"])
+            self.assertEqual(captured["settling_cooldown_seconds"], 15.0)
+            self.assertEqual(captured["post_execution_collection_delay_seconds"], 45.0)
             self.assertEqual(result.run_id, "real-run-001")
             self.assertEqual(result.case_id, "real-case-001")
             self.assertEqual(result.result_source, "single_run_runner")
