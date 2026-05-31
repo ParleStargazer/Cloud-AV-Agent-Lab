@@ -183,6 +183,8 @@ class SingleRunTests(TestCase):
 
             self.assertEqual(result.final_status, "completed")
             self.assertEqual(adapter.calls.count("restore_snapshot"), 1)
+            self.assertEqual(client.health_calls, 1)
+            self.assertEqual(client.worker_status_calls, 1)
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 run_state["initial_restore_status"],
@@ -191,6 +193,51 @@ class SingleRunTests(TestCase):
             self.assertEqual(
                 run_state["stages"]["environment"]["initial_restore"],
                 "skipped_fastmode_reuse",
+            )
+            self.assertEqual(
+                run_state["stages"]["environment"]["ready_gate_mode"],
+                "fastmode_quick",
+            )
+            self.assertEqual(
+                run_state["stages"]["environment"]["guest_ready_successes_required"],
+                1,
+            )
+            self.assertEqual(
+                run_state["stages"]["environment"]["settling_cooldown_seconds"],
+                3.0,
+            )
+
+    def test_fastmode_quick_gate_failure_stops_before_prepare_case(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.exe"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            client = FakeGuestClient(
+                worker_ready=False,
+                worker_reason="desktop worker unavailable",
+            )
+            adapter = FakeCloudAdapter()
+
+            result = run_single_case(
+                _options(root, sample_path, skip_initial_restore=True),
+                cloud_adapter_factory=lambda *args, **kwargs: adapter,
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "failed")
+            self.assertEqual(client.calls, [])
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                run_state["stages"]["environment"]["ready_gate_mode"],
+                "fastmode_quick",
+            )
+            self.assertEqual(
+                run_state["stages"]["environment"]["ready_gate_failure_kind"],
+                "quick_gate_failed",
+            )
+            self.assertFalse(
+                run_state["stages"]["environment"]["fallback_restore_attempted"]
             )
 
     def test_cli_single_run_entry_executes_readiness_before_upload(self) -> None:

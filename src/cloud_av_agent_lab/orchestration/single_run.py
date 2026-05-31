@@ -43,6 +43,8 @@ DEFAULT_GUEST_READY_TIMEOUT_SECONDS = 180.0
 DEFAULT_GUEST_READY_INTERVAL_SECONDS = 5.0
 DEFAULT_GUEST_READY_SUCCESSES = 2
 DEFAULT_SETTLING_COOLDOWN_SECONDS = 15.0
+DEFAULT_FASTMODE_REUSE_GUEST_READY_SUCCESSES = 1
+DEFAULT_FASTMODE_REUSE_SETTLING_COOLDOWN_SECONDS = 3.0
 DEFAULT_UPLOAD_INITIAL_WAIT_SECONDS = 10.0
 DEFAULT_UPLOAD_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS = 30.0
@@ -194,6 +196,12 @@ class SingleRunOptions:
     salvage_timeout: NetworkTimeoutProfile = SALVAGE_TIMEOUT
     defer_final_cleanup: bool = False
     skip_initial_restore: bool = False
+    fastmode_reuse_guest_ready_successes: int = (
+        DEFAULT_FASTMODE_REUSE_GUEST_READY_SUCCESSES
+    )
+    fastmode_reuse_settling_cooldown_seconds: float = (
+        DEFAULT_FASTMODE_REUSE_SETTLING_COOLDOWN_SECONDS
+    )
 
 
 @dataclass(frozen=True)
@@ -365,6 +373,38 @@ def wait_desktop_worker_ready(
         sleep(min(interval_seconds, max(deadline - time.monotonic(), 0.0)))
 
 
+def check_guest_agent_ready_once(
+    client: GuestAgentClient,
+    *,
+    timeout_profile: NetworkTimeoutProfile = GUEST_HEALTH_TIMEOUT,
+) -> GuestAgentResponse:
+    try:
+        response = client.health(
+            timeout_seconds=timeout_profile.socket_timeout_seconds()
+        )
+    except GuestAgentError:
+        LOGGER.info("Guest Agent quick health failed")
+        raise
+    LOGGER.info("Guest Agent quick health ok 1/1")
+    return response
+
+
+def check_desktop_worker_ready_once(client: GuestAgentClient) -> GuestAgentResponse:
+    response = client.worker_status()
+    ready = bool(response.data.get("desktop_worker_ready", False))
+    if not ready:
+        reason = str(response.data.get("reason", "") or "not ready")
+        LOGGER.info("Desktop Worker quick status failed: %s", reason)
+        raise SingleRunError(f"Desktop Worker quick status failed: {reason}")
+    LOGGER.info(
+        "Desktop Worker quick ready: session=%s state=%s user=%s",
+        response.data.get("worker_session_id"),
+        response.data.get("desktop_session_state"),
+        response.data.get("username"),
+    )
+    return response
+
+
 def _run_single_case_locked(
     *,
     options: SingleRunOptions,
@@ -450,26 +490,84 @@ def _run_single_case_locked(
         else:
             _restore_and_start_clean_instance(adapter, vm, state, lock)
 
+        ready_gate_mode = "fastmode_quick" if options.skip_initial_restore else "full"
+        guest_ready_successes_required = (
+            options.fastmode_reuse_guest_ready_successes
+            if options.skip_initial_restore
+            else options.guest_ready_successes
+        )
+        settling_cooldown_seconds = (
+            options.fastmode_reuse_settling_cooldown_seconds
+            if options.skip_initial_restore
+            else options.settling_cooldown_seconds
+        )
+        state.mark_stage("environment", "ready_gate_mode", ready_gate_mode)
+        state.mark_stage(
+            "environment",
+            "guest_ready_successes_required",
+            guest_ready_successes_required,
+        )
+        state.mark_stage(
+            "environment",
+            "settling_cooldown_seconds",
+            settling_cooldown_seconds,
+        )
+
         with state.step("wait_guest_agent_ready"):
             lock.heartbeat()
-            wait_guest_agent_ready(
-                client,
-                timeout_seconds=options.guest_ready_timeout_seconds,
-                interval_seconds=options.guest_ready_interval_seconds,
-                required_successes=options.guest_ready_successes,
-                sleep=sleep,
-            )
+            try:
+                if options.skip_initial_restore:
+                    check_guest_agent_ready_once(client)
+                else:
+                    wait_guest_agent_ready(
+                        client,
+                        timeout_seconds=options.guest_ready_timeout_seconds,
+                        interval_seconds=options.guest_ready_interval_seconds,
+                        required_successes=guest_ready_successes_required,
+                        sleep=sleep,
+                    )
+            except Exception:
+                if options.skip_initial_restore:
+                    state.mark_stage(
+                        "environment",
+                        "ready_gate_failure_kind",
+                        "quick_gate_failed",
+                    )
+                    state.mark_stage(
+                        "environment",
+                        "fallback_restore_attempted",
+                        False,
+                    )
+                raise
             state.mark_stage("environment", "guest_agent_ready", True)
 
         if config.guest_agent.desktop_worker.enabled:
             with state.step("wait_desktop_worker_ready"):
                 lock.heartbeat()
-                worker_status = wait_desktop_worker_ready(
-                    client,
-                    timeout_seconds=options.guest_ready_timeout_seconds,
-                    interval_seconds=options.guest_ready_interval_seconds,
-                    sleep=sleep,
-                )
+                try:
+                    worker_status = (
+                        check_desktop_worker_ready_once(client)
+                        if options.skip_initial_restore
+                        else wait_desktop_worker_ready(
+                            client,
+                            timeout_seconds=options.guest_ready_timeout_seconds,
+                            interval_seconds=options.guest_ready_interval_seconds,
+                            sleep=sleep,
+                        )
+                    )
+                except Exception:
+                    if options.skip_initial_restore:
+                        state.mark_stage(
+                            "environment",
+                            "ready_gate_failure_kind",
+                            "quick_gate_failed",
+                        )
+                        state.mark_stage(
+                            "environment",
+                            "fallback_restore_attempted",
+                            False,
+                        )
+                    raise
                 state.mark("desktop_worker_ready", True)
                 state.mark_stage("environment", "desktop_worker_ready", True)
                 state.mark(
@@ -510,9 +608,9 @@ def _run_single_case_locked(
         with state.step("settling_cooldown"):
             LOGGER.info(
                 "Settling cooldown started: %.0fs",
-                options.settling_cooldown_seconds,
+                settling_cooldown_seconds,
             )
-            sleep(max(options.settling_cooldown_seconds, 0.0))
+            sleep(max(settling_cooldown_seconds, 0.0))
             LOGGER.info("Environment settled; continue prepare-case")
 
         with state.step("prepare_case"):
