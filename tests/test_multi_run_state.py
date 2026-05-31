@@ -48,6 +48,7 @@ class MultiRunStateWriterTests(unittest.TestCase):
             self.assertEqual(payload["sample_manifest_path"], "sample_manifest.jsonl")
             self.assertEqual(payload["cases"][0]["sample_index"], 1)
             self.assertEqual(payload["cases"][0]["case_name"], "sample-001")
+            self.assertEqual(payload["cases"][0]["indexed_sample_state"], "available")
             self.assertFalse((Path(tmp) / ".multi_run_state.json.tmp").exists())
 
     def test_state_corruption_is_reported(self) -> None:

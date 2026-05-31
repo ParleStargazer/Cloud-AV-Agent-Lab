@@ -50,6 +50,12 @@ CleanupStatus: TypeAlias = Literal[
     "not_started",
     "skipped",
 ]
+IndexedSampleState: TypeAlias = Literal[
+    "available",
+    "burned",
+    "burn_failed",
+    "not_required",
+]
 EvidenceStatus: TypeAlias = Literal[
     "exported",
     "partial",
@@ -143,6 +149,12 @@ CLEANUP_STATUSES: tuple[str, ...] = (
     "unknown",
     "not_started",
     "skipped",
+)
+INDEXED_SAMPLE_STATES: tuple[str, ...] = (
+    "available",
+    "burned",
+    "burn_failed",
+    "not_required",
 )
 EVIDENCE_STATUSES: tuple[str, ...] = (
     "exported",
@@ -1343,6 +1355,7 @@ class CaseState:
     case_status: CaseStatus = "planned"
     single_run_status: SingleRunStatus = "not_started"
     cleanup_status: CleanupStatus = "not_started"
+    indexed_sample_state: IndexedSampleState = "available"
     evidence_status: EvidenceStatus = "not_started"
     summary_status: SummaryStatus = "not_started"
     readiness_status: ReadinessStatus = "unknown"
@@ -1371,6 +1384,7 @@ class CaseState:
             "case_status": self.case_status,
             "single_run_status": self.single_run_status,
             "cleanup_status": self.cleanup_status,
+            "indexed_sample_state": self.indexed_sample_state,
             "evidence_status": self.evidence_status,
             "summary_status": self.summary_status,
             "readiness_status": self.readiness_status,
@@ -1531,6 +1545,7 @@ class SingleRunRunnerResult:
     cleanup_status: CleanupStatus
     evidence_status: EvidenceStatus
     summary_status: SummaryStatus
+    indexed_sample_state: IndexedSampleState = "available"
     readiness_status: ReadinessStatus = "unknown"
     verdict: Verdict = "unknown"
     confidence: str = ""
@@ -1555,6 +1570,7 @@ class SingleRunRunnerResult:
             "case_status": self.case_status,
             "single_run_status": self.single_run_status,
             "cleanup_status": self.cleanup_status,
+            "indexed_sample_state": self.indexed_sample_state,
             "evidence_status": self.evidence_status,
             "summary_status": self.summary_status,
             "readiness_status": self.readiness_status,
@@ -1585,6 +1601,7 @@ class SingleRunRunnerResult:
             case_status=self.case_status,
             single_run_status=self.single_run_status,
             cleanup_status=self.cleanup_status,
+            indexed_sample_state=self.indexed_sample_state,
             evidence_status=self.evidence_status,
             summary_status=self.summary_status,
             readiness_status=self.readiness_status,
@@ -2496,6 +2513,10 @@ def build_multi_run_aggregate_summary(
         "status_breakdown": {
             "case_status": _count_case_field(cases, "case_status"),
             "cleanup_status": _count_case_field(cases, "cleanup_status"),
+            "indexed_sample_state": _count_case_field(
+                cases,
+                "indexed_sample_state",
+            ),
             "evidence_status": _count_case_field(cases, "evidence_status"),
             "summary_status": _count_case_field(cases, "summary_status"),
         },
@@ -3315,6 +3336,7 @@ def _aggregate_case_payload(root: Path, case: CaseState) -> dict[str, Any]:
         "case_status": case.case_status,
         "single_run_status": case.single_run_status,
         "cleanup_status": case.cleanup_status,
+        "indexed_sample_state": case.indexed_sample_state,
         "evidence_status": case.evidence_status,
         "summary_status": case.summary_status,
         "readiness_status": case.readiness_status,
@@ -3388,6 +3410,7 @@ def _initial_multi_run_state(
             case_id=_planned_case_id(
                 index, entries_by_index[index].sample_id, plan.product_id
             ),
+            indexed_sample_state=_initial_indexed_sample_state(entries_by_index[index]),
         )
         for index in plan.selection.selected_indexes
     )
@@ -3411,6 +3434,12 @@ def _planned_case_id(sample_index: int, sample_id: str, product_id: str) -> str:
     safe_sample = _safe_batch_id(sample_id)
     safe_product = _safe_batch_id(product_id).casefold()
     return f"{sample_index:04d}_{safe_sample}__{safe_product}"
+
+
+def _initial_indexed_sample_state(entry: SampleManifestEntry) -> IndexedSampleState:
+    if entry.sample_source_kind == "local_platform_path":
+        return "available"
+    return "not_required"
 
 
 def write_multi_run_state(path: Path | str, state: MultiRunState) -> None:
@@ -3495,6 +3524,9 @@ def _case_state_from_payload(
         case_status=str(payload.get("case_status", "planned")),
         single_run_status=str(payload.get("single_run_status", "not_started")),
         cleanup_status=str(payload.get("cleanup_status", "not_started")),
+        indexed_sample_state=_indexed_sample_state_from_payload(
+            payload.get("indexed_sample_state")
+        ),
         evidence_status=str(payload.get("evidence_status", "not_started")),
         summary_status=str(payload.get("summary_status", "not_started")),
         readiness_status=str(payload.get("readiness_status", "unknown")),
@@ -3518,6 +3550,12 @@ def _state_timing_payload(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         return {}
     return dict(value)
+
+
+def _indexed_sample_state_from_payload(value: Any) -> IndexedSampleState:
+    if value in INDEXED_SAMPLE_STATES:
+        return value  # type: ignore[return-value]
+    return "available"
 
 
 def _state_str(payload: Mapping[str, Any], field_name: str, path: Path) -> str:

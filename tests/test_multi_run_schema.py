@@ -140,6 +140,7 @@ class MultiRunSchemaTests(unittest.TestCase):
         self.assertFalse(payload["unsafe_to_continue"])
         self.assertEqual(payload["cases"][0]["case_name"], "sample-007")
         self.assertEqual(payload["cases"][0]["cleanup_status"], "restored")
+        self.assertEqual(payload["cases"][0]["indexed_sample_state"], "available")
         self.assertEqual(payload["cases"][0]["evidence_status"], "exported")
         self.assertEqual(payload["cases"][0]["summary_status"], "collected")
         self.assertEqual(payload["cases"][0]["verdict"], "detected_or_blocked")
