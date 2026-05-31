@@ -176,23 +176,48 @@ Result:
 - evidence bundles contained redacted metadata only and excluded indexed sample
   bytes, raw TAV artifacts, tokens, cloud secrets, and `configs/real.toml`.
 
+The first performance optimization smoke was analyzed from:
+
+```text
+runs/batch_20260531-185952_tencent-pc-manager
+```
+
+Result:
+
+- `product_id = tencent-pc-manager`
+- `fastmode = true`
+- 94 selected samples
+- final status `completed_with_warnings`
+- batch cleanup `restored`
+- emergency poweroff `not_needed`
+- 94/94 cases completed
+- 94/94 summary collected
+- 94/94 evidence exported
+- 94/94 indexed mirrors burned after persisted terminal results
+- 0 environment failures
+- 0 case failures
+- verdicts: 70 `detected_or_blocked`, 24 `inconclusive`
+- timing showed the next bottlenecks are upload status polling, Guest Agent
+  ready checks, fixed post-execution collection delay, and settling cooldown.
+- fastmode metrics remain exploratory and are not comparable with clean
+  snapshot baseline detection rates.
+
 ## Next Optimization Work
 
-The next stage is performance and storage optimization, not another feature
-rewrite.
+The next stage is dynamic waiting and product-compatible observation probes,
+not another feature rewrite.
 
 Planned work:
 
-1. Add timing aggregation so batches report where time is spent.
-2. Add an opt-in indexed sample burn-after-case mode.
-3. Add an opt-in deferred cleanup strategy:
-   - every case still starts with an initial snapshot restore;
-   - middle cases may skip the end cleanup restore;
-   - the next case's initial restore cleans the previous case state;
-   - the last case and any batch failure path must still perform final cleanup;
-   - environment failures and unsafe states must stop the batch.
-4. Keep these optimizations off by default until a small real smoke confirms the
-   safety and recovery behavior.
+1. Expose `upload-status-timeout-seconds` in `single-run` and `multi-run`.
+2. In fastmode reused environments, use a quick Guest Agent / Worker ready gate
+   and reduce settling cooldown to 3 seconds.
+3. Add a product-compatible collector probe schema and registry.
+4. Replace fixed post-execution collection delay with adaptive polling:
+   wait up to the configured maximum, probe once per second, and continue early
+   when a strong product signal appears.
+5. Add product probe heartbeats during execution observation without treating
+   a still-running process as safe to clean up.
 
 Detailed planning lives in
 `reference-doc/current/multi-run/performance-optimization-plan.md`.
