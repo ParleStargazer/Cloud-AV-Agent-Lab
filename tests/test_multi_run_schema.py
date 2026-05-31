@@ -81,6 +81,8 @@ class MultiRunSchemaTests(unittest.TestCase):
                 settling_cooldown_seconds=8.0,
                 upload_status_timeout_seconds=12.0,
                 post_execution_collection_delay_seconds=66.0,
+                product_probe_enabled=True,
+                post_execution_probe_interval_seconds=1.5,
                 cleanup_strategy="deferred",
             ),
             single_run_runner_version="single-run.v1",
@@ -105,6 +107,11 @@ class MultiRunSchemaTests(unittest.TestCase):
         self.assertEqual(
             payload["execution"]["post_execution_collection_delay_seconds"],
             66.0,
+        )
+        self.assertTrue(payload["execution"]["product_probe_enabled"])
+        self.assertEqual(
+            payload["execution"]["post_execution_probe_interval_seconds"],
+            1.5,
         )
         self.assertEqual(payload["execution"]["cleanup_strategy"], "deferred")
         json.dumps(payload)

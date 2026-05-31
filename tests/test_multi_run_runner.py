@@ -148,6 +148,8 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
         self.assertEqual(payload["settling_cooldown_seconds"], 15.0)
         self.assertEqual(payload["upload_status_timeout_seconds"], 30.0)
         self.assertEqual(payload["post_execution_collection_delay_seconds"], 45.0)
+        self.assertFalse(payload["product_probe_enabled"])
+        self.assertEqual(payload["post_execution_probe_interval_seconds"], 1.0)
         self.assertNotIn("sample_bytes", payload)
         self.assertNotIn("content", payload)
 
@@ -181,6 +183,12 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
                 )
                 captured["post_execution_collection_delay_seconds"] = getattr(
                     options, "post_execution_collection_delay_seconds"
+                )
+                captured["product_probe_enabled"] = getattr(
+                    options, "product_probe_enabled"
+                )
+                captured["post_execution_probe_interval_seconds"] = getattr(
+                    options, "post_execution_probe_interval_seconds"
                 )
                 run_dir = Path(getattr(options, "runs_dir")) / "run-001"
                 run_dir.mkdir(parents=True)
@@ -230,6 +238,8 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
             self.assertEqual(captured["settling_cooldown_seconds"], 15.0)
             self.assertEqual(captured["upload_poll_timeout_seconds"], 30.0)
             self.assertEqual(captured["post_execution_collection_delay_seconds"], 45.0)
+            self.assertFalse(captured["product_probe_enabled"])
+            self.assertEqual(captured["post_execution_probe_interval_seconds"], 1.0)
             self.assertEqual(result.run_id, "real-run-001")
             self.assertEqual(result.case_id, "real-case-001")
             self.assertEqual(result.result_source, "single_run_runner")

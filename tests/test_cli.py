@@ -737,6 +737,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "12",
                         "--post-execution-collection-delay-seconds",
                         "77",
+                        "--enable-product-probe",
                     ]
                 )
 
@@ -769,6 +770,11 @@ class CloudLifecycleCliGuardTests(TestCase):
                 plan["execution"]["post_execution_collection_delay_seconds"],
                 77.0,
             )
+            self.assertTrue(plan["execution"]["product_probe_enabled"])
+            self.assertEqual(
+                plan["execution"]["post_execution_probe_interval_seconds"],
+                1.0,
+            )
             self.assertEqual(
                 plan["generated_config_sha256"],
                 _sha256_file(
@@ -789,6 +795,11 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertIn("upload_status_timeout_seconds = 12", generated_config)
             self.assertIn(
                 "post_execution_collection_delay_seconds = 77",
+                generated_config,
+            )
+            self.assertIn("product_probe_enabled = true", generated_config)
+            self.assertIn(
+                "post_execution_probe_interval_seconds = 1",
                 generated_config,
             )
             state = json.loads(
@@ -1014,6 +1025,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "",
                         "",
                         "",
+                        "",
                         "yes",
                     ],
                 ) as input_mock,
@@ -1046,8 +1058,10 @@ class CloudLifecycleCliGuardTests(TestCase):
                 plan["execution"]["post_execution_collection_delay_seconds"],
                 45.0,
             )
+            self.assertFalse(plan["execution"]["product_probe_enabled"])
             self.assertEqual(plan["execution"]["cleanup_strategy"], "deferred")
             prompts = [call.args[0] for call in input_mock.call_args_list]
+            self.assertIn("是否启用产品侧轻量probe", prompts[-4])
             self.assertIn("是否开启快速模式", prompts[-2])
             self.assertIn("是否启用中间case切换只回滚一次快照", prompts[-1])
             self.assertEqual(plan["selection"]["mode"], "all")
@@ -1072,6 +1086,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "lhsnap-example",
                         "",
                         "http://127.0.0.1:8080",
+                        "",
                         "",
                         "",
                         "",
@@ -1121,6 +1136,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "lhsnap-example",
                         "",
                         "http://127.0.0.1:8080",
+                        "",
                         "",
                         "",
                         "",
@@ -1637,6 +1653,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "11",
                         "--post-execution-collection-delay-seconds",
                         "66",
+                        "--enable-product-probe",
                         "--runs-dir",
                         str(root / "runs"),
                     ]
@@ -1651,6 +1668,8 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(options.settling_cooldown_seconds, 8.0)
         self.assertEqual(options.upload_poll_timeout_seconds, 11.0)
         self.assertEqual(options.post_execution_collection_delay_seconds, 66.0)
+        self.assertTrue(options.product_probe_enabled)
+        self.assertEqual(options.post_execution_probe_interval_seconds, 1.0)
         output = stdout.getvalue()
         self.assertIn("Single-run finished: completed", output)
         self.assertIn("Verdict: detected_or_blocked", output)
@@ -1864,6 +1883,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "",
                         "",
                         "",
+                        "",
                     ],
                 ) as input_mock,
                 redirect_stdout(StringIO()),
@@ -1889,6 +1909,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             run_single.call_args.args[0].post_execution_collection_delay_seconds,
             45.0,
         )
+        self.assertFalse(run_single.call_args.args[0].product_probe_enabled)
 
     def test_single_run_missing_input_exits_clearly(self) -> None:
         stderr = StringIO()

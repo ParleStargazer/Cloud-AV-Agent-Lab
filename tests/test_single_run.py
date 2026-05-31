@@ -804,6 +804,108 @@ class SingleRunTests(TestCase):
                 run_log,
             )
 
+    def test_product_probe_can_end_post_execution_delay_early(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.bat"
+            sample_path.write_text("echo harmless", encoding="utf-8")
+            sleeps: list[float] = []
+            client = FakeGuestClient(probe_states=["strong_signal_observed"])
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="tencent-pc-manager",
+                    post_execution_collection_delay_seconds=45.0,
+                    product_probe_enabled=True,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertIn(1.0, sleeps)
+            self.assertNotIn(45.0, sleeps)
+            self.assertEqual(client.probe_products, ["tencent-pc-manager"])
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            collection = run_state["stages"]["collection"]
+            self.assertTrue(collection["product_probe_enabled"])
+            self.assertEqual(
+                collection["product_probe_exit_reason"],
+                "strong_signal_observed",
+            )
+            self.assertEqual(collection["product_probe_count"], 1)
+            self.assertEqual(
+                collection["product_probe_last_state"],
+                "strong_signal_observed",
+            )
+
+    def test_product_probe_unsupported_falls_back_to_fixed_delay(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.bat"
+            sample_path.write_text("echo harmless", encoding="utf-8")
+            sleeps: list[float] = []
+            client = FakeGuestClient(probe_states=["unsupported"])
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    post_execution_collection_delay_seconds=45.0,
+                    product_probe_enabled=True,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(sleeps[-2:], [1.0, 44.0])
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                run_state["stages"]["collection"]["product_probe_exit_reason"],
+                "unsupported_fallback_to_fixed_delay",
+            )
+
+    def test_product_probe_failure_records_warning_and_keeps_case_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.bat"
+            sample_path.write_text("echo harmless", encoding="utf-8")
+            sleeps: list[float] = []
+            client = FakeGuestClient(
+                probe_error=GuestAgentError("probe failed", source="remote")
+            )
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    post_execution_collection_delay_seconds=45.0,
+                    product_probe_enabled=True,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            self.assertEqual(sleeps[-2:], [1.0, 44.0])
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            collection = run_state["stages"]["collection"]
+            self.assertEqual(
+                collection["product_probe_exit_reason"],
+                "probe_failed_fallback_to_fixed_delay",
+            )
+            self.assertEqual(collection["product_probe_failed_count"], 1)
+            self.assertIn(
+                "product observation probe failed",
+                run_state["warnings"][-1]["message"],
+            )
+
     def test_single_run_does_not_wait_when_execution_is_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1020,6 +1122,8 @@ class FakeGuestClient:
         execute_error: GuestAgentError | None = None,
         worker_ready: bool = True,
         worker_reason: str = "",
+        probe_states: list[str] | None = None,
+        probe_error: GuestAgentError | None = None,
     ) -> None:
         self.fail_collect = fail_collect
         self.status_upload_state = status_upload_state
@@ -1028,6 +1132,8 @@ class FakeGuestClient:
         self.execute_error = execute_error
         self.worker_ready = worker_ready
         self.worker_reason = worker_reason
+        self.probe_states = list(probe_states or [])
+        self.probe_error = probe_error
         self.health_calls = 0
         self.worker_status_calls = 0
         self.export_timeouts: list[float | None] = []
@@ -1037,6 +1143,7 @@ class FakeGuestClient:
         self.prepare_products: list[str] = []
         self.readiness_products: list[str] = []
         self.collection_products: list[str] = []
+        self.probe_products: list[str] = []
         self.upload_md5s: list[str] = []
 
     def health(self, timeout_seconds: float | None = None) -> GuestAgentResponse:
@@ -1175,6 +1282,22 @@ class FakeGuestClient:
             data={"evidence_count": 1},
         )
 
+    def probe_collection(
+        self,
+        case_id: str,
+        product_id: str,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
+        self.probe_products.append(product_id)
+        if self.probe_error is not None:
+            raise self.probe_error
+        probe_state = self.probe_states.pop(0) if self.probe_states else "no_signal"
+        return GuestAgentResponse(
+            status="ok",
+            message="probe",
+            data={"product_id": product_id, "probe_state": probe_state},
+        )
+
     def case_summary(
         self,
         case_id: str,
@@ -1222,6 +1345,8 @@ def _options(
     guest_ready_timeout_seconds: float = 180.0,
     guest_ready_successes: int = 2,
     post_execution_collection_delay_seconds: float = 45.0,
+    product_probe_enabled: bool = False,
+    post_execution_probe_interval_seconds: float = 1.0,
     defer_final_cleanup: bool = False,
     skip_initial_restore: bool = False,
 ) -> SingleRunOptions:
@@ -1245,6 +1370,8 @@ def _options(
         post_execution_collection_delay_seconds=(
             post_execution_collection_delay_seconds
         ),
+        product_probe_enabled=product_probe_enabled,
+        post_execution_probe_interval_seconds=post_execution_probe_interval_seconds,
         salvage_timeout=salvage_timeout or NetworkTimeoutProfile(2, 5),
         defer_final_cleanup=defer_final_cleanup,
         skip_initial_restore=skip_initial_restore,

@@ -52,6 +52,7 @@ from cloud_av_agent_lab.orchestration.locks import InstanceLockedError
 from cloud_av_agent_lab.orchestration.prompts import prompt_bool, prompt_default
 from cloud_av_agent_lab.orchestration.single_run import (
     DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
+    DEFAULT_POST_EXECUTION_PROBE_INTERVAL_SECONDS,
     DEFAULT_SETTLING_COOLDOWN_SECONDS,
     DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS,
     SingleRunError,
@@ -452,6 +453,28 @@ def build_parser() -> argparse.ArgumentParser:
             "seconds to wait after sample execution exits before product log collection"
         ),
     )
+    single_run_probe = single_run.add_mutually_exclusive_group()
+    single_run_probe.add_argument(
+        "--enable-product-probe",
+        dest="product_probe_enabled",
+        action="store_true",
+        default=None,
+        help=(
+            "enable product-side lightweight observation during post-execution delay"
+        ),
+    )
+    single_run_probe.add_argument(
+        "--disable-product-probe",
+        dest="product_probe_enabled",
+        action="store_false",
+        help="disable product-side lightweight observation during post-execution delay",
+    )
+    single_run.add_argument(
+        "--post-execution-probe-interval-seconds",
+        type=float,
+        default=DEFAULT_POST_EXECUTION_PROBE_INTERVAL_SECONDS,
+        help="product observation probe interval during post-execution delay",
+    )
     single_run.add_argument(
         "--salvage-connect-timeout-seconds",
         type=float,
@@ -590,6 +613,28 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="per-case delay after execution settles before product log collection",
+    )
+    multi_run_probe = multi_run.add_mutually_exclusive_group()
+    multi_run_probe.add_argument(
+        "--enable-product-probe",
+        dest="product_probe_enabled",
+        action="store_true",
+        default=None,
+        help=(
+            "enable product-side lightweight observation during post-execution delay"
+        ),
+    )
+    multi_run_probe.add_argument(
+        "--disable-product-probe",
+        dest="product_probe_enabled",
+        action="store_false",
+        help="disable product-side lightweight observation during post-execution delay",
+    )
+    multi_run.add_argument(
+        "--post-execution-probe-interval-seconds",
+        type=float,
+        default=DEFAULT_POST_EXECUTION_PROBE_INTERVAL_SECONDS,
+        help="per-case product observation probe interval",
     )
     multi_run.add_argument(
         "--cleanup-strategy",
@@ -1142,11 +1187,20 @@ def _handle_multi_run(
         args.post_execution_collection_delay_seconds,
         DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
     )
+    product_probe_enabled = bool(args.product_probe_enabled)
+    post_execution_probe_interval_seconds = _delay_value_or_default(
+        parser,
+        "--post-execution-probe-interval-seconds",
+        args.post_execution_probe_interval_seconds,
+        DEFAULT_POST_EXECUTION_PROBE_INTERVAL_SECONDS,
+    )
     args.settling_cooldown_seconds = settling_cooldown_seconds
     args.upload_status_timeout_seconds = upload_status_timeout_seconds
     args.post_execution_collection_delay_seconds = (
         post_execution_collection_delay_seconds
     )
+    args.product_probe_enabled = product_probe_enabled
+    args.post_execution_probe_interval_seconds = post_execution_probe_interval_seconds
     _multi_run_selection_mode(parser, args)
     execution_mode = _multi_run_execution_mode(parser, args)
     if args.max_cases is not None and args.max_cases <= 0:
@@ -1224,6 +1278,10 @@ def _handle_multi_run(
                 post_execution_collection_delay_seconds=(
                     post_execution_collection_delay_seconds
                 ),
+                product_probe_enabled=product_probe_enabled,
+                post_execution_probe_interval_seconds=(
+                    post_execution_probe_interval_seconds
+                ),
             )
         else:
             artifacts = load_existing_multi_run_batch(
@@ -1251,11 +1309,17 @@ def _handle_multi_run(
     post_execution_collection_delay_seconds = (
         artifacts.batch_plan.execution.post_execution_collection_delay_seconds
     )
+    product_probe_enabled = artifacts.batch_plan.execution.product_probe_enabled
+    post_execution_probe_interval_seconds = (
+        artifacts.batch_plan.execution.post_execution_probe_interval_seconds
+    )
     args.settling_cooldown_seconds = settling_cooldown_seconds
     args.upload_status_timeout_seconds = upload_status_timeout_seconds
     args.post_execution_collection_delay_seconds = (
         post_execution_collection_delay_seconds
     )
+    args.product_probe_enabled = product_probe_enabled
+    args.post_execution_probe_interval_seconds = post_execution_probe_interval_seconds
     state = None
     if args.plan_only:
         print("Multi-run batch plan created; scheduler skipped by --plan-only.")
@@ -1342,6 +1406,10 @@ def _handle_multi_run(
                 "post_execution_collection_delay_seconds": (
                     post_execution_collection_delay_seconds
                 ),
+                "product_probe_enabled": product_probe_enabled,
+                "post_execution_probe_interval_seconds": (
+                    post_execution_probe_interval_seconds
+                ),
                 "execution_mode": execution_mode,
                 "resume": args.resume,
                 "rerun_failed": args.rerun_failed,
@@ -1408,6 +1476,9 @@ def _multi_run_prompt_missing_inputs(
         args.post_execution_collection_delay_seconds,
         DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
     )
+    args.product_probe_enabled = _product_probe_value_or_prompt(
+        args.product_probe_enabled
+    )
     if not args.manifest and not args.sample_dir:
         args.sample_dir = prompt_default(
             "Cloud platform sample directory",
@@ -1454,6 +1525,17 @@ def _delay_value_or_prompt(
     except ValueError:
         parser.exit(2, f"error: {label} must be numeric\n")
     return _delay_value_or_default(parser, label, parsed, default)
+
+
+def _product_probe_value_or_prompt(value: bool | None) -> bool:
+    if value is not None:
+        return bool(value)
+    if not sys.stdin.isatty():
+        return False
+    return prompt_bool(
+        "是否启用产品侧轻量probe？yes/no：可缩短等待时间，但正式结论仍以完整收集为准",
+        default=False,
+    )
 
 
 def _delay_value_or_default(
@@ -1625,6 +1707,7 @@ def _single_run_options_from_args(
         args.post_execution_collection_delay_seconds,
         DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
     )
+    product_probe_enabled = _product_probe_value_or_prompt(args.product_probe_enabled)
     return SingleRunOptions(
         instance_id=instance_id,
         snapshot_id=snapshot_id,
@@ -1647,6 +1730,10 @@ def _single_run_options_from_args(
         execution_poll_interval_seconds=args.execution_poll_interval_seconds,
         post_execution_collection_delay_seconds=(
             post_execution_collection_delay_seconds
+        ),
+        product_probe_enabled=product_probe_enabled,
+        post_execution_probe_interval_seconds=(
+            args.post_execution_probe_interval_seconds
         ),
         salvage_timeout=NetworkTimeoutProfile(
             connect_seconds=args.salvage_connect_timeout_seconds,
@@ -1693,6 +1780,10 @@ def _confirm_single_run_real_operation(
     print(
         "Post-execution collection delay seconds: "
         f"{options.post_execution_collection_delay_seconds:g}"
+    )
+    print(
+        "Product-side lightweight probe: "
+        + ("enabled" if options.product_probe_enabled else "disabled")
     )
     if not sys.stdin.isatty():
         parser.exit(

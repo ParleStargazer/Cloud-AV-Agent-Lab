@@ -51,6 +51,7 @@ DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS = 30.0
 DEFAULT_EXECUTION_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_EXECUTION_POLL_TIMEOUT_SECONDS = 60.0
 DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS = 45.0
+DEFAULT_POST_EXECUTION_PROBE_INTERVAL_SECONDS = 1.0
 TERMINAL_EXECUTION_STATES = {
     "exited_cleanly",
     "exited_with_error",
@@ -187,6 +188,10 @@ class SingleRunOptions:
     execution_poll_timeout_seconds: float = DEFAULT_EXECUTION_POLL_TIMEOUT_SECONDS
     post_execution_collection_delay_seconds: float = (
         DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS
+    )
+    product_probe_enabled: bool = False
+    post_execution_probe_interval_seconds: float = (
+        DEFAULT_POST_EXECUTION_PROBE_INTERVAL_SECONDS
     )
     cloud_poll_timeout_seconds: float = 600.0
     cloud_poll_interval_seconds: float = 5.0
@@ -705,10 +710,23 @@ def _run_single_case_locked(
 
         with state.step("post_execution_collection_delay"):
             delay_seconds = max(options.post_execution_collection_delay_seconds, 0.0)
+            probe_interval_seconds = max(
+                options.post_execution_probe_interval_seconds, 0.0
+            )
             state.mark_stage(
                 "collection",
                 "post_execution_collection_delay_seconds",
                 delay_seconds,
+            )
+            state.mark_stage(
+                "collection",
+                "product_probe_enabled",
+                options.product_probe_enabled,
+            )
+            state.mark_stage(
+                "collection",
+                "post_execution_probe_interval_seconds",
+                probe_interval_seconds,
             )
             execution_state = execution_result["execution_state"]
             if options.dry_run:
@@ -737,7 +755,30 @@ def _run_single_case_locked(
                     reason,
                     delay_seconds,
                 )
-                sleep(delay_seconds)
+                if options.product_probe_enabled and probe_interval_seconds > 0:
+                    probe_result = _adaptive_post_execution_collection_delay(
+                        client=client,
+                        case_id=case_id,
+                        product_id=product_id,
+                        delay_seconds=delay_seconds,
+                        interval_seconds=probe_interval_seconds,
+                        sleep=sleep,
+                    )
+                    for key, value in probe_result.items():
+                        state.mark_stage("collection", key, value)
+                    if probe_result.get("product_probe_warning"):
+                        state.add_warning(
+                            "collection",
+                            str(probe_result["product_probe_warning"]),
+                        )
+                        warning_count += 1
+                else:
+                    sleep(delay_seconds)
+                    state.mark_stage(
+                        "collection",
+                        "product_probe_exit_reason",
+                        "disabled_fixed_delay",
+                    )
                 LOGGER.info(
                     "post-execution collection delay finished; continue log collection"
                 )
@@ -1426,6 +1467,109 @@ def _should_wait_after_execution_for_collection(
     if execution_result.get("status") not in {"observed", "not_started"}:
         return False
     return execution_result.get("execution_state") in TERMINAL_EXECUTION_STATES
+
+
+def _adaptive_post_execution_collection_delay(
+    *,
+    client: GuestAgentClient,
+    case_id: str,
+    product_id: str,
+    delay_seconds: float,
+    interval_seconds: float,
+    sleep: SleepFunc,
+) -> dict[str, Any]:
+    elapsed = 0.0
+    probe_count = 0
+    failed_count = 0
+    last_state = ""
+    while elapsed < delay_seconds:
+        wait_seconds = min(interval_seconds, delay_seconds - elapsed)
+        if wait_seconds > 0:
+            sleep(wait_seconds)
+            elapsed += wait_seconds
+        probe_count += 1
+        try:
+            response = client.probe_collection(
+                case_id,
+                product_id,
+                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+            )
+        except GuestAgentError as exc:
+            failed_count += 1
+            remaining = max(delay_seconds - elapsed, 0.0)
+            if remaining > 0:
+                sleep(remaining)
+                elapsed += remaining
+            LOGGER.warning(
+                "product observation probe failed; fallback to fixed delay: %s",
+                type(exc).__name__,
+            )
+            return {
+                "product_probe_exit_reason": "probe_failed_fallback_to_fixed_delay",
+                "product_probe_elapsed_seconds": elapsed,
+                "product_probe_count": probe_count,
+                "product_probe_failed_count": failed_count,
+                "product_probe_last_state": last_state or "probe_failed",
+                "product_probe_warning": (
+                    "product observation probe failed; fixed delay completed"
+                ),
+            }
+
+        data = response.data
+        probe_state = str(data.get("probe_state") or "unknown")
+        last_state = probe_state
+        LOGGER.info(
+            "product observation probe (%.0fs/%.0fs): product=%s state=%s",
+            elapsed,
+            delay_seconds,
+            product_id,
+            probe_state,
+        )
+        if probe_state == "strong_signal_observed":
+            return {
+                "product_probe_exit_reason": "strong_signal_observed",
+                "product_probe_elapsed_seconds": elapsed,
+                "product_probe_count": probe_count,
+                "product_probe_failed_count": failed_count,
+                "product_probe_last_state": probe_state,
+            }
+        if probe_state == "unsupported":
+            remaining = max(delay_seconds - elapsed, 0.0)
+            if remaining > 0:
+                sleep(remaining)
+                elapsed += remaining
+            return {
+                "product_probe_exit_reason": "unsupported_fallback_to_fixed_delay",
+                "product_probe_elapsed_seconds": elapsed,
+                "product_probe_count": probe_count,
+                "product_probe_failed_count": failed_count,
+                "product_probe_last_state": probe_state,
+            }
+        if probe_state == "probe_failed":
+            failed_count += 1
+            remaining = max(delay_seconds - elapsed, 0.0)
+            if remaining > 0:
+                sleep(remaining)
+                elapsed += remaining
+            return {
+                "product_probe_exit_reason": "probe_failed_fallback_to_fixed_delay",
+                "product_probe_elapsed_seconds": elapsed,
+                "product_probe_count": probe_count,
+                "product_probe_failed_count": failed_count,
+                "product_probe_last_state": probe_state,
+                "product_probe_warning": (
+                    "product observation probe returned probe_failed; "
+                    "fixed delay completed"
+                ),
+            }
+
+    return {
+        "product_probe_exit_reason": "max_delay_elapsed",
+        "product_probe_elapsed_seconds": elapsed,
+        "product_probe_count": probe_count,
+        "product_probe_failed_count": failed_count,
+        "product_probe_last_state": last_state or "not_checked",
+    }
 
 
 def _poll_execution_status(
