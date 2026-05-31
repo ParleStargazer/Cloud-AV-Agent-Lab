@@ -782,7 +782,11 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(state["cases"][0]["result_source"], "fake_runner")
             self.assertTrue(state["cases"][0]["simulated"])
             self.assertFalse(state["cases"][0]["resume_eligible"])
-            self.assertEqual(state["cases"][0]["cleanup_status"], "restored")
+            self.assertEqual(
+                state["cases"][0]["cleanup_status"],
+                "deferred_to_next_case",
+            )
+            self.assertEqual(state["cases"][1]["cleanup_status"], "restored")
             self.assertEqual(state["cases"][0]["summary_status"], "collected")
             self.assertEqual(state["cases"][0]["evidence_status"], "exported")
             self.assertEqual(state["batch_state"], "completed")

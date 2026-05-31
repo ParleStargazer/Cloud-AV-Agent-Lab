@@ -204,6 +204,25 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
                 [event["type"] for event in events],
             )
 
+    def test_deferred_cleanup_strategy_defers_only_middle_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, runner = _plan_and_execute(
+                tmp,
+                indexes=(1, 2, 3),
+                cleanup_strategy="deferred",
+            )
+
+            self.assertEqual(
+                [request.defer_final_cleanup for request in runner.requests],
+                [True, True, False],
+            )
+            state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
+            self.assertEqual(
+                [case["cleanup_status"] for case in state["cases"]],
+                ["deferred_to_next_case", "deferred_to_next_case", "restored"],
+            )
+            self.assertEqual(state["batch_state"], "completed")
+
     def test_rerun_failed_rejects_burned_indexed_sample(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -584,6 +603,7 @@ def _plan_and_execute(
     indexes: tuple[int, ...] = (1, 2),
     scenarios: dict[int, str] | None = None,
     failure_policy: str = "continue",
+    cleanup_strategy: str = "per_case",
     case_names: dict[int, str] | None = None,
 ) -> tuple[Path, FakeSingleRunRunner]:
     tmp_path = Path(tmp)
@@ -607,6 +627,7 @@ def _plan_and_execute(
         selection=selection,
         dry_run=True,
         failure_policy=failure_policy,
+        cleanup_strategy=cleanup_strategy,
     )
     runner = FakeSingleRunRunner(scenarios_by_sample_index=scenarios)
     execute_multi_run_batch(artifacts.batch_dir, runner=runner)

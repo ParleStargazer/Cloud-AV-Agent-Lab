@@ -1524,6 +1524,7 @@ class SingleRunRequest:
     case_dir: Path
     dry_run: bool
     attempt: int = 1
+    defer_final_cleanup: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1549,6 +1550,7 @@ class SingleRunRequest:
             "case_dir": str(self.case_dir),
             "dry_run": self.dry_run,
             "attempt": self.attempt,
+            "defer_final_cleanup": self.defer_final_cleanup,
         }
 
 
@@ -1692,6 +1694,7 @@ class RealSingleRunRunner:
                     product_id=request.product_id,
                     desktop_worker_url=request.desktop_worker_url,
                     dry_run=request.dry_run,
+                    defer_final_cleanup=request.defer_final_cleanup,
                     runs_dir=request.case_dir,
                 )
             )
@@ -1767,7 +1770,9 @@ def fake_single_run_result(
             final_status="completed",
             case_status="completed",
             single_run_status="completed",
-            cleanup_status="restored",
+            cleanup_status=(
+                "deferred_to_next_case" if request.defer_final_cleanup else "restored"
+            ),
             evidence_status="exported",
             summary_status="collected",
             readiness_status="ok",
@@ -2281,6 +2286,11 @@ def execute_multi_run_batch(
     unsafe_to_continue = False
     manual_intervention_required = False
     manual_intervention_reason = ""
+    run_indexes = tuple(
+        index
+        for index in selected_indexes
+        if _should_run_case_for_mode(cases_by_index[index], execution_mode)
+    )
 
     for index in selected_indexes:
         entry = entries_by_index[index]
@@ -2315,6 +2325,11 @@ def execute_multi_run_batch(
             case_dir=case_dir,
             batch_plan_sha256=batch_plan_sha256,
             attempt=attempt,
+            defer_final_cleanup=_should_defer_case_cleanup(
+                plan,
+                run_indexes=run_indexes,
+                current_index=index,
+            ),
         )
         append_next_multi_run_event(
             event_log_path,
@@ -2834,6 +2849,7 @@ def _single_run_request_for_entry(
     case_dir: Path,
     batch_plan_sha256: str,
     attempt: int = 1,
+    defer_final_cleanup: bool = False,
 ) -> SingleRunRequest:
     return SingleRunRequest(
         batch_id=plan.batch_id,
@@ -2858,6 +2874,7 @@ def _single_run_request_for_entry(
         case_dir=case_dir,
         dry_run=plan.execution.dry_run,
         attempt=attempt,
+        defer_final_cleanup=defer_final_cleanup,
     )
 
 
@@ -3306,6 +3323,19 @@ def _stop_state_for_result(
     ):
         return "stopped_for_case_failure"
     return None
+
+
+def _should_defer_case_cleanup(
+    plan: BatchPlan,
+    *,
+    run_indexes: tuple[int, ...],
+    current_index: int,
+) -> bool:
+    if plan.execution.cleanup_strategy != "deferred":
+        return False
+    if not run_indexes or current_index == run_indexes[-1]:
+        return False
+    return True
 
 
 def _burn_indexed_sample_after_persisted_result(

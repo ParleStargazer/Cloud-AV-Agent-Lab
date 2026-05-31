@@ -142,6 +142,7 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
         self.assertEqual(payload["manifest_sha256"], "c" * 64)
         self.assertEqual(payload["batch_plan_sha256"], "d" * 64)
         self.assertEqual(payload["sha256"], "a" * 64)
+        self.assertFalse(payload["defer_final_cleanup"])
         self.assertNotIn("sample_bytes", payload)
         self.assertNotIn("content", payload)
 
@@ -161,6 +162,9 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
                 captured["product_id"] = getattr(options, "product_id")
                 captured["guest_agent_url"] = getattr(options, "guest_agent_url")
                 captured["desktop_worker_url"] = getattr(options, "desktop_worker_url")
+                captured["defer_final_cleanup"] = getattr(
+                    options, "defer_final_cleanup"
+                )
                 run_dir = Path(getattr(options, "runs_dir")) / "run-001"
                 run_dir.mkdir(parents=True)
                 run_state_path = run_dir / "run_state.json"
@@ -204,6 +208,7 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
             self.assertEqual(captured["product_id"], "huorong")
             self.assertEqual(captured["guest_agent_url"], "http://127.0.0.1:8080")
             self.assertEqual(captured["desktop_worker_url"], "http://127.0.0.1:8001")
+            self.assertFalse(captured["defer_final_cleanup"])
             self.assertEqual(result.run_id, "real-run-001")
             self.assertEqual(result.case_id, "real-case-001")
             self.assertEqual(result.result_source, "single_run_runner")
