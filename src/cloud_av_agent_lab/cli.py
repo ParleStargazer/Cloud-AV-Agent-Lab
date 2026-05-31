@@ -578,10 +578,10 @@ def build_parser() -> argparse.ArgumentParser:
     multi_run.add_argument(
         "--cleanup-strategy",
         choices=("per_case", "deferred"),
-        default="per_case",
+        default=None,
         help=(
             "batch cleanup strategy; per_case restores after every case, "
-            "deferred is an explicit opt-in optimization"
+            "deferred is an explicit opt-in optimization; default: per_case"
         ),
     )
     multi_run.add_argument(
@@ -1106,6 +1106,8 @@ def _handle_multi_run(
 ) -> int:
     _normalize_multi_run_platform_sample_dir(parser, args)
     _multi_run_prompt_missing_inputs(parser, args)
+    if args.cleanup_strategy is None:
+        args.cleanup_strategy = "per_case"
     settling_cooldown_seconds = _delay_value_or_default(
         parser,
         "--settling-cooldown-seconds",
@@ -1384,6 +1386,17 @@ def _multi_run_prompt_missing_inputs(
             "是否开启快速模式？yes/no：可提升测试速度，但结果准确性可能下降",
             default=False,
         )
+    if args.cleanup_strategy is None:
+        if args.fastmode:
+            args.cleanup_strategy = "per_case"
+        else:
+            cleanup_prompt = (
+                "目前case开始和结束时会各自回滚快照，"
+                "是否启用中间case切换只回滚一次快照？yes/no"
+            )
+            args.cleanup_strategy = (
+                "deferred" if prompt_bool(cleanup_prompt, default=False) else "per_case"
+            )
 
 
 def _prompt_into(value: str, label: str, default: str = "") -> str:

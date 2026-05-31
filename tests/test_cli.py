@@ -1009,8 +1009,9 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "",
                         "",
                         "",
+                        "yes",
                     ],
-                ),
+                ) as input_mock,
                 patch(
                     "cloud_av_agent_lab.cli._default_multi_run_sample_dir",
                     return_value=str(raw_dir),
@@ -1039,6 +1040,10 @@ class CloudLifecycleCliGuardTests(TestCase):
                 plan["execution"]["post_execution_collection_delay_seconds"],
                 45.0,
             )
+            self.assertEqual(plan["execution"]["cleanup_strategy"], "deferred")
+            prompts = [call.args[0] for call in input_mock.call_args_list]
+            self.assertIn("是否开启快速模式", prompts[-2])
+            self.assertIn("是否启用中间case切换只回滚一次快照", prompts[-1])
             self.assertEqual(plan["selection"]["mode"], "all")
             self.assertEqual(plan["selection"]["selected_indexes"], [1])
 
@@ -1066,6 +1071,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "",
                         "",
                         "",
+                        "",
                     ],
                 ),
                 patch(
@@ -1087,6 +1093,59 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertTrue((batch_dir / "batch_plan.json").is_file())
             self.assertTrue(
                 (batch_dir / "sample_index" / "sample_manifest.jsonl").is_file()
+            )
+
+    def test_multi_run_interactive_fastmode_skips_cleanup_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_dir = tmp_path / "raw_sample"
+            raw_dir.mkdir()
+            (raw_dir / "sample-a.txt").write_text("alpha", encoding="utf-8")
+            stdout = StringIO()
+
+            with (
+                redirect_stdout(stdout),
+                patch("sys.stdin.isatty", return_value=True),
+                patch(
+                    "builtins.input",
+                    side_effect=[
+                        "huorong",
+                        "lhins-example",
+                        "lhsnap-example",
+                        "",
+                        "http://127.0.0.1:8080",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "yes",
+                    ],
+                ) as input_mock,
+                patch(
+                    "cloud_av_agent_lab.cli._default_multi_run_sample_dir",
+                    return_value=str(raw_dir),
+                ),
+            ):
+                exit_code = main(
+                    [
+                        "multi-run",
+                        "--batch-root",
+                        str(tmp_path / "batches"),
+                        "--batch-id",
+                        "guided-fastmode-test",
+                        "--plan-only",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            batch_dir = tmp_path / "batches" / "guided-fastmode-test"
+            plan = json.loads((batch_dir / "batch_plan.json").read_text("utf-8"))
+            self.assertTrue(plan["execution"]["fastmode"])
+            self.assertEqual(plan["execution"]["cleanup_strategy"], "per_case")
+            prompts = [call.args[0] for call in input_mock.call_args_list]
+            self.assertIn("是否开启快速模式", prompts[-1])
+            self.assertFalse(
+                any("是否启用中间case切换只回滚一次快照" in item for item in prompts)
             )
 
     def test_multi_run_sample_dir_requires_platform_confirmation(self) -> None:
