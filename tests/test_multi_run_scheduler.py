@@ -204,6 +204,49 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
                 [event["type"] for event in events],
             )
 
+    def test_rerun_failed_rejects_burned_indexed_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_dir = tmp_path / "raw_sample"
+            raw_dir.mkdir()
+            (raw_dir / "sample-a.exe").write_bytes(b"harmless-placeholder")
+            batch_root = tmp_path / "batches"
+            batch_id = "burn-rerun-test"
+            index_artifacts = build_sample_manifest_from_directory(
+                raw_dir,
+                batch_root / batch_id / "sample_index",
+            )
+            manifest = load_sample_manifest(index_artifacts.manifest_path)
+            selection = parse_sample_selection(manifest.indexes, indexes_text="1")
+            artifacts = create_multi_run_batch_plan(
+                batch_root=batch_root,
+                batch_id=batch_id,
+                product_id="huorong",
+                instance_id="lhins-test",
+                snapshot_id="lhsnap-test",
+                region="ap-singapore",
+                guest_agent_url="http://127.0.0.1:8080",
+                desktop_worker_url="http://127.0.0.1:8001",
+                manifest=manifest,
+                selection=selection,
+                dry_run=True,
+                failure_policy="continue",
+            )
+            execute_multi_run_batch(
+                artifacts.batch_dir,
+                runner=FakeSingleRunRunner(default_scenario="case_failed"),
+            )
+
+            with self.assertRaises(MultiRunStateError) as error:
+                execute_multi_run_batch(
+                    artifacts.batch_dir,
+                    runner=FakeSingleRunRunner(),
+                    execution_mode="rerun_failed",
+                )
+
+            self.assertIn("cannot rerun burned indexed samples", str(error.exception))
+            self.assertIn("explicit re-index", str(error.exception))
+
     def test_preflight_failure_stops_before_scheduler(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

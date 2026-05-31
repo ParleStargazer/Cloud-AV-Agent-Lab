@@ -3225,6 +3225,26 @@ def _ensure_existing_batch_can_execute(
         region=plan.region,
         batch_plan_sha256=batch_plan_sha256,
     )
+    _ensure_no_burned_indexed_sample_will_run(state, execution_mode)
+
+
+def _ensure_no_burned_indexed_sample_will_run(
+    state: MultiRunState,
+    execution_mode: MultiRunExecutionMode,
+) -> None:
+    blocked = [
+        case
+        for case in state.cases
+        if case.indexed_sample_state == "burned"
+        and _should_run_case_for_mode(case, execution_mode)
+    ]
+    if not blocked:
+        return
+    formatted = ", ".join(f"{case.sample_index}:{case.case_id}" for case in blocked[:5])
+    raise MultiRunStateError(
+        "cannot rerun burned indexed samples; regenerate the batch plan "
+        f"or run an explicit re-index flow first: {formatted}"
+    )
 
 
 def _should_run_case_for_mode(
