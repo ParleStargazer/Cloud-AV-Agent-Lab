@@ -79,6 +79,7 @@ class MultiRunSchemaTests(unittest.TestCase):
                 fastmode=True,
                 case_timeout_seconds=1800.0,
                 settling_cooldown_seconds=8.0,
+                upload_status_timeout_seconds=12.0,
                 post_execution_collection_delay_seconds=66.0,
                 cleanup_strategy="deferred",
             ),
@@ -100,6 +101,7 @@ class MultiRunSchemaTests(unittest.TestCase):
         self.assertTrue(payload["execution"]["fastmode"])
         self.assertEqual(payload["execution"]["mode"], "serial")
         self.assertEqual(payload["execution"]["settling_cooldown_seconds"], 8.0)
+        self.assertEqual(payload["execution"]["upload_status_timeout_seconds"], 12.0)
         self.assertEqual(
             payload["execution"]["post_execution_collection_delay_seconds"],
             66.0,

@@ -733,6 +733,8 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "--fastmode",
                         "--settling-cooldown-seconds",
                         "9",
+                        "--upload-status-timeout-seconds",
+                        "12",
                         "--post-execution-collection-delay-seconds",
                         "77",
                     ]
@@ -762,6 +764,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(plan["execution"]["cleanup_strategy"], "deferred")
             self.assertTrue(plan["execution"]["fastmode"])
             self.assertEqual(plan["execution"]["settling_cooldown_seconds"], 9.0)
+            self.assertEqual(plan["execution"]["upload_status_timeout_seconds"], 12.0)
             self.assertEqual(
                 plan["execution"]["post_execution_collection_delay_seconds"],
                 77.0,
@@ -783,6 +786,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertIn('cleanup_strategy = "deferred"', generated_config)
             self.assertIn("fastmode = true", generated_config)
             self.assertIn("settling_cooldown_seconds = 9", generated_config)
+            self.assertIn("upload_status_timeout_seconds = 12", generated_config)
             self.assertIn(
                 "post_execution_collection_delay_seconds = 77",
                 generated_config,
@@ -1009,6 +1013,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "",
                         "",
                         "",
+                        "",
                         "yes",
                     ],
                 ) as input_mock,
@@ -1036,6 +1041,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(plan["snapshot_id"], "lhsnap-example")
             self.assertEqual(plan["region"], "ap-singapore")
             self.assertEqual(plan["execution"]["settling_cooldown_seconds"], 15.0)
+            self.assertEqual(plan["execution"]["upload_status_timeout_seconds"], 30.0)
             self.assertEqual(
                 plan["execution"]["post_execution_collection_delay_seconds"],
                 45.0,
@@ -1066,6 +1072,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "lhsnap-example",
                         "",
                         "http://127.0.0.1:8080",
+                        "",
                         "",
                         "",
                         "",
@@ -1114,6 +1121,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "lhsnap-example",
                         "",
                         "http://127.0.0.1:8080",
+                        "",
                         "",
                         "",
                         "",
@@ -1625,6 +1633,8 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "http://127.0.0.1:8080",
                         "--settling-cooldown-seconds",
                         "8",
+                        "--upload-status-timeout-seconds",
+                        "11",
                         "--post-execution-collection-delay-seconds",
                         "66",
                         "--runs-dir",
@@ -1639,6 +1649,7 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(options.instance_id, "lhins-example")
         self.assertFalse(options.dry_run)
         self.assertEqual(options.settling_cooldown_seconds, 8.0)
+        self.assertEqual(options.upload_poll_timeout_seconds, 11.0)
         self.assertEqual(options.post_execution_collection_delay_seconds, 66.0)
         output = stdout.getvalue()
         self.assertIn("Single-run finished: completed", output)
@@ -1852,6 +1863,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "http://127.0.0.1:8080",
                         "",
                         "",
+                        "",
                     ],
                 ) as input_mock,
                 redirect_stdout(StringIO()),
@@ -1872,6 +1884,7 @@ class CloudLifecycleCliGuardTests(TestCase):
         )
         self.assertEqual(run_single.call_args.args[0].product_id, "windows-defender")
         self.assertEqual(run_single.call_args.args[0].settling_cooldown_seconds, 15.0)
+        self.assertEqual(run_single.call_args.args[0].upload_poll_timeout_seconds, 30.0)
         self.assertEqual(
             run_single.call_args.args[0].post_execution_collection_delay_seconds,
             45.0,

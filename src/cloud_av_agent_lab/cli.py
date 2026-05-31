@@ -53,6 +53,7 @@ from cloud_av_agent_lab.orchestration.prompts import prompt_bool, prompt_default
 from cloud_av_agent_lab.orchestration.single_run import (
     DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
     DEFAULT_SETTLING_COOLDOWN_SECONDS,
+    DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS,
     SingleRunError,
     supported_single_run_products,
 )
@@ -423,6 +424,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="cooldown after Guest Agent is ready",
     )
     single_run.add_argument(
+        "--upload-status-timeout-seconds",
+        type=float,
+        default=None,
+        help=(
+            "maximum seconds to poll post-upload case status after upload_sample "
+            "succeeds"
+        ),
+    )
+    single_run.add_argument(
         "--execution-poll-timeout-seconds",
         type=float,
         default=GUEST_EXECUTION_POLL_TIMEOUT_SECONDS,
@@ -568,6 +578,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="per-case cooldown after Guest Agent and Desktop Worker are ready",
+    )
+    multi_run.add_argument(
+        "--upload-status-timeout-seconds",
+        type=float,
+        default=None,
+        help=("per-case post-upload case-status polling timeout after upload succeeds"),
     )
     multi_run.add_argument(
         "--post-execution-collection-delay-seconds",
@@ -1114,6 +1130,12 @@ def _handle_multi_run(
         args.settling_cooldown_seconds,
         DEFAULT_SETTLING_COOLDOWN_SECONDS,
     )
+    upload_status_timeout_seconds = _delay_value_or_default(
+        parser,
+        "--upload-status-timeout-seconds",
+        args.upload_status_timeout_seconds,
+        DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS,
+    )
     post_execution_collection_delay_seconds = _delay_value_or_default(
         parser,
         "--post-execution-collection-delay-seconds",
@@ -1121,6 +1143,7 @@ def _handle_multi_run(
         DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
     )
     args.settling_cooldown_seconds = settling_cooldown_seconds
+    args.upload_status_timeout_seconds = upload_status_timeout_seconds
     args.post_execution_collection_delay_seconds = (
         post_execution_collection_delay_seconds
     )
@@ -1197,6 +1220,7 @@ def _handle_multi_run(
                 cleanup_strategy=args.cleanup_strategy,
                 fastmode=bool(args.fastmode),
                 settling_cooldown_seconds=settling_cooldown_seconds,
+                upload_status_timeout_seconds=upload_status_timeout_seconds,
                 post_execution_collection_delay_seconds=(
                     post_execution_collection_delay_seconds
                 ),
@@ -1221,10 +1245,14 @@ def _handle_multi_run(
         parser.exit(2, f"error: {exc}\n")
 
     settling_cooldown_seconds = artifacts.batch_plan.execution.settling_cooldown_seconds
+    upload_status_timeout_seconds = (
+        artifacts.batch_plan.execution.upload_status_timeout_seconds
+    )
     post_execution_collection_delay_seconds = (
         artifacts.batch_plan.execution.post_execution_collection_delay_seconds
     )
     args.settling_cooldown_seconds = settling_cooldown_seconds
+    args.upload_status_timeout_seconds = upload_status_timeout_seconds
     args.post_execution_collection_delay_seconds = (
         post_execution_collection_delay_seconds
     )
@@ -1310,6 +1338,7 @@ def _handle_multi_run(
                 "cleanup_strategy": args.cleanup_strategy,
                 "fastmode": bool(args.fastmode),
                 "settling_cooldown_seconds": settling_cooldown_seconds,
+                "upload_status_timeout_seconds": upload_status_timeout_seconds,
                 "post_execution_collection_delay_seconds": (
                     post_execution_collection_delay_seconds
                 ),
@@ -1366,6 +1395,12 @@ def _multi_run_prompt_missing_inputs(
         "Settling cooldown seconds",
         args.settling_cooldown_seconds,
         DEFAULT_SETTLING_COOLDOWN_SECONDS,
+    )
+    args.upload_status_timeout_seconds = _delay_value_or_prompt(
+        parser,
+        "Upload status timeout seconds",
+        args.upload_status_timeout_seconds,
+        DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS,
     )
     args.post_execution_collection_delay_seconds = _delay_value_or_prompt(
         parser,
@@ -1478,6 +1513,7 @@ def _confirm_multi_run_real_operation(
     print(f"Guest Agent: {args.guest_agent_url}")
     print(f"Desktop Worker: {args.desktop_worker_url or '<not configured>'}")
     print(f"Settling cooldown seconds: {args.settling_cooldown_seconds:g}")
+    print(f"Upload status timeout seconds: {args.upload_status_timeout_seconds:g}")
     print(
         "Post-execution collection delay seconds: "
         f"{args.post_execution_collection_delay_seconds:g}"
@@ -1577,6 +1613,12 @@ def _single_run_options_from_args(
         args.settling_cooldown_seconds,
         DEFAULT_SETTLING_COOLDOWN_SECONDS,
     )
+    upload_status_timeout_seconds = _delay_value_or_prompt(
+        parser,
+        "Upload status timeout seconds",
+        args.upload_status_timeout_seconds,
+        DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS,
+    )
     post_execution_collection_delay_seconds = _delay_value_or_prompt(
         parser,
         "Post-execution collection delay seconds",
@@ -1600,6 +1642,7 @@ def _single_run_options_from_args(
         guest_ready_interval_seconds=args.guest_ready_interval_seconds,
         guest_ready_successes=args.guest_ready_successes,
         settling_cooldown_seconds=settling_cooldown_seconds,
+        upload_poll_timeout_seconds=upload_status_timeout_seconds,
         execution_poll_timeout_seconds=args.execution_poll_timeout_seconds,
         execution_poll_interval_seconds=args.execution_poll_interval_seconds,
         post_execution_collection_delay_seconds=(
@@ -1646,6 +1689,7 @@ def _confirm_single_run_real_operation(
         + ("enabled" if options.require_desktop_worker else "disabled")
     )
     print(f"Settling cooldown seconds: {options.settling_cooldown_seconds:g}")
+    print(f"Upload status timeout seconds: {options.upload_poll_timeout_seconds:g}")
     print(
         "Post-execution collection delay seconds: "
         f"{options.post_execution_collection_delay_seconds:g}"

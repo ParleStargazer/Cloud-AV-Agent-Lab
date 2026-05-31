@@ -146,6 +146,7 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
         self.assertFalse(payload["skip_initial_restore"])
         self.assertEqual(payload["environment_reused_from_case_id"], "")
         self.assertEqual(payload["settling_cooldown_seconds"], 15.0)
+        self.assertEqual(payload["upload_status_timeout_seconds"], 30.0)
         self.assertEqual(payload["post_execution_collection_delay_seconds"], 45.0)
         self.assertNotIn("sample_bytes", payload)
         self.assertNotIn("content", payload)
@@ -174,6 +175,9 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
                 )
                 captured["settling_cooldown_seconds"] = getattr(
                     options, "settling_cooldown_seconds"
+                )
+                captured["upload_poll_timeout_seconds"] = getattr(
+                    options, "upload_poll_timeout_seconds"
                 )
                 captured["post_execution_collection_delay_seconds"] = getattr(
                     options, "post_execution_collection_delay_seconds"
@@ -224,6 +228,7 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
             self.assertFalse(captured["defer_final_cleanup"])
             self.assertFalse(captured["skip_initial_restore"])
             self.assertEqual(captured["settling_cooldown_seconds"], 15.0)
+            self.assertEqual(captured["upload_poll_timeout_seconds"], 30.0)
             self.assertEqual(captured["post_execution_collection_delay_seconds"], 45.0)
             self.assertEqual(result.run_id, "real-run-001")
             self.assertEqual(result.case_id, "real-case-001")
