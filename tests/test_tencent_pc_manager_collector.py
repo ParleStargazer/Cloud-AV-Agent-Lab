@@ -13,10 +13,12 @@ from cloud_av_agent_lab.evidence import build_evidence_bundle
 from cloud_av_agent_lab.guest_agent_server.collectors import (
     CollectionWindow,
     get_product_log_collector,
+    get_product_observation_probe,
 )
 from cloud_av_agent_lab.guest_agent_server.collectors.tencent_pc_manager import (
     PRODUCT_ID,
     TencentPcManagerLogCollector,
+    TencentPcManagerObservationProbe,
 )
 
 SAMPLE_MD5 = "bd3f9e29ec9ecafc9b8b2475afb3a9a2"
@@ -239,6 +241,89 @@ class TencentPcManagerCollectorTests(TestCase):
         collector = get_product_log_collector("tencent-pc-manager")
 
         self.assertIsInstance(collector, TencentPcManagerLogCollector)
+
+    def test_registry_can_create_tencent_pc_manager_observation_probe(self) -> None:
+        probe = get_product_observation_probe("tencent-pc-manager")
+
+        self.assertIsInstance(probe, TencentPcManagerObservationProbe)
+
+    def test_probe_reports_strong_quarantine_signal_without_writing_collection(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root, workspace = _make_dirs(Path(tmp))
+            (root / "TAVWfsDB" / "TAVCacheFullEx.db").write_bytes(b"cache")
+            container = root / "Quarantine" / SAMPLE_MD5
+            container.write_bytes(b"x" * 1016)
+            _set_mtime(container, "2026-05-30T00:00:06Z")
+            _write_readiness_baseline(workspace, root, container_present=False)
+
+            result = TencentPcManagerObservationProbe(log_dir=root).probe(
+                workspace,
+                _case_context(workspace),
+                _window(),
+            )
+            summary = json.dumps(result.safe_summary, ensure_ascii=False)
+            collection_metadata_exists = (
+                workspace
+                / "collection"
+                / "tencent-pc-manager"
+                / "metadata"
+                / "quarantine_observation.json"
+            ).exists()
+
+        self.assertEqual(result.probe_state, "strong_signal_observed")
+        self.assertTrue(result.observed)
+        self.assertEqual(result.attribution_level, "strong")
+        self.assertEqual(result.confidence, "high")
+        self.assertEqual(result.evidence_count, 1)
+        self.assertIn("tav_quarantine_container_strong_signal", result.reason_codes)
+        self.assertFalse(collection_metadata_exists)
+        self.assertNotIn(str(root), summary)
+
+    def test_probe_reports_activity_without_case_relevant_container(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root, workspace = _make_dirs(Path(tmp))
+            tav_cache = root / "TAVWfsDB" / "TAVCacheFullEx.db"
+            tav_cache.write_bytes(b"cache-new")
+            _set_mtime(tav_cache, "2026-05-30T00:00:06Z")
+            _write_readiness_baseline(
+                workspace,
+                root,
+                container_present=False,
+                tav_cache_size=1,
+                tav_cache_mtime="2026-05-30T00:00:00Z",
+            )
+
+            result = TencentPcManagerObservationProbe(log_dir=root).probe(
+                workspace,
+                _case_context(workspace),
+                _window(),
+            )
+
+        self.assertEqual(result.probe_state, "activity_observed")
+        self.assertTrue(result.observed)
+        self.assertEqual(result.attribution_level, "weak")
+        self.assertIn("tav_cache_activity_observed", result.reason_codes)
+
+    def test_probe_missing_md5_is_structured_probe_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root, workspace = _make_dirs(Path(tmp))
+            context = _case_context(workspace)
+            context["sample_md5"] = ""
+
+            result = TencentPcManagerObservationProbe(log_dir=root).probe(
+                workspace,
+                context,
+                _window(),
+            )
+
+        self.assertEqual(result.probe_state, "probe_failed")
+        self.assertFalse(result.observed)
+        self.assertIn(
+            "sample_md5_missing_for_tav_quarantine_probe",
+            result.reason_codes,
+        )
 
     def test_evidence_bundle_excludes_raw_refs_and_redacts_metadata_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,7 +5,10 @@ from collections.abc import Callable
 from .base import ProductLogCollector
 from .huorong import HuorongLogCollector
 from .qihoo_360 import Qihoo360LogCollector
-from .tencent_pc_manager import TencentPcManagerLogCollector
+from .tencent_pc_manager import (
+    TencentPcManagerLogCollector,
+    TencentPcManagerObservationProbe,
+)
 from .windows_defender import WindowsDefenderLogCollector
 from .probe import ProductObservationProbe
 
@@ -18,7 +21,9 @@ SUPPORTED_COLLECTORS: dict[str, CollectorFactory] = {
     "tencent-pc-manager": TencentPcManagerLogCollector,
     "windows-defender": WindowsDefenderLogCollector,
 }
-SUPPORTED_OBSERVATION_PROBES: dict[str, ProbeFactory] = {}
+SUPPORTED_OBSERVATION_PROBES: dict[str, ProbeFactory] = {
+    "tencent-pc-manager": TencentPcManagerObservationProbe,
+}
 
 
 def get_product_log_collector(product_id: str) -> ProductLogCollector | None:

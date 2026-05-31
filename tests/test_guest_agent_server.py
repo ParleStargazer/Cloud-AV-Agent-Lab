@@ -1732,18 +1732,18 @@ class GuestAgentServerTests(unittest.TestCase):
         prepare_response = self.client.post(
             "/prepare-case",
             headers=self._headers(),
-            json=_prepare_payload(),
+            json=_prepare_huorong_payload(),
         )
         workspace = Path(prepare_response.json()["data"]["workspace"])
 
         response = self.client.post(
-            "/cases/case-001__tencent-pc-manager/collection/tencent-pc-manager/probe",
+            "/cases/case-001__huorong/collection/huorong/probe",
             headers=self._headers(),
         )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()["data"]
-        self.assertEqual(data["product_id"], "tencent-pc-manager")
+        self.assertEqual(data["product_id"], "huorong")
         self.assertEqual(data["probe_state"], "unsupported")
         self.assertFalse(data["observed"])
         self.assertFalse((workspace / "case_collection.json").exists())

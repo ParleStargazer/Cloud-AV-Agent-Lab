@@ -22,6 +22,7 @@ from cloud_av_agent_lab.guest_agent_server.collectors.qihoo_360 import (
 )
 from cloud_av_agent_lab.guest_agent_server.collectors.tencent_pc_manager import (
     TencentPcManagerLogCollector,
+    TencentPcManagerObservationProbe,
 )
 from cloud_av_agent_lab.guest_agent_server.collectors.windows_defender import (
     WindowsDefenderLogCollector,
@@ -87,9 +88,17 @@ class CollectorRegistryTests(TestCase):
     def test_registry_returns_none_for_unknown_product(self) -> None:
         self.assertIsNone(get_product_log_collector("unknown-product"))
 
-    def test_probe_registry_defaults_to_no_probe(self) -> None:
+    def test_probe_registry_returns_tencent_pc_manager_probe(self) -> None:
+        probe = get_product_observation_probe("tencent-pc-manager")
+
+        self.assertIsInstance(probe, TencentPcManagerObservationProbe)
+        self.assertEqual(
+            supported_product_observation_probes(),
+            ("tencent-pc-manager",),
+        )
+
+    def test_probe_registry_returns_none_for_unknown_probe(self) -> None:
         self.assertIsNone(get_product_observation_probe("huorong"))
-        self.assertEqual(supported_product_observation_probes(), ())
 
     def test_workspace_collector_error_lists_registry_products(self) -> None:
         with self.assertRaises(WorkspaceError) as error:

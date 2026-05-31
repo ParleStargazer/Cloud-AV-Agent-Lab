@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .collector import TencentPcManagerLogCollector
+from .probe import TencentPcManagerObservationProbe
 from .quarantine import (
     assess_container_size_delta,
     normalize_tav_md5,
@@ -40,6 +41,7 @@ __all__ = [
     "TavQuarantineObservation",
     "TavSizeDeltaAssessment",
     "TencentPcManagerLogCollector",
+    "TencentPcManagerObservationProbe",
     "assess_container_size_delta",
     "normalize_tav_md5",
     "observe_tav_quarantine",
