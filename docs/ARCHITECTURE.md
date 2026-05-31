@@ -211,17 +211,28 @@ workflow: stop the test instance, clone or snapshot the disk, mount it read-only
 in a clean forensic environment, run a trusted collector/redactor there, and
 export redacted text artifacts from that environment.
 
-## Multi-Run Direction
+## Multi-Run Orchestration
 
-The next orchestration layer should be `multi-run`. It should schedule a matrix
-of samples, products, and VM profiles by invoking the existing `single-run`
-case primitive instead of reimplementing cloud lifecycle or Guest Agent logic.
-Runs sharing the same Lighthouse `instance_id` must remain serial because every
-case restores that instance to a product baseline snapshot. Future parallelism
-is safe only across distinct instance ids. Aggregate reports should read
-`run_state.json`, `case_summary.json`, and evidence metadata from per-case run
-directories; they should not read uploaded sample bodies, raw product logs,
-tokens, cloud credentials, or real cloud configs. See `docs/MULTI_RUN_PLAN.md`.
+`multi-run` is now the batch orchestration layer above `single-run`. The first
+MVP plans a selected sample set, writes an immutable batch plan, runs static
+preflight checks, schedules cases serially through the real `single-run`
+primitive, records append-only events, writes resumable batch state, and
+generates aggregate JSON / Markdown summaries.
+
+Runs sharing the same Lighthouse `instance_id` remain serial because every case
+must start from a product baseline snapshot. Future parallelism is safe only
+across distinct instance ids. The aggregate layer reads `run_state.json`,
+`case_summary.json`, and evidence metadata from per-case run directories; it
+does not read uploaded sample bodies, raw product logs, tokens, cloud
+credentials, or real cloud configs. Cloud platform sample indexing writes an
+indexed mirror under the batch directory for stable digest-checked `single-run`
+inputs, but that mirror is not evidence and is excluded from evidence bundles.
+
+The next optimization phase is storage and runtime reduction: indexed sample
+burn-after-case, timing aggregation, and opt-in deferred cleanup. Deferred
+cleanup must still preserve the invariant that every case starts with an
+initial snapshot restore, and the batch end / failure path must still perform
+final cleanup or emergency stop. See `docs/MULTI_RUN_PLAN.md`.
 
 `VmProfile` represents a recoverable test environment profile, not necessarily a unique cloud machine. Multiple profiles may share the same Lighthouse `instance_id` when each profile points to a different `baseline_snapshot` and `product_id`. This single-instance, multi-snapshot layout is supported as long as orchestration remains serial or future schedulers lock by `instance_id`.
 

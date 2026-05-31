@@ -373,24 +373,30 @@ zip、真实云配置、token/credential/key 命名文件、symlink/junction、�
 
 Manifest 中的 `redaction_policy` 是结构化自描述对象：当前默认开启文本脱敏、关闭二进制脱敏、保留 hash 关联字段，并记录 bundle 文件数、单文件大小、总未压缩大小和文本脱敏大小上限。产品语义级脱敏由 collector 声明，exporter 只做全局兜底脱敏和打包安全裁决；这些值先保持代码常量，不开放绕过 redaction 或包含 raw binary 的配置开关。
 
-## Multi-Run 下一步计划
+## Multi-Run 批量编排
 
-四个安全产品的 MVP 接入和 smoke 封板完成后，下一阶段主线转为
-`multi-run`。`multi-run` 不应重写一套执行流程，而应把现有
+`multi-run` 第一版 MVP 已完成。它不重写执行流程，而是把现有
 `single-run` 作为单 case 原语进行调度：
 
-- 从 batch plan 读取样本、产品和 VM profile 矩阵；
-- 复用 single-run 的实例锁、快照回滚、Guest Agent ready、Desktop Worker
-  gate、readiness、上传、受控触发、collection、summary 和 evidence 导出；
-- 同一个 Lighthouse `instance_id` 下的不同产品快照必须串行执行；
-- 只有不同 `instance_id` 才考虑并行；
-- 输出 `multi_run_state.json`、`aggregate_summary.json` 和
+- 交互式引导或参数化收集 product、instance、snapshot、region、Guest Agent、
+  Desktop Worker 和样本输入；
+- 云端平台机可通过 `--platform-sample-dir` 扫描受控样本目录，生成
+  `sample_manifest.jsonl` 和 batch-local indexed mirror；
+- 开发机继续使用预生成 `--manifest`，不能扫描真实样本目录；
+- 生成 `batch_plan.json`、`multi_run.generated.toml`、`preflight_report.json`、
+  `multi_run_state.json`、`multi_run_events.jsonl`、`aggregate_summary.json` 和
   `aggregate_summary.md`；
+- 按同一 Lighthouse `instance_id` 串行调度，未来只允许不同 instance id
+  之间并行；
 - 聚合层只读取每个 run 的 `run_state.json`、`case_summary.json` 和 evidence
   metadata，不读取样本本体、raw product logs、token、云密钥或
   `configs/real.toml`。
 
-详细设计草案见 `docs/MULTI_RUN_PLAN.md`。
+`runs/batch_20260530-235629_tencent-pc-manager` 的云端批量 smoke 已验证：
+94 个样本全部完成，readiness / cleanup / summary / evidence 均闭环，0 个
+environment failure，最终 `completed_with_warnings`。下一阶段优化重点是
+timing aggregation、indexed 样本“测后即焚”和 opt-in deferred cleanup。详细设计见
+`docs/MULTI_RUN_PLAN.md` 和 `reference-doc/current/multi-run/performance-optimization-plan.md`。
 
 ## 结构拆分记录
 

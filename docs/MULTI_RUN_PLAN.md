@@ -1,149 +1,198 @@
-# Multi-Run Development Plan
+# Multi-Run Orchestration
 
-`multi-run` is the next orchestration layer after the current `single-run`
-MVP. It should schedule many single-case runs without duplicating the core
-cloud lifecycle, Guest Agent, Desktop Worker, collection, evaluation, or
-evidence export logic.
+`multi-run` is the batch orchestration layer above `single-run`. The first MVP
+is complete: it plans a serial batch, validates the selected sample manifest,
+runs each case through the existing `single-run` primitive, writes resumable
+state and event logs, and generates aggregate reports.
 
-## Goals
+## Current Scope
 
-- Run a matrix of samples, products, and VM profiles with minimal user input.
-- Reuse `single-run` as the only case execution primitive.
-- Keep one `instance_id` serialized through the existing lock model.
-- Allow parallelism only across different Lighthouse instances.
-- Produce one batch state file and a compact aggregate report.
-- Keep every per-case `run_state.json`, summary, and evidence bundle under its
-  own run directory.
-- Preserve existing safety boundaries: no local sample execution, no arbitrary
-  guest command, no `configs/real.toml` in artifacts, no raw product logs or
-  uploaded samples in default evidence bundles.
+- Serial execution for one resolved Lighthouse `instance_id`.
+- Future parallelism only across different instance ids.
+- `single-run` remains the only case execution primitive.
+- `multi-run` does not reimplement cloud lifecycle, Guest Agent calls, Desktop
+  Worker execution, collection, evaluation, evidence export, or cleanup.
+- Development hosts should use a pre-generated `--manifest`.
+- Cloud platform hosts may index a controlled sample directory with
+  `--platform-sample-dir`.
+- Evidence bundles continue to exclude uploaded sample bytes, raw product logs,
+  tokens, cloud credentials, and `configs/real.toml`.
 
-## Proposed CLI Shape
+## CLI
 
-```powershell
-python -m cloud_av_agent_lab multi-run --plan runs\plans\batch.toml
-```
-
-Current MVP CLI also supports an interactive guided mode:
+Interactive guided mode:
 
 ```powershell
 python -m cloud_av_agent_lab multi-run
 ```
 
-When required fields are omitted in an interactive terminal, the CLI prompts for
-product, Lighthouse instance, baseline snapshot, region, Guest Agent URL,
-Desktop Worker URL, and the cloud platform sample directory. The default sample
-directory is the project-root `runs\raw_sample`, even if the command is launched
-from another working directory, and the default selection is `--all`.
-Workspace placeholder files such as `.gitkeep`, `.gitignore`, `README.md`, and
-`README.txt` are skipped by the sample indexer.
+The prompt asks for product, Lighthouse instance id, baseline snapshot id,
+region, Guest Agent URL, Desktop Worker URL, and the cloud platform sample
+directory. The default sample directory is the project-root `runs\raw_sample`
+even if the command is launched from another working directory. The default
+batch root is the project-root `runs`.
 
-On the cloud platform host, sample directory indexing can be written either as:
+Cloud platform sample indexing can be invoked with either form:
 
 ```powershell
 python -m cloud_av_agent_lab multi-run --sample-dir runs\raw_sample --platform-sample-dir
-```
-
-or with the shorthand:
-
-```powershell
 python -m cloud_av_agent_lab multi-run --platform-sample-dir runs\raw_sample
 ```
 
-Development hosts should continue to use `--manifest` and must not scan a local
-sample directory. Real execution requires an interactive confirmation unless
-`--dry-run`, `--plan-only`, or explicit `--yes` is used.
+`--sample-dir` without `--platform-sample-dir` is rejected so a development host
+does not accidentally scan or touch a real sample directory. Real execution
+requires an interactive confirmation unless `--dry-run`, `--plan-only`, or
+`--yes` is supplied.
 
-The first version can also accept a generated CSV/JSON plan, but TOML should
-stay close to the existing lab profile model:
+## Batch Artifacts
 
-```toml
-[[targets]]
-vm_id = "win10-huorong"
-product = "huorong"
-
-[[targets]]
-vm_id = "win10-tencent-manager"
-product = "tencent-pc-manager"
-
-[[samples]]
-name = "eicar"
-path = "C:\\Temp\\eicar.txt"
-
-[run]
-dry_run = false
-max_parallel_instances = 1
-continue_on_case_failure = true
-```
-
-## Artifacts
-
-`multi-run` should create a batch directory:
+`multi-run` creates one batch directory:
 
 ```text
 runs/
-  batch_20260530-210000/
+  batch_20260530-235629_tencent-pc-manager/
+    batch_plan.json
+    multi_run.generated.toml
+    sample_manifest.jsonl
+    sample_manifest.sha256
+    preflight_report.json
     multi_run_state.json
+    multi_run_events.jsonl
     aggregate_summary.json
     aggregate_summary.md
+    sample_index/
+      indexed/
     cases/
-      20260530-210101_eicar__huorong/
-      20260530-211305_eicar__tencent-pc-manager/
+      0001_<sha16>/
+        <single-run-id>/
+          run_state.json
+          case_summary.json
+          case_summary.md
+          case_evidence_<case-id>.zip
 ```
 
-`multi_run_state.json` should record:
+The aggregate layer reads only per-case metadata:
 
-- batch id and start/end timestamps;
-- selected samples, products, VM profiles, and resolved instance ids;
-- per-case run id, case id, final status, verdict, confidence, cleanup status,
-  evidence path, and errors;
-- scheduler decisions such as skipped cases, retries, stale lock handling, and
-  instance-level serialization.
+- `run_state.json`
+- `case_summary.json`
+- evidence bundle metadata/path
 
-## Scheduler Rules
+It does not read uploaded samples, raw product logs, `configs/real.toml`, or
+cloud credentials.
 
-- Group planned cases by resolved `instance_id`.
-- Run cases for the same `instance_id` strictly serially.
-- Permit future parallel execution only when instance ids differ.
-- Never bypass `single-run` confirmation and lock semantics for real cloud
-  writes.
-- Prefer resumable execution: if a case run directory already contains a final
-  `run_state.json`, record it as reused or skipped instead of rerunning unless
-  an explicit rerun option is provided.
+## Sample Indexing
+
+On a cloud platform host, the indexer scans the selected sample directory,
+hashes regular files by raw bytes, groups duplicates by SHA-256, and writes an
+immutable `sample_manifest.jsonl`. It also creates an indexed mirror:
+
+```text
+sample_index/indexed/0001_<sha16>.exe
+```
+
+The real runner currently requires non-dry-run `sample_ref` values to point to
+this indexed mirror and verifies SHA-256, MD5, and size before invoking
+`single-run`. Placeholder and generated files such as `.gitkeep`, `.gitignore`,
+README files, nested `runs/`, `sample_index/`, and `indexed/` directories are
+ignored during indexing.
+
+This indexed mirror is a batch input artifact, not evidence. It must not be
+placed into evidence bundles.
+
+## Preflight
+
+Before scheduling cases, `multi-run` writes `preflight_report.json`. The default
+static preflight validates:
+
+- batch directory writability;
+- manifest digest consistency;
+- selected index availability;
+- runner callable;
+- product profile availability;
+- instance id, snapshot id, region, Guest Agent URL, and Desktop Worker URL
+  shape;
+- sibling running/stopping batch conflicts for the same instance;
+- evidence output writability;
+- generated config contains no sensitive-looking keys;
+- batch plan SHA-256 presence.
+
+Network reachability remains skipped in static preflight; real Guest Agent and
+Desktop Worker health are still handled by `single-run`.
+
+## State, Events, Resume, And Rerun
+
+`multi_run_state.json` records batch metadata, selected indexes, per-case status,
+verdict, confidence, cleanup status, summary/evidence status, paths, warnings,
+and stop conditions. `multi_run_events.jsonl` records append-only events with a
+monotonic `seq`.
+
+Supported execution modes:
+
+- normal run;
+- resume;
+- rerun failed case failures;
+- force rerun.
+
+Environment failures, cleanup restore failures, unsafe-to-continue states, and
+manual-intervention states stop the batch and are not automatically rerun as
+ordinary case failures.
 
 ## Aggregate Report
 
-The aggregate report should read only per-run summaries and states:
+`aggregate_summary.json` and `aggregate_summary.md` summarize:
 
-- `case_summary.json`
-- `run_state.json`
-- evidence bundle metadata/path
+- batch id and product;
+- final status;
+- selected samples and evaluable cases;
+- case failure and environment failure counts;
+- verdict breakdown;
+- readiness / cleanup / summary / evidence status breakdown;
+- observed detection rate when results are real.
 
-It should not read uploaded samples, raw product logs, `configs/real.toml`, or
-cloud credentials. Initial columns:
+Dry-run or fake-run results must be marked as simulated and must not be confused
+with real detection rates.
 
-- sample name / sample id;
-- product id;
-- vm id;
-- verdict / confidence;
-- delivery state;
-- execution state;
-- collection state;
-- readiness state;
-- cleanup status;
-- evidence bundle path;
-- warnings/errors.
+## Verified Smoke
 
-## Implementation Phases
+The first real cloud batch smoke was analyzed from:
 
-1. Define a batch plan schema and parser with validation tests.
-2. Add `MultiRunState` read/write helpers.
-3. Add a serial scheduler that calls the existing single-run API for each case.
-4. Add aggregate JSON and Markdown report generation.
-5. Add resume/skip behavior for completed run directories.
-6. Add optional parallel scheduling across distinct `instance_id` groups.
-7. Add manual validation flow for one sample across the four currently
-   supported products.
+```text
+runs/batch_20260530-235629_tencent-pc-manager
+```
 
-The first implementation should stay conservative and single-threaded by
-default. Parallelism is an optimization, not a prerequisite for the batch MVP.
+Result:
+
+- `product_id = tencent-pc-manager`
+- 94 selected samples
+- final status `completed_with_warnings`
+- 94/94 cases completed
+- 94/94 readiness ok
+- 94/94 cleanup restored
+- 94/94 summary collected
+- 94/94 evidence exported
+- 0 environment failures
+- 0 case failures
+- verdicts: 68 `detected_or_blocked`, 26 `inconclusive`
+- evidence bundles contained redacted metadata only and excluded indexed sample
+  bytes, raw TAV artifacts, tokens, cloud secrets, and `configs/real.toml`.
+
+## Next Optimization Work
+
+The next stage is performance and storage optimization, not another feature
+rewrite.
+
+Planned work:
+
+1. Add timing aggregation so batches report where time is spent.
+2. Add an opt-in indexed sample burn-after-case mode.
+3. Add an opt-in deferred cleanup strategy:
+   - every case still starts with an initial snapshot restore;
+   - middle cases may skip the end cleanup restore;
+   - the next case's initial restore cleans the previous case state;
+   - the last case and any batch failure path must still perform final cleanup;
+   - environment failures and unsafe states must stop the batch.
+4. Keep these optimizations off by default until a small real smoke confirms the
+   safety and recovery behavior.
+
+Detailed planning lives in
+`reference-doc/current/multi-run/performance-optimization-plan.md`.
