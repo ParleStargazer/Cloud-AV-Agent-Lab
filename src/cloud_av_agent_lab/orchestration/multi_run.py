@@ -2374,6 +2374,45 @@ def execute_multi_run_batch(
             warnings=tuple(warnings),
         )
         write_multi_run_state(state_path, state)
+        burn_state, burn_warning = _burn_indexed_sample_after_persisted_result(
+            root,
+            request=request,
+            result=result,
+        )
+        if burn_state is not None:
+            case_warnings = case_state.warnings
+            if burn_warning:
+                warnings.append(burn_warning)
+                case_warnings = (*case_warnings, burn_warning)
+            case_state = replace(
+                case_state,
+                indexed_sample_state=burn_state,
+                warnings=case_warnings,
+            )
+            cases_by_index[index] = case_state
+            state = replace(
+                state,
+                cases=_cases_in_selected_order(cases_by_index, selected_indexes),
+                warnings=tuple(warnings),
+            )
+            write_multi_run_state(state_path, state)
+            append_next_multi_run_event(
+                event_log_path,
+                batch_id=plan.batch_id,
+                event_type="indexed_sample_burned"
+                if burn_state == "burned"
+                else "indexed_sample_burn_failed",
+                sample_index=index,
+                sample_id=entry.sample_id,
+                run_id=result.run_id,
+                case_id=result.case_id,
+                case_status=result.case_status,
+                data={
+                    "indexed_sample_state": burn_state,
+                    "sample_ref": _relative_batch_path(root, request.sample_ref),
+                    "warning": burn_warning,
+                },
+            )
 
         stop_state = _stop_state_for_result(result, plan)
         if stop_state is not None:
@@ -3216,6 +3255,64 @@ def _stop_state_for_result(
     ):
         return "stopped_for_case_failure"
     return None
+
+
+def _burn_indexed_sample_after_persisted_result(
+    root: Path,
+    *,
+    request: SingleRunRequest,
+    result: SingleRunRunnerResult,
+) -> tuple[IndexedSampleState | None, str]:
+    if not _is_indexed_sample_burn_eligible(result):
+        return None, ""
+
+    sample_path = Path(request.sample_ref)
+    indexed_dir = root / "sample_index" / "indexed"
+    if not _is_path_relative_to(sample_path, indexed_dir):
+        return None, ""
+    if not sample_path.is_file():
+        return (
+            "burn_failed",
+            "indexed sample mirror was not found when burn-after-use ran",
+        )
+
+    try:
+        sample_path.unlink()
+        sample_path.write_bytes(b"")
+    except OSError as exc:
+        return (
+            "burn_failed",
+            _redact_multi_run_message(
+                f"failed to burn indexed sample mirror: {type(exc).__name__}: {exc}"
+            ),
+        )
+
+    return "burned", ""
+
+
+def _is_indexed_sample_burn_eligible(result: SingleRunRunnerResult) -> bool:
+    terminal_case = result.case_status in {
+        "completed",
+        "failed",
+        "skipped",
+        "stopped_environment_failure",
+    }
+    return (
+        result.indexed_sample_state == "available"
+        and terminal_case
+        and result.summary_status == "collected"
+        and result.evidence_status == "exported"
+        and not result.unsafe_to_continue
+        and not result.manual_intervention_required
+    )
+
+
+def _is_path_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _completed_batch_state(state: MultiRunState) -> BatchState:

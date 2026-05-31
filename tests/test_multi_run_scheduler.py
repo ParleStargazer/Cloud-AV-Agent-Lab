@@ -10,6 +10,7 @@ from cloud_av_agent_lab.orchestration.multi_run import (
     MultiRunPreflightCheck,
     MultiRunStateError,
     SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION,
+    build_sample_manifest_from_directory,
     create_multi_run_batch_plan,
     execute_multi_run_batch,
     load_existing_multi_run_batch,
@@ -151,6 +152,57 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertEqual(checks["manifest_digest"]["status"], "passed")
             self.assertEqual(checks["runner_callable"]["status"], "passed")
             self.assertEqual(checks["guest_agent_reachability"]["status"], "skipped")
+
+    def test_scheduler_burns_indexed_sample_after_persisted_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_dir = tmp_path / "raw_sample"
+            raw_dir.mkdir()
+            (raw_dir / "sample-a.exe").write_bytes(b"harmless-placeholder")
+            batch_root = tmp_path / "batches"
+            batch_id = "burn-test"
+            index_artifacts = build_sample_manifest_from_directory(
+                raw_dir,
+                batch_root / batch_id / "sample_index",
+            )
+            manifest = load_sample_manifest(index_artifacts.manifest_path)
+            selection = parse_sample_selection(manifest.indexes, indexes_text="1")
+            artifacts = create_multi_run_batch_plan(
+                batch_root=batch_root,
+                batch_id=batch_id,
+                product_id="huorong",
+                instance_id="lhins-test",
+                snapshot_id="lhsnap-test",
+                region="ap-singapore",
+                guest_agent_url="http://127.0.0.1:8080",
+                desktop_worker_url="http://127.0.0.1:8001",
+                manifest=manifest,
+                selection=selection,
+                dry_run=True,
+                failure_policy="continue",
+            )
+            indexed_path = Path(manifest.entries[0].sample_ref)
+            self.assertGreater(indexed_path.stat().st_size, 0)
+
+            execute_multi_run_batch(
+                artifacts.batch_dir,
+                runner=FakeSingleRunRunner(),
+            )
+
+            state = json.loads(
+                (artifacts.batch_dir / "multi_run_state.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            events = read_multi_run_events(
+                artifacts.batch_dir / "multi_run_events.jsonl"
+            )
+            self.assertEqual(state["cases"][0]["indexed_sample_state"], "burned")
+            self.assertEqual(indexed_path.stat().st_size, 0)
+            self.assertIn(
+                "indexed_sample_burned",
+                [event["type"] for event in events],
+            )
 
     def test_preflight_failure_stops_before_scheduler(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
