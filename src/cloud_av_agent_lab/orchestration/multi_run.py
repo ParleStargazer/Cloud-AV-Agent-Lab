@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import stat
+import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -1356,6 +1357,7 @@ class CaseState:
     run_state_path: str = ""
     case_summary_path: str = ""
     duration_seconds: float | None = None
+    timing: dict[str, Any] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -1383,6 +1385,7 @@ class CaseState:
             "run_state_path": self.run_state_path,
             "case_summary_path": self.case_summary_path,
             "duration_seconds": self.duration_seconds,
+            "timing": _jsonable(self.timing),
             "warnings": list(self.warnings),
         }
 
@@ -1538,6 +1541,7 @@ class SingleRunRunnerResult:
     run_state_path: str = ""
     case_summary_path: str = ""
     duration_seconds: float | None = None
+    timing: dict[str, Any] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
     unsafe_to_continue: bool = False
     manual_intervention_required: bool = False
@@ -1563,6 +1567,7 @@ class SingleRunRunnerResult:
             "run_state_path": self.run_state_path,
             "case_summary_path": self.case_summary_path,
             "duration_seconds": self.duration_seconds,
+            "timing": _jsonable(self.timing),
             "warnings": list(self.warnings),
             "unsafe_to_continue": self.unsafe_to_continue,
             "manual_intervention_required": self.manual_intervention_required,
@@ -1593,6 +1598,7 @@ class SingleRunRunnerResult:
             run_state_path=self.run_state_path,
             case_summary_path=self.case_summary_path,
             duration_seconds=self.duration_seconds,
+            timing=self.timing,
             warnings=self.warnings,
         )
 
@@ -1674,6 +1680,22 @@ class RealSingleRunRunner:
             )
 
 
+def _runner_result_with_scheduler_timing(
+    result: SingleRunRunnerResult,
+    *,
+    elapsed_seconds: float,
+) -> SingleRunRunnerResult:
+    scheduler_duration = _round_duration_seconds(elapsed_seconds)
+    timing = dict(result.timing)
+    timing.setdefault("schema_version", "multi-run-case-timing.v1")
+    timing["scheduler_duration_seconds"] = scheduler_duration
+    duration_seconds = result.duration_seconds
+    if duration_seconds is None:
+        duration_seconds = scheduler_duration
+    timing.setdefault("total_seconds", _round_duration_seconds(duration_seconds))
+    return replace(result, duration_seconds=duration_seconds, timing=timing)
+
+
 def fake_single_run_result(
     scenario: FakeSingleRunScenario,
     request: SingleRunRequest,
@@ -1689,6 +1711,18 @@ def fake_single_run_result(
         "case_summary_path": summary_path,
         "evidence_bundle_path": evidence_path,
         "duration_seconds": 1.0,
+        "timing": {
+            "schema_version": "multi-run-case-timing.v1",
+            "total_seconds": 1.0,
+            "stages": {"fake_runner": 1.0},
+            "steps": [
+                {
+                    "name": "fake_runner",
+                    "status": "ok",
+                    "duration_seconds": 1.0,
+                }
+            ],
+        },
         "result_source": "fake_runner",
         "simulated": True,
     }
@@ -1826,6 +1860,7 @@ def _single_run_result_to_runner_result(
     run_state_payload = _read_optional_json_mapping(
         Path(str(getattr(result, "run_state_path", "")))
     )
+    timing = _single_run_timing_from_state(run_state_payload)
     warnings = _single_run_warnings(run_state_payload)
     errors = _single_run_errors(run_state_payload)
     cleanup_status = _normalize_cleanup_status(
@@ -1833,6 +1868,7 @@ def _single_run_result_to_runner_result(
     )
     final_status = str(getattr(result, "final_status", "unknown"))
     failure_kind = _failure_kind_from_single_run(final_status, cleanup_status)
+    duration_seconds = _optional_duration_seconds(timing.get("total_seconds"))
     return SingleRunRunnerResult(
         run_id=str(getattr(result, "run_id", request.run_id)),
         case_id=str(getattr(result, "case_id", request.case_id)),
@@ -1858,6 +1894,8 @@ def _single_run_result_to_runner_result(
         case_summary_path=_single_run_result_path(
             request, getattr(result, "summary_path", "")
         ),
+        duration_seconds=duration_seconds,
+        timing=timing,
         warnings=warnings,
         unsafe_to_continue=cleanup_status == "restore_failed",
         manual_intervention_required=cleanup_status == "restore_failed",
@@ -1890,6 +1928,89 @@ def _read_optional_json_mapping(path: Path) -> Mapping[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, Mapping) else {}
+
+
+def _single_run_timing_from_state(payload: Mapping[str, Any]) -> dict[str, Any]:
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return {}
+
+    step_timings: list[dict[str, Any]] = []
+    stage_totals: dict[str, float] = {}
+    for item in steps:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        duration = _duration_between_utc_strings(
+            str(item.get("started_at_utc", "")),
+            str(item.get("finished_at_utc", "")),
+        )
+        if duration is None:
+            continue
+        rounded_duration = _round_duration_seconds(duration)
+        status = str(item.get("status", ""))
+        step_timings.append(
+            {
+                "name": name,
+                "status": status,
+                "duration_seconds": rounded_duration,
+            }
+        )
+        stage_totals[name] = stage_totals.get(name, 0.0) + duration
+
+    total = _duration_between_utc_strings(
+        str(payload.get("created_at_utc", "")),
+        str(payload.get("updated_at_utc", "")),
+    )
+    if total is None and step_timings:
+        total = sum(float(item["duration_seconds"]) for item in step_timings)
+    if total is None:
+        return {}
+
+    return {
+        "schema_version": "multi-run-case-timing.v1",
+        "total_seconds": _round_duration_seconds(total),
+        "stages": {
+            name: _round_duration_seconds(duration)
+            for name, duration in sorted(stage_totals.items())
+        },
+        "steps": step_timings,
+    }
+
+
+def _duration_between_utc_strings(started_at: str, finished_at: str) -> float | None:
+    start = _parse_utc_datetime(started_at)
+    finish = _parse_utc_datetime(finished_at)
+    if start is None or finish is None:
+        return None
+    duration = (finish - start).total_seconds()
+    if duration < 0:
+        return None
+    return duration
+
+
+def _parse_utc_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _optional_duration_seconds(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _round_duration_seconds(value: float) -> float:
+    return round(max(0.0, value), 6)
 
 
 def _single_run_warnings(payload: Mapping[str, Any]) -> tuple[str, ...]:
@@ -2179,7 +2300,12 @@ def execute_multi_run_batch(
             run_id=request.run_id,
             case_id=request.case_id,
         )
+        runner_started = time.monotonic()
         result = active_runner.run(request)
+        result = _runner_result_with_scheduler_timing(
+            result,
+            elapsed_seconds=time.monotonic() - runner_started,
+        )
         failure_kind = classify_runner_result(result)
         case_state = result.to_case_state(request)
         cases_by_index[index] = case_state
@@ -3092,6 +3218,8 @@ def _aggregate_case_payload(root: Path, case: CaseState) -> dict[str, Any]:
         "result_source": case.result_source,
         "simulated": case.simulated,
         "resume_eligible": case.resume_eligible,
+        "duration_seconds": case.duration_seconds,
+        "timing": _jsonable(case.timing),
         "error_summary": case.error_summary,
         "warnings": list(case.warnings),
         "paths": {
@@ -3275,8 +3403,15 @@ def _case_state_from_payload(
         run_state_path=str(payload.get("run_state_path", "")),
         case_summary_path=str(payload.get("case_summary_path", "")),
         duration_seconds=_optional_float(payload.get("duration_seconds"), state_path),
+        timing=_state_timing_payload(payload.get("timing")),
         warnings=tuple(str(item) for item in payload.get("warnings", [])),
     )
+
+
+def _state_timing_payload(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return dict(value)
 
 
 def _state_str(payload: Mapping[str, Any], field_name: str, path: Path) -> str:

@@ -37,6 +37,12 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             )
             self.assertTrue(state["cases"][0]["simulated"])
             self.assertEqual(state["cases"][0]["result_source"], "fake_runner")
+            self.assertEqual(state["cases"][0]["duration_seconds"], 1.0)
+            self.assertEqual(state["cases"][0]["timing"]["total_seconds"], 1.0)
+            self.assertIn(
+                "scheduler_duration_seconds",
+                state["cases"][0]["timing"],
+            )
             self.assertFalse(state["cases"][0]["resume_eligible"])
 
     def test_case_failure_default_policy_continues(self) -> None:
@@ -244,6 +250,8 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertEqual(summary["verdict_breakdown"]["detected_or_blocked"], 2)
             self.assertEqual(summary["verdict_breakdown"]["not_evaluable"], 1)
             self.assertEqual(summary["readiness_breakdown"]["ok"], 2)
+            self.assertEqual(summary["cases"][0]["duration_seconds"], 1.0)
+            self.assertEqual(summary["cases"][0]["timing"]["total_seconds"], 1.0)
             self.assertEqual(summary["case_errors"][0]["failure_kind"], "case_failure")
             self.assertEqual(
                 summary["cases"][0]["paths"]["evidence_bundle"],
