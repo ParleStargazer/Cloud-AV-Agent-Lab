@@ -2650,6 +2650,11 @@ def build_multi_run_aggregate_summary(
             else "observed_detection_rate"
         ),
     }
+    fastmode_metrics = _build_fastmode_metrics(state, cases)
+    if state.fastmode_enabled:
+        detection_rate["rate_kind"] = "fastmode_observed_detection_rate"
+        detection_rate["experimental"] = True
+        detection_rate["baseline_comparable"] = False
     return {
         "schema_version": MULTI_RUN_AGGREGATE_SUMMARY_SCHEMA_VERSION,
         "batch_id": state.batch_id,
@@ -2663,6 +2668,7 @@ def build_multi_run_aggregate_summary(
         "batch_cleanup_status": state.batch_cleanup_status,
         "emergency_poweroff_status": state.emergency_poweroff_status,
         "fastmode_enabled": state.fastmode_enabled,
+        "fastmode": fastmode_metrics,
         "manifest_sha256": state.manifest_sha256,
         "batch_plan_sha256": state.batch_plan_sha256,
         "selected_indexes": list(state.selected_indexes),
@@ -2695,6 +2701,7 @@ def build_multi_run_aggregate_summary(
 def render_multi_run_aggregate_markdown(summary: Mapping[str, Any]) -> str:
     denominator = _mapping_or_empty(summary.get("denominator"))
     detection_rate = _mapping_or_empty(summary.get("detection_rate"))
+    fastmode = _mapping_or_empty(summary.get("fastmode"))
     timing = _mapping_or_empty(summary.get("timing"))
     stages = _mapping_or_empty(timing.get("stages"))
     case_errors = summary.get("case_errors")
@@ -2719,9 +2726,21 @@ def render_multi_run_aggregate_markdown(summary: Mapping[str, Any]) -> str:
         ),
         f"- Case errors: {error_count}",
         "",
-        "## Verdict Breakdown",
-        "",
     ]
+    if summary.get("fastmode_enabled", False):
+        lines.extend(
+            [
+                "## Fastmode",
+                "",
+                "- Mode: experimental; results are not comparable with clean snapshot baseline runs.",
+                f"- Eligible cases: {fastmode.get('eligible_cases', 0)}",
+                f"- Environment reuse cases: {fastmode.get('used_cases', 0)}",
+                f"- Deferred cleanup cases: {fastmode.get('deferred_cleanup_cases', 0)}",
+                f"- Detection metric kind: {detection_rate.get('rate_kind', '')}",
+                "",
+            ]
+        )
+    lines.extend(["## Verdict Breakdown", ""])
     verdict_breakdown = _mapping_or_empty(summary.get("verdict_breakdown"))
     if verdict_breakdown:
         lines.extend(
@@ -3584,6 +3603,34 @@ def _count_case_field(cases: Iterable[CaseState], field_name: str) -> dict[str, 
     return dict(sorted(counts.items()))
 
 
+def _build_fastmode_metrics(
+    state: MultiRunState,
+    cases: Iterable[CaseState],
+) -> dict[str, Any]:
+    case_list = list(cases)
+    eligible_cases = [case for case in case_list if case.fastmode_eligible]
+    used_cases = [case for case in case_list if case.fastmode_used]
+    deferred_cleanup_cases = [
+        case for case in case_list if case.cleanup_status == "deferred_to_next_case"
+    ]
+    return {
+        "enabled": state.fastmode_enabled,
+        "experimental": state.fastmode_enabled,
+        "baseline_comparable": not state.fastmode_enabled,
+        "eligible_cases": len(eligible_cases),
+        "used_cases": len(used_cases),
+        "deferred_cleanup_cases": len(deferred_cleanup_cases),
+        "eligible_case_ids": [case.case_id for case in eligible_cases],
+        "environment_reuse_case_ids": [case.case_id for case in used_cases],
+        "accuracy_warning": (
+            "fastmode reuses environment between selected cases; metrics are "
+            "exploratory and must not be compared with clean snapshot baseline runs"
+            if state.fastmode_enabled
+            else ""
+        ),
+    }
+
+
 def _build_multi_run_timing_summary(cases: Iterable[CaseState]) -> dict[str, Any]:
     case_list = list(cases)
     case_durations = [
@@ -3691,6 +3738,10 @@ def _aggregate_case_payload(root: Path, case: CaseState) -> dict[str, Any]:
         "resume_eligible": case.resume_eligible,
         "duration_seconds": case.duration_seconds,
         "timing": _jsonable(case.timing),
+        "fastmode_eligible": case.fastmode_eligible,
+        "fastmode_reason": case.fastmode_reason,
+        "fastmode_used": case.fastmode_used,
+        "environment_reused_from_case_id": case.environment_reused_from_case_id,
         "error_summary": case.error_summary,
         "warnings": list(case.warnings),
         "paths": {

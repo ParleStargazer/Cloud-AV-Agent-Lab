@@ -256,6 +256,22 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
                 state["cases"][0]["fastmode_reason"],
                 "evaluator_detected_or_blocked_high_confidence_strong_attribution",
             )
+            summary = json.loads(
+                (batch_dir / "aggregate_summary.json").read_text(encoding="utf-8")
+            )
+            markdown = (batch_dir / "aggregate_summary.md").read_text(encoding="utf-8")
+            self.assertEqual(
+                summary["detection_rate"]["rate_kind"],
+                "fastmode_observed_detection_rate",
+            )
+            self.assertTrue(summary["detection_rate"]["experimental"])
+            self.assertFalse(summary["detection_rate"]["baseline_comparable"])
+            self.assertTrue(summary["fastmode"]["enabled"])
+            self.assertEqual(summary["fastmode"]["eligible_cases"], 2)
+            self.assertEqual(summary["fastmode"]["used_cases"], 1)
+            self.assertEqual(summary["fastmode"]["deferred_cleanup_cases"], 1)
+            self.assertIn("clean snapshot baseline", markdown)
+            self.assertIn("Fastmode", markdown)
 
     def test_fastmode_gate_requires_strong_attribution_from_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
