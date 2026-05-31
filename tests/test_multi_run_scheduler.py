@@ -33,6 +33,8 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertTrue((batch_dir / "cases" / ("0002_" + "b" * 16)).is_dir())
             state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
             self.assertEqual(state["batch_state"], "completed")
+            self.assertEqual(state["batch_cleanup_status"], "restored")
+            self.assertEqual(state["emergency_poweroff_status"], "not_needed")
             self.assertEqual(
                 [case["case_status"] for case in state["cases"]], ["completed"] * 3
             )
@@ -90,6 +92,8 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
             self.assertEqual(state["batch_state"], "stopped_for_environment_failure")
             self.assertEqual(state["final_status"], "stopped_for_environment_failure")
+            self.assertEqual(state["batch_cleanup_status"], "restore_failed")
+            self.assertEqual(state["emergency_poweroff_status"], "attempted")
             self.assertTrue(state["unsafe_to_continue"])
             self.assertTrue(state["manual_intervention_required"])
             self.assertEqual(state["cases"][0]["cleanup_status"], "restore_failed")
@@ -107,6 +111,8 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
             self.assertEqual(state["batch_state"], "stopped_for_environment_failure")
             self.assertEqual(state["final_status"], "stopped_for_environment_failure")
+            self.assertEqual(state["batch_cleanup_status"], "restore_failed")
+            self.assertEqual(state["emergency_poweroff_status"], "attempted")
             self.assertTrue(state["unsafe_to_continue"])
             self.assertTrue(state["manual_intervention_required"])
             self.assertEqual(state["cases"][0]["cleanup_status"], "restore_failed")
@@ -222,6 +228,8 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
                 ["deferred_to_next_case", "deferred_to_next_case", "restored"],
             )
             self.assertEqual(state["batch_state"], "completed")
+            self.assertEqual(state["batch_cleanup_status"], "restored")
+            self.assertEqual(state["emergency_poweroff_status"], "not_needed")
 
     def test_rerun_failed_rejects_burned_indexed_sample(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -298,6 +306,8 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertEqual(runner.requests, [])
             self.assertEqual(state.batch_state, "failed_preflight")
             self.assertEqual(state.final_status, "failed_preflight")
+            self.assertEqual(state.batch_cleanup_status, "not_required")
+            self.assertEqual(state.emergency_poweroff_status, "not_needed")
             self.assertIn("guest agent unavailable", state.errors[0])
             report = json.loads(
                 (artifacts.batch_dir / "preflight_report.json").read_text(
@@ -405,6 +415,8 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             )
 
             self.assertEqual(summary["final_status"], "stopped_for_environment_failure")
+            self.assertEqual(summary["batch_cleanup_status"], "restore_failed")
+            self.assertEqual(summary["emergency_poweroff_status"], "attempted")
             self.assertTrue(summary["denominator"]["environment_stopped"])
             self.assertEqual(summary["denominator"]["environment_failures"], 1)
             self.assertEqual(summary["denominator"]["case_failures"], 0)

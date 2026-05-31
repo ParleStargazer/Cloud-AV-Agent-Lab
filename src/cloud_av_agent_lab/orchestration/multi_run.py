@@ -124,6 +124,17 @@ EntryStatus: TypeAlias = Literal["ready", "skipped", "invalid"]
 SampleSourceKind: TypeAlias = Literal["local_platform_path", "external_reference"]
 PreflightCheckStatus: TypeAlias = Literal["passed", "failed", "skipped"]
 CleanupStrategy: TypeAlias = Literal["per_case", "deferred"]
+BatchCleanupStatus: TypeAlias = Literal[
+    "not_started",
+    "restored",
+    "restore_failed",
+    "not_required",
+]
+EmergencyPoweroffStatus: TypeAlias = Literal[
+    "not_started",
+    "not_needed",
+    "attempted",
+]
 
 ALLOWED_SAMPLE_SOURCE_KINDS: tuple[str, ...] = (
     "local_platform_path",
@@ -194,6 +205,17 @@ BATCH_STATES: tuple[str, ...] = (
     "failed_manifest_mismatch",
 )
 CLEANUP_STRATEGIES: tuple[str, ...] = ("per_case", "deferred")
+BATCH_CLEANUP_STATUSES: tuple[str, ...] = (
+    "not_started",
+    "restored",
+    "restore_failed",
+    "not_required",
+)
+EMERGENCY_POWEROFF_STATUSES: tuple[str, ...] = (
+    "not_started",
+    "not_needed",
+    "attempted",
+)
 
 
 class MultiRunManifestError(ValueError):
@@ -1440,6 +1462,8 @@ class MultiRunState:
     started_at_utc: str = ""
     finished_at_utc: str = ""
     final_status: str = ""
+    batch_cleanup_status: BatchCleanupStatus = "not_started"
+    emergency_poweroff_status: EmergencyPoweroffStatus = "not_started"
     errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     schema_version: str = MULTI_RUN_STATE_SCHEMA_VERSION
@@ -1463,6 +1487,8 @@ class MultiRunState:
             "started_at_utc": self.started_at_utc,
             "finished_at_utc": self.finished_at_utc,
             "final_status": self.final_status,
+            "batch_cleanup_status": self.batch_cleanup_status,
+            "emergency_poweroff_status": self.emergency_poweroff_status,
             "timing": _build_multi_run_timing_summary(self.cases),
             "cases": [case.to_dict() for case in self.cases],
             "errors": list(self.errors),
@@ -2263,6 +2289,8 @@ def execute_multi_run_batch(
             state,
             batch_state="failed_preflight",
             final_status="failed_preflight",
+            batch_cleanup_status="not_required",
+            emergency_poweroff_status="not_needed",
             errors=tuple(preflight_failed_messages),
         )
         write_multi_run_state(state_path, state)
@@ -2273,6 +2301,8 @@ def execute_multi_run_batch(
             data={
                 "final_status": state.final_status,
                 "batch_state": state.batch_state,
+                "batch_cleanup_status": state.batch_cleanup_status,
+                "emergency_poweroff_status": state.emergency_poweroff_status,
                 "preflight_report_path": preflight_report_path.name,
             },
         )
@@ -2454,6 +2484,7 @@ def execute_multi_run_batch(
                 final_status=stop_state,
                 finished_at_utc=utc_now(),
             )
+            state = _with_terminal_batch_cleanup_state(state)
             write_multi_run_state(state_path, state)
             break
 
@@ -2464,6 +2495,7 @@ def execute_multi_run_batch(
             final_status=_completed_batch_state(state),
             finished_at_utc=utc_now(),
         )
+        state = _with_terminal_batch_cleanup_state(state)
         write_multi_run_state(state_path, state)
 
     aggregate = write_multi_run_aggregate_summary(root, state)
@@ -2483,6 +2515,8 @@ def execute_multi_run_batch(
         data={
             "batch_state": state.batch_state,
             "final_status": state.final_status,
+            "batch_cleanup_status": state.batch_cleanup_status,
+            "emergency_poweroff_status": state.emergency_poweroff_status,
             "unsafe_to_continue": state.unsafe_to_continue,
             "manual_intervention_required": state.manual_intervention_required,
         },
@@ -2574,6 +2608,8 @@ def build_multi_run_aggregate_summary(
         "region": state.region,
         "batch_state": state.batch_state,
         "final_status": state.final_status,
+        "batch_cleanup_status": state.batch_cleanup_status,
+        "emergency_poweroff_status": state.emergency_poweroff_status,
         "manifest_sha256": state.manifest_sha256,
         "batch_plan_sha256": state.batch_plan_sha256,
         "selected_indexes": list(state.selected_indexes),
@@ -2616,6 +2652,8 @@ def render_multi_run_aggregate_markdown(summary: Mapping[str, Any]) -> str:
         f"- Batch: {summary.get('batch_id', '')}",
         f"- Product: {summary.get('product_id', '')}",
         f"- Final status: {summary.get('final_status', '')}",
+        f"- Batch cleanup: {summary.get('batch_cleanup_status', '')}",
+        f"- Emergency poweroff: {summary.get('emergency_poweroff_status', '')}",
         f"- Selected samples: {denominator.get('selected_samples', 0)}",
         f"- Evaluable cases: {denominator.get('evaluable_cases', 0)}",
         f"- Case failures: {denominator.get('case_failures', 0)}",
@@ -3338,6 +3376,35 @@ def _should_defer_case_cleanup(
     return True
 
 
+def _with_terminal_batch_cleanup_state(state: MultiRunState) -> MultiRunState:
+    cleanup_status, emergency_status = _terminal_batch_cleanup_status(state)
+    return replace(
+        state,
+        batch_cleanup_status=cleanup_status,
+        emergency_poweroff_status=emergency_status,
+    )
+
+
+def _terminal_batch_cleanup_status(
+    state: MultiRunState,
+) -> tuple[BatchCleanupStatus, EmergencyPoweroffStatus]:
+    if state.batch_state == "failed_preflight":
+        return "not_required", "not_needed"
+    if (
+        state.unsafe_to_continue
+        or state.manual_intervention_required
+        or state.batch_state == "stopped_for_environment_failure"
+        or any(case.cleanup_status == "restore_failed" for case in state.cases)
+    ):
+        return "restore_failed", "attempted"
+    if any(
+        case.cleanup_status in {"restored", "deferred_to_next_case"}
+        for case in state.cases
+    ):
+        return "restored", "not_needed"
+    return "not_required", "not_needed"
+
+
 def _burn_indexed_sample_after_persisted_result(
     root: Path,
     *,
@@ -3656,6 +3723,12 @@ def load_multi_run_state(path: Path | str) -> MultiRunState:
         started_at_utc=str(payload.get("started_at_utc", "")),
         finished_at_utc=str(payload.get("finished_at_utc", "")),
         final_status=str(payload.get("final_status", "")),
+        batch_cleanup_status=_batch_cleanup_status_from_payload(
+            payload.get("batch_cleanup_status")
+        ),
+        emergency_poweroff_status=_emergency_poweroff_status_from_payload(
+            payload.get("emergency_poweroff_status")
+        ),
         errors=tuple(str(item) for item in payload.get("errors", [])),
         warnings=tuple(str(item) for item in payload.get("warnings", [])),
     )
@@ -3734,6 +3807,18 @@ def _indexed_sample_state_from_payload(value: Any) -> IndexedSampleState:
     if value in INDEXED_SAMPLE_STATES:
         return value  # type: ignore[return-value]
     return "available"
+
+
+def _batch_cleanup_status_from_payload(value: Any) -> BatchCleanupStatus:
+    if value in BATCH_CLEANUP_STATUSES:
+        return value  # type: ignore[return-value]
+    return "not_started"
+
+
+def _emergency_poweroff_status_from_payload(value: Any) -> EmergencyPoweroffStatus:
+    if value in EMERGENCY_POWEROFF_STATUSES:
+        return value  # type: ignore[return-value]
+    return "not_started"
 
 
 def _state_str(payload: Mapping[str, Any], field_name: str, path: Path) -> str:

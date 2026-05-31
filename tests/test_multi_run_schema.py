@@ -133,12 +133,16 @@ class MultiRunSchemaTests(unittest.TestCase):
             selected_indexes=(7,),
             cases=(case_state,),
             started_at_utc="2026-05-30T14:00:00Z",
+            batch_cleanup_status="restored",
+            emergency_poweroff_status="not_needed",
         )
 
         payload = state.to_dict()
 
         self.assertEqual(payload["schema_version"], MULTI_RUN_STATE_SCHEMA_VERSION)
         self.assertEqual(payload["selected_indexes"], [7])
+        self.assertEqual(payload["batch_cleanup_status"], "restored")
+        self.assertEqual(payload["emergency_poweroff_status"], "not_needed")
         self.assertFalse(payload["unsafe_to_continue"])
         self.assertEqual(payload["cases"][0]["case_name"], "sample-007")
         self.assertEqual(payload["cases"][0]["cleanup_status"], "restored")
