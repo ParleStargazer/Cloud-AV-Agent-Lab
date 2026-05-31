@@ -27,6 +27,7 @@ from cloud_av_agent_lab.guest_agent_server.workspace import (
     check_and_record_case_security_product_readiness,
     collect_case_logs,
     export_case_evidence_bundle,
+    probe_case_collection,
     prepare_worker_execute_request,
     prepare_case_workspace,
     read_case_collection_status,
@@ -215,6 +216,31 @@ def create_app(
                 "workspace": str(sample_path.parent.parent),
                 "sample_dir": str(sample_path.parent),
             },
+        }
+
+    @app.post("/cases/{case_id:path}/collection/{product_id}/probe")
+    def probe_collection(
+        case_id: str,
+        product_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        authorize(authorization)
+        try:
+            payload = probe_case_collection(workdir_path, case_id, product_id)
+        except WorkspaceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except WorkspaceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return {
+            "status": "ok",
+            "message": "collection probe observed",
+            "data": payload,
         }
 
     @app.post("/cases/{case_id:path}/collection/{product_id}")

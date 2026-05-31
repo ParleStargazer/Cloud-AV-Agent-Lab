@@ -194,6 +194,20 @@ class GuestAgentClient:
             timeout_seconds=timeout_seconds,
         )
 
+    def probe_collection(
+        self,
+        case_id: str,
+        product_id: str,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
+        return self._request(
+            "cases/"
+            f"{quote(case_id, safe='')}/collection/"
+            f"{quote(product_id, safe='')}/probe",
+            method="POST",
+            timeout_seconds=timeout_seconds,
+        )
+
     def collection_status(self, case_id: str) -> GuestAgentResponse:
         return self._request(
             f"cases/{quote(case_id, safe='')}/collection/status",

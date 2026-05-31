@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from .actions import ALLOWED_CASE_ACTIONS, FORBIDDEN_ACTION_FIELDS, run_case_action
 from .case_workspace import prepare_case_workspace, save_uploaded_sample
-from .collection import collect_case_logs, read_case_collection_status
+from .collection import (
+    collect_case_logs,
+    probe_case_collection,
+    read_case_collection_status,
+)
 from .errors import WorkspaceError, WorkspaceNotFoundError
 from .execution import (
     ExecutionRegistry,
@@ -38,6 +42,7 @@ __all__ = [
     "export_case_evidence_bundle",
     "prepare_case_workspace",
     "prepare_worker_execute_request",
+    "probe_case_collection",
     "read_case_collection_status",
     "read_case_execution_status",
     "read_case_report",

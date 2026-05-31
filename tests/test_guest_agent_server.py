@@ -1728,6 +1728,39 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertIn("guest-prepare-case", response.json()["detail"])
 
+    def test_collection_probe_unsupported_does_not_write_collection(self) -> None:
+        prepare_response = self.client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        workspace = Path(prepare_response.json()["data"]["workspace"])
+
+        response = self.client.post(
+            "/cases/case-001__tencent-pc-manager/collection/tencent-pc-manager/probe",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["product_id"], "tencent-pc-manager")
+        self.assertEqual(data["probe_state"], "unsupported")
+        self.assertFalse(data["observed"])
+        self.assertFalse((workspace / "case_collection.json").exists())
+        event_types = [
+            event["event_type"] for event in _read_events(workspace / "events.jsonl")
+        ]
+        self.assertNotIn("collection_started", event_types)
+        self.assertNotIn("collection_finished", event_types)
+
+    def test_collection_probe_missing_case_returns_404(self) -> None:
+        response = self.client.post(
+            "/cases/missing-case/collection/huorong/probe",
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 404)
+
     def test_security_product_readiness_huorong_writes_case_metadata(self) -> None:
         payload = _prepare_huorong_payload()
         log_dir = self.workdir / "huorong-source"

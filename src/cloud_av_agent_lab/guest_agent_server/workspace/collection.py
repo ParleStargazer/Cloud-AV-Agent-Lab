@@ -12,8 +12,12 @@ from cloud_av_agent_lab.guest_agent_server.collectors.base import (
     NormalizedSecurityEvent,
     ProductLogCollector,
 )
+from cloud_av_agent_lab.guest_agent_server.collectors.probe import (
+    ProductObservationProbeResult,
+)
 from cloud_av_agent_lab.guest_agent_server.collectors.registry import (
     get_product_log_collector,
+    get_product_observation_probe,
     supported_product_log_collectors,
 )
 
@@ -118,6 +122,60 @@ def read_case_collection_status(
         max_events=max_events,
     )
     return payload
+
+
+def probe_case_collection(
+    workdir: str | Path,
+    case_id: str,
+    product_id: str,
+) -> dict[str, Any]:
+    safe_id = safe_case_id(case_id)
+    safe_product = safe_case_id(product_id)
+    workspace = _case_workspace(workdir, safe_id)
+    if not workspace.is_dir():
+        raise WorkspaceNotFoundError(
+            "case workspace does not exist; run guest-prepare-case first"
+        )
+    probe = get_product_observation_probe(safe_product)
+    case_data = _read_json_file(workspace / "case.json")
+    state = _read_json_file(workspace / "case_state.json")
+    _ensure_case_product_matches(state, safe_product)
+    sample_metadata = _read_json_file(workspace / "sample" / "sample.json")
+    events = _read_recent_events(workspace / "events.jsonl", max_events=1000)
+    window = _build_collection_window(state, sample_metadata, events)
+    context = _build_case_context(
+        workspace=workspace,
+        case_data=case_data,
+        state=state,
+        sample_metadata=sample_metadata,
+    )
+    context["product_id"] = safe_product
+    if probe is None:
+        result = ProductObservationProbeResult(
+            product_id=safe_product,
+            probe_state="unsupported",
+            observed=False,
+            reason_codes=("product_observation_probe_unsupported",),
+            observed_at_utc=_utc_now(),
+            safe_summary={
+                "message": "product observation probe is not supported",
+                "case_id": safe_id,
+                "window": window.to_dict(),
+            },
+        )
+        return result.to_dict()
+    try:
+        result = probe.probe(workspace, context, window)
+    except Exception as exc:  # noqa: BLE001 - probe failures are timing hints only.
+        result = ProductObservationProbeResult(
+            product_id=safe_product,
+            probe_state="probe_failed",
+            observed=False,
+            reason_codes=("product_observation_probe_failed",),
+            observed_at_utc=_utc_now(),
+            safe_summary={"error": type(exc).__name__, "window": window.to_dict()},
+        )
+    return result.to_dict()
 
 
 def write_case_collection(

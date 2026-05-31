@@ -396,6 +396,43 @@ class GuestAgentClientTests(TestCase):
         self.assertIsInstance(headers, dict)
         self.assertEqual(headers["Authorization"], "Bearer secret")
 
+    def test_probe_collection_uses_network_client(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            timeout_seconds=5,
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=200,
+                headers={},
+                body=(
+                    b'{"status":"ok","message":"collection probe observed",'
+                    b'"data":{"product_id":"huorong",'
+                    b'"probe_state":"unsupported","observed":false}}'
+                ),
+            )
+        )
+        client = GuestAgentClient(
+            config, network=network, env={"GUEST_TOKEN": "secret"}
+        )
+
+        response = client.probe_collection("case-001__huorong", "huorong")
+
+        self.assertEqual(response.data["probe_state"], "unsupported")
+        self.assertEqual(len(network.calls), 1)
+        call = network.calls[0]
+        self.assertEqual(call["method"], "POST")
+        self.assertEqual(
+            call["url"],
+            "http://guest-agent.local:8080/cases/case-001__huorong/collection/huorong/probe",
+        )
+        self.assertEqual(call["timeout_seconds"], 5)
+        headers = call["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+
     def test_collection_status_uses_network_client(self) -> None:
         config = GuestAgentConfig(
             enabled=True,

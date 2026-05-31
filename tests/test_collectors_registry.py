@@ -12,7 +12,9 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from cloud_av_agent_lab.guest_agent_server.collectors import (
     get_product_log_collector,
+    get_product_observation_probe,
     supported_product_log_collectors,
+    supported_product_observation_probes,
 )
 from cloud_av_agent_lab.guest_agent_server.collectors.huorong import HuorongLogCollector
 from cloud_av_agent_lab.guest_agent_server.collectors.qihoo_360 import (
@@ -84,6 +86,10 @@ class CollectorRegistryTests(TestCase):
 
     def test_registry_returns_none_for_unknown_product(self) -> None:
         self.assertIsNone(get_product_log_collector("unknown-product"))
+
+    def test_probe_registry_defaults_to_no_probe(self) -> None:
+        self.assertIsNone(get_product_observation_probe("huorong"))
+        self.assertEqual(supported_product_observation_probes(), ())
 
     def test_workspace_collector_error_lists_registry_products(self) -> None:
         with self.assertRaises(WorkspaceError) as error:
