@@ -1418,6 +1418,9 @@ class CaseState:
     case_summary_path: str = ""
     duration_seconds: float | None = None
     timing: dict[str, Any] = field(default_factory=dict)
+    fastmode_eligible: bool = False
+    fastmode_reason: str = ""
+    fastmode_used: bool = False
     warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -1447,6 +1450,9 @@ class CaseState:
             "case_summary_path": self.case_summary_path,
             "duration_seconds": self.duration_seconds,
             "timing": _jsonable(self.timing),
+            "fastmode_eligible": self.fastmode_eligible,
+            "fastmode_reason": self.fastmode_reason,
+            "fastmode_used": self.fastmode_used,
             "warnings": list(self.warnings),
         }
 
@@ -2399,6 +2405,13 @@ def execute_multi_run_batch(
         )
         failure_kind = classify_runner_result(result)
         case_state = result.to_case_state(request)
+        if plan.execution.fastmode:
+            fastmode_eligible, fastmode_reason = _fastmode_gate_decision(root, result)
+            case_state = replace(
+                case_state,
+                fastmode_eligible=fastmode_eligible,
+                fastmode_reason=fastmode_reason,
+            )
         cases_by_index[index] = case_state
         append_next_multi_run_event(
             event_log_path,
@@ -3391,6 +3404,45 @@ def _should_defer_case_cleanup(
     return True
 
 
+def _fastmode_gate_decision(
+    root: Path,
+    result: SingleRunRunnerResult,
+) -> tuple[bool, str]:
+    if result.unsafe_to_continue or result.manual_intervention_required:
+        return False, "unsafe_to_continue"
+    if classify_runner_result(result) is not None:
+        return False, "case_or_environment_failure"
+    if result.verdict != "detected_or_blocked":
+        return False, f"verdict={result.verdict or 'unknown'}"
+    if result.confidence != "high":
+        return False, f"confidence={result.confidence or 'unknown'}"
+
+    summary_path = root / result.case_summary_path if result.case_summary_path else None
+    summary = _read_optional_json_mapping(summary_path) if summary_path else {}
+    if not summary:
+        return False, "case_summary_missing"
+    if not _summary_contains_strong_attribution(summary):
+        return False, "strong_attribution_missing"
+    return True, "evaluator_detected_or_blocked_high_confidence_strong_attribution"
+
+
+def _summary_contains_strong_attribution(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            key_text = str(key).casefold()
+            if key_text in {"attribution", "attribution_level"}:
+                if isinstance(item, Mapping):
+                    if str(item.get("level", "")).casefold() == "strong":
+                        return True
+                elif str(item).casefold() == "strong":
+                    return True
+            if _summary_contains_strong_attribution(item):
+                return True
+    if isinstance(value, list | tuple):
+        return any(_summary_contains_strong_attribution(item) for item in value)
+    return False
+
+
 def _with_terminal_batch_cleanup_state(state: MultiRunState) -> MultiRunState:
     cleanup_status, emergency_status = _terminal_batch_cleanup_status(state)
     return replace(
@@ -3810,6 +3862,9 @@ def _case_state_from_payload(
         case_summary_path=str(payload.get("case_summary_path", "")),
         duration_seconds=_optional_float(payload.get("duration_seconds"), state_path),
         timing=_state_timing_payload(payload.get("timing")),
+        fastmode_eligible=bool(payload.get("fastmode_eligible", False)),
+        fastmode_reason=str(payload.get("fastmode_reason", "")),
+        fastmode_used=bool(payload.get("fastmode_used", False)),
         warnings=tuple(str(item) for item in payload.get("warnings", [])),
     )
 

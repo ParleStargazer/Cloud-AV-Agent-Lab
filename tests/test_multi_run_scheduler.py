@@ -10,6 +10,8 @@ from cloud_av_agent_lab.orchestration.multi_run import (
     MultiRunPreflightCheck,
     MultiRunStateError,
     SAMPLE_MANIFEST_ENTRY_SCHEMA_VERSION,
+    SingleRunRequest,
+    SingleRunRunnerResult,
     build_sample_manifest_from_directory,
     create_multi_run_batch_plan,
     execute_multi_run_batch,
@@ -228,6 +230,39 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
                 ["deferred_to_next_case", "deferred_to_next_case", "restored"],
             )
             self.assertEqual(state["batch_state"], "completed")
+
+    def test_fastmode_gate_uses_evaluator_summary_strong_attribution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(
+                tmp,
+                indexes=(1,),
+                fastmode=True,
+                runner=StrongAttributionRunner(),
+            )
+
+            state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
+            self.assertTrue(state["fastmode_enabled"])
+            self.assertTrue(state["cases"][0]["fastmode_eligible"])
+            self.assertEqual(
+                state["cases"][0]["fastmode_reason"],
+                "evaluator_detected_or_blocked_high_confidence_strong_attribution",
+            )
+
+    def test_fastmode_gate_requires_strong_attribution_from_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(
+                tmp,
+                indexes=(1,),
+                fastmode=True,
+            )
+
+            state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
+            self.assertTrue(state["fastmode_enabled"])
+            self.assertFalse(state["cases"][0]["fastmode_eligible"])
+            self.assertEqual(
+                state["cases"][0]["fastmode_reason"],
+                "case_summary_missing",
+            )
             self.assertEqual(state["batch_cleanup_status"], "restored")
             self.assertEqual(state["emergency_poweroff_status"], "not_needed")
 
@@ -616,7 +651,9 @@ def _plan_and_execute(
     scenarios: dict[int, str] | None = None,
     failure_policy: str = "continue",
     cleanup_strategy: str = "per_case",
+    fastmode: bool = False,
     case_names: dict[int, str] | None = None,
+    runner: FakeSingleRunRunner | object | None = None,
 ) -> tuple[Path, FakeSingleRunRunner]:
     tmp_path = Path(tmp)
     manifest_path = tmp_path / "sample_manifest.jsonl"
@@ -640,10 +677,59 @@ def _plan_and_execute(
         dry_run=True,
         failure_policy=failure_policy,
         cleanup_strategy=cleanup_strategy,
+        fastmode=fastmode,
     )
-    runner = FakeSingleRunRunner(scenarios_by_sample_index=scenarios)
-    execute_multi_run_batch(artifacts.batch_dir, runner=runner)
-    return artifacts.batch_dir, runner
+    active_runner = runner or FakeSingleRunRunner(scenarios_by_sample_index=scenarios)
+    execute_multi_run_batch(artifacts.batch_dir, runner=active_runner)
+    return artifacts.batch_dir, active_runner
+
+
+class StrongAttributionRunner:
+    requests: list[SingleRunRequest]
+
+    def __init__(self) -> None:
+        self.requests = []
+
+    def run(self, request: SingleRunRequest) -> SingleRunRunnerResult:
+        self.requests.append(request)
+        batch_root = request.case_dir.parent.parent
+        run_dir = request.case_dir / "single_run"
+        run_dir.mkdir(parents=True)
+        summary_path = run_dir / "case_summary.json"
+        summary_path.write_text(
+            json.dumps(
+                {
+                    "verdict": "detected_or_blocked",
+                    "confidence": "high",
+                    "decision_inputs": {
+                        "collection": {
+                            "evidence": [
+                                {
+                                    "attribution": "strong",
+                                    "verdict": "intercepted",
+                                }
+                            ]
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SingleRunRunnerResult(
+            run_id=request.run_id,
+            case_id=request.case_id,
+            final_status="completed",
+            case_status="completed",
+            single_run_status="completed",
+            cleanup_status="restored",
+            evidence_status="exported",
+            summary_status="collected",
+            verdict="detected_or_blocked",
+            confidence="high",
+            result_source="test_runner",
+            simulated=True,
+            case_summary_path=summary_path.relative_to(batch_root).as_posix(),
+        )
 
 
 class FailingGuestPreflightChecker:
