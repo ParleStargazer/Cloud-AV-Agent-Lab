@@ -728,6 +728,8 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "--range",
                         "1-2",
                         "--dry-run",
+                        "--cleanup-strategy",
+                        "deferred",
                     ]
                 )
 
@@ -752,6 +754,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertEqual(plan["selection"]["selected_indexes"], [1, 2])
             self.assertTrue(plan["execution"]["dry_run"])
             self.assertFalse(plan["execution"]["plan_only"])
+            self.assertEqual(plan["execution"]["cleanup_strategy"], "deferred")
             self.assertEqual(
                 plan["generated_config_sha256"],
                 _sha256_file(
@@ -763,6 +766,10 @@ class CloudLifecycleCliGuardTests(TestCase):
                     tmp_path / "batches" / "batch-test" / "sample_manifest.jsonl"
                 ).is_file()
             )
+            generated_config = (
+                tmp_path / "batches" / "batch-test" / "multi_run.generated.toml"
+            ).read_text(encoding="utf-8")
+            self.assertIn('cleanup_strategy = "deferred"', generated_config)
             state = json.loads(
                 (
                     tmp_path / "batches" / "batch-test" / "multi_run_state.json"

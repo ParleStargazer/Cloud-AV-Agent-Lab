@@ -77,6 +77,7 @@ class MultiRunSchemaTests(unittest.TestCase):
                 dry_run=True,
                 plan_only=True,
                 case_timeout_seconds=1800.0,
+                cleanup_strategy="deferred",
             ),
             single_run_runner_version="single-run.v1",
             multi_run_version="multi-run.v1",
@@ -94,6 +95,7 @@ class MultiRunSchemaTests(unittest.TestCase):
         self.assertTrue(payload["execution"]["dry_run"])
         self.assertTrue(payload["execution"]["plan_only"])
         self.assertEqual(payload["execution"]["mode"], "serial")
+        self.assertEqual(payload["execution"]["cleanup_strategy"], "deferred")
         json.dumps(payload)
 
     def test_multi_run_state_serializes_case_status_breakdown(self) -> None:

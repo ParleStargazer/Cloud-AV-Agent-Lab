@@ -46,9 +46,11 @@ ReadinessStatus: TypeAlias = Literal["ok", "warning", "unknown", "skipped"]
 CleanupStatus: TypeAlias = Literal[
     "restored",
     "restore_failed",
+    "deferred_to_next_case",
     "unknown",
     "not_started",
     "skipped",
+    "not_required",
 ]
 IndexedSampleState: TypeAlias = Literal[
     "available",
@@ -121,6 +123,7 @@ SelectionMode: TypeAlias = Literal["all", "range", "indexes", "from_to"]
 EntryStatus: TypeAlias = Literal["ready", "skipped", "invalid"]
 SampleSourceKind: TypeAlias = Literal["local_platform_path", "external_reference"]
 PreflightCheckStatus: TypeAlias = Literal["passed", "failed", "skipped"]
+CleanupStrategy: TypeAlias = Literal["per_case", "deferred"]
 
 ALLOWED_SAMPLE_SOURCE_KINDS: tuple[str, ...] = (
     "local_platform_path",
@@ -146,9 +149,11 @@ READINESS_STATUSES: tuple[str, ...] = ("ok", "warning", "unknown", "skipped")
 CLEANUP_STATUSES: tuple[str, ...] = (
     "restored",
     "restore_failed",
+    "deferred_to_next_case",
     "unknown",
     "not_started",
     "skipped",
+    "not_required",
 )
 INDEXED_SAMPLE_STATES: tuple[str, ...] = (
     "available",
@@ -188,6 +193,7 @@ BATCH_STATES: tuple[str, ...] = (
     "failed_invalid_config",
     "failed_manifest_mismatch",
 )
+CLEANUP_STRATEGIES: tuple[str, ...] = ("per_case", "deferred")
 
 
 class MultiRunManifestError(ValueError):
@@ -936,6 +942,7 @@ class BatchExecutionPolicy:
     plan_only: bool = False
     case_timeout_seconds: float | None = None
     environment_failure_policy: str = "stop"
+    cleanup_strategy: CleanupStrategy = "per_case"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -945,6 +952,7 @@ class BatchExecutionPolicy:
             "plan_only": self.plan_only,
             "case_timeout_seconds": self.case_timeout_seconds,
             "environment_failure_policy": self.environment_failure_policy,
+            "cleanup_strategy": self.cleanup_strategy,
         }
 
 
@@ -1120,8 +1128,12 @@ def create_multi_run_batch_plan(
     dry_run: bool,
     failure_policy: str,
     plan_only: bool = False,
+    cleanup_strategy: CleanupStrategy = "per_case",
 ) -> MultiRunPlanArtifacts:
     resolved_batch_id = _safe_batch_id(batch_id or default_batch_id(product_id))
+    if cleanup_strategy not in CLEANUP_STRATEGIES:
+        allowed = ", ".join(CLEANUP_STRATEGIES)
+        raise MultiRunPlanError(f"cleanup_strategy must be one of: {allowed}")
     batch_dir = Path(batch_root) / resolved_batch_id
     batch_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1152,6 +1164,7 @@ def create_multi_run_batch_plan(
         batch_plan_path=batch_plan_path.name,
         dry_run=dry_run,
         plan_only=plan_only,
+        cleanup_strategy=cleanup_strategy,
     )
     generated_config_bytes = generated_config.encode("utf-8")
     generated_config_sha256 = compute_bytes_sha256(generated_config_bytes)
@@ -1176,6 +1189,7 @@ def create_multi_run_batch_plan(
             failure_policy=failure_policy,
             dry_run=dry_run,
             plan_only=plan_only,
+            cleanup_strategy=cleanup_strategy,
         ),
     )
 
@@ -1216,6 +1230,7 @@ def create_multi_run_batch_plan(
             "execution_mode": plan.execution.mode,
             "dry_run": dry_run,
             "plan_only": plan_only,
+            "cleanup_strategy": cleanup_strategy,
         },
     )
 
@@ -1291,6 +1306,7 @@ def render_multi_run_generated_config(
     sample_manifest_path: str = "sample_manifest.jsonl",
     batch_plan_path: str = "batch_plan.json",
     plan_only: bool = False,
+    cleanup_strategy: CleanupStrategy = "per_case",
 ) -> str:
     return "\n".join(
         [
@@ -1308,6 +1324,7 @@ def render_multi_run_generated_config(
             f"batch_plan_path = {_toml_string(batch_plan_path)}",
             f"dry_run = {_toml_bool(dry_run)}",
             f"plan_only = {_toml_bool(plan_only)}",
+            f"cleanup_strategy = {_toml_string(cleanup_strategy)}",
             "",
         ]
     )
@@ -2679,6 +2696,9 @@ def load_batch_plan(path: Path | str) -> BatchPlan:
         environment_failure_policy=str(
             execution_payload.get("environment_failure_policy", "stop")
         ),
+        cleanup_strategy=_cleanup_strategy_from_json(
+            execution_payload.get("cleanup_strategy"), plan_path
+        ),
     )
     return BatchPlan(
         batch_id=_str_value(payload, "batch_id", plan_path),
@@ -2793,6 +2813,17 @@ def _optional_float(value: Any, path: Path) -> float | None:
     if not isinstance(value, int | float):
         raise MultiRunPlanError(f"{path}: optional float field must be numeric")
     return float(value)
+
+
+def _cleanup_strategy_from_json(value: Any, path: Path) -> CleanupStrategy:
+    if value is None:
+        return "per_case"
+    if not isinstance(value, str) or value not in CLEANUP_STRATEGIES:
+        allowed = ", ".join(CLEANUP_STRATEGIES)
+        raise MultiRunPlanError(
+            f"{path}: execution.cleanup_strategy must be one of: {allowed}"
+        )
+    return value  # type: ignore[return-value]
 
 
 def _single_run_request_for_entry(

@@ -562,6 +562,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="case failure policy for the future serial scheduler",
     )
     multi_run.add_argument(
+        "--cleanup-strategy",
+        choices=("per_case", "deferred"),
+        default="per_case",
+        help=(
+            "batch cleanup strategy; per_case restores after every case, "
+            "deferred is an explicit opt-in optimization"
+        ),
+    )
+    multi_run.add_argument(
         "--resume",
         action="store_true",
         help="resume an existing batch; execution is staged later",
@@ -1144,6 +1153,7 @@ def _handle_multi_run(
                 dry_run=args.dry_run,
                 failure_policy=args.failure_policy,
                 plan_only=args.plan_only,
+                cleanup_strategy=args.cleanup_strategy,
             )
         else:
             artifacts = load_existing_multi_run_batch(
@@ -1243,6 +1253,7 @@ def _handle_multi_run(
                 "to": args.to_index,
                 "max_cases": args.max_cases,
                 "failure_policy": args.failure_policy,
+                "cleanup_strategy": args.cleanup_strategy,
                 "execution_mode": execution_mode,
                 "resume": args.resume,
                 "rerun_failed": args.rerun_failed,
