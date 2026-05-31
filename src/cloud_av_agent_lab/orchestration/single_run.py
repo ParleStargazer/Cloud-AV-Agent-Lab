@@ -193,6 +193,7 @@ class SingleRunOptions:
     normal_evidence_timeout: NetworkTimeoutProfile = EVIDENCE_EXPORT_TIMEOUT
     salvage_timeout: NetworkTimeoutProfile = SALVAGE_TIMEOUT
     defer_final_cleanup: bool = False
+    skip_initial_restore: bool = False
 
 
 @dataclass(frozen=True)
@@ -444,7 +445,10 @@ def _run_single_case_locked(
         product = config.products[product_id]
         case = TestCase(id=case_id, sample=sample, vm=vm, product=product)
 
-        _restore_and_start_clean_instance(adapter, vm, state, lock)
+        if options.skip_initial_restore:
+            _mark_initial_restore_skipped(state)
+        else:
+            _restore_and_start_clean_instance(adapter, vm, state, lock)
 
         with state.step("wait_guest_agent_ready"):
             lock.heartbeat()
@@ -810,6 +814,12 @@ def _restore_and_start_clean_instance(
             lock.heartbeat()
             start_response = adapter.start_vm(vm)
             LOGGER.info("start instance: %s", start_response.status)
+
+
+def _mark_initial_restore_skipped(state: RunState) -> None:
+    state.mark("initial_restore_status", "skipped_fastmode_reuse")
+    state.mark_stage("environment", "initial_restore", "skipped_fastmode_reuse")
+    LOGGER.warning("initial restore skipped because fastmode reused environment")
 
 
 def _cleanup_instance(adapter: object, vm: object, state: RunState) -> bool:

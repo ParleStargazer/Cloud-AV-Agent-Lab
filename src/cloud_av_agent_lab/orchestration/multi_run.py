@@ -1421,6 +1421,7 @@ class CaseState:
     fastmode_eligible: bool = False
     fastmode_reason: str = ""
     fastmode_used: bool = False
+    environment_reused_from_case_id: str = ""
     warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -1453,6 +1454,7 @@ class CaseState:
             "fastmode_eligible": self.fastmode_eligible,
             "fastmode_reason": self.fastmode_reason,
             "fastmode_used": self.fastmode_used,
+            "environment_reused_from_case_id": self.environment_reused_from_case_id,
             "warnings": list(self.warnings),
         }
 
@@ -1567,6 +1569,8 @@ class SingleRunRequest:
     dry_run: bool
     attempt: int = 1
     defer_final_cleanup: bool = False
+    skip_initial_restore: bool = False
+    environment_reused_from_case_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1593,6 +1597,8 @@ class SingleRunRequest:
             "dry_run": self.dry_run,
             "attempt": self.attempt,
             "defer_final_cleanup": self.defer_final_cleanup,
+            "skip_initial_restore": self.skip_initial_restore,
+            "environment_reused_from_case_id": self.environment_reused_from_case_id,
         }
 
 
@@ -1678,6 +1684,8 @@ class SingleRunRunnerResult:
             case_summary_path=self.case_summary_path,
             duration_seconds=self.duration_seconds,
             timing=self.timing,
+            fastmode_used=request.skip_initial_restore,
+            environment_reused_from_case_id=request.environment_reused_from_case_id,
             warnings=self.warnings,
         )
 
@@ -1737,6 +1745,7 @@ class RealSingleRunRunner:
                     desktop_worker_url=request.desktop_worker_url,
                     dry_run=request.dry_run,
                     defer_final_cleanup=request.defer_final_cleanup,
+                    skip_initial_restore=request.skip_initial_restore,
                     runs_dir=request.case_dir,
                 )
             )
@@ -2333,6 +2342,7 @@ def execute_multi_run_batch(
     unsafe_to_continue = False
     manual_intervention_required = False
     manual_intervention_reason = ""
+    reuse_environment_from_case_id = ""
     run_indexes = tuple(
         index
         for index in selected_indexes
@@ -2377,7 +2387,10 @@ def execute_multi_run_batch(
                 run_indexes=run_indexes,
                 current_index=index,
             ),
+            skip_initial_restore=bool(reuse_environment_from_case_id),
+            environment_reused_from_case_id=reuse_environment_from_case_id,
         )
+        reuse_environment_from_case_id = ""
         append_next_multi_run_event(
             event_log_path,
             batch_id=plan.batch_id,
@@ -2387,6 +2400,13 @@ def execute_multi_run_batch(
             run_id=request.run_id,
             case_id=request.case_id,
             case_status="planned",
+            data={
+                "defer_final_cleanup": request.defer_final_cleanup,
+                "skip_initial_restore": request.skip_initial_restore,
+                "environment_reused_from_case_id": (
+                    request.environment_reused_from_case_id
+                ),
+            },
         )
         append_next_multi_run_event(
             event_log_path,
@@ -2412,6 +2432,13 @@ def execute_multi_run_batch(
                 fastmode_eligible=fastmode_eligible,
                 fastmode_reason=fastmode_reason,
             )
+            if (
+                fastmode_eligible
+                and index != run_indexes[-1]
+                and not result.unsafe_to_continue
+                and not result.manual_intervention_required
+            ):
+                reuse_environment_from_case_id = result.case_id
         cases_by_index[index] = case_state
         append_next_multi_run_event(
             event_log_path,
@@ -2916,6 +2943,8 @@ def _single_run_request_for_entry(
     batch_plan_sha256: str,
     attempt: int = 1,
     defer_final_cleanup: bool = False,
+    skip_initial_restore: bool = False,
+    environment_reused_from_case_id: str = "",
 ) -> SingleRunRequest:
     return SingleRunRequest(
         batch_id=plan.batch_id,
@@ -2941,6 +2970,8 @@ def _single_run_request_for_entry(
         dry_run=plan.execution.dry_run,
         attempt=attempt,
         defer_final_cleanup=defer_final_cleanup,
+        skip_initial_restore=skip_initial_restore,
+        environment_reused_from_case_id=environment_reused_from_case_id,
     )
 
 
@@ -3397,7 +3428,7 @@ def _should_defer_case_cleanup(
     run_indexes: tuple[int, ...],
     current_index: int,
 ) -> bool:
-    if plan.execution.cleanup_strategy != "deferred":
+    if plan.execution.cleanup_strategy != "deferred" and not plan.execution.fastmode:
         return False
     if not run_indexes or current_index == run_indexes[-1]:
         return False
@@ -3865,6 +3896,9 @@ def _case_state_from_payload(
         fastmode_eligible=bool(payload.get("fastmode_eligible", False)),
         fastmode_reason=str(payload.get("fastmode_reason", "")),
         fastmode_used=bool(payload.get("fastmode_used", False)),
+        environment_reused_from_case_id=str(
+            payload.get("environment_reused_from_case_id", "")
+        ),
         warnings=tuple(str(item) for item in payload.get("warnings", [])),
     )
 

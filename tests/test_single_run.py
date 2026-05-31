@@ -166,6 +166,33 @@ class SingleRunTests(TestCase):
                 "next_case_initial_restore_required",
             )
 
+    def test_single_run_can_skip_initial_restore_for_fastmode_reuse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.exe"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            client = FakeGuestClient()
+            adapter = FakeCloudAdapter()
+
+            result = run_single_case(
+                _options(root, sample_path, skip_initial_restore=True),
+                cloud_adapter_factory=lambda *args, **kwargs: adapter,
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(adapter.calls.count("restore_snapshot"), 1)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                run_state["initial_restore_status"],
+                "skipped_fastmode_reuse",
+            )
+            self.assertEqual(
+                run_state["stages"]["environment"]["initial_restore"],
+                "skipped_fastmode_reuse",
+            )
+
     def test_cli_single_run_entry_executes_readiness_before_upload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1149,6 +1176,7 @@ def _options(
     guest_ready_successes: int = 2,
     post_execution_collection_delay_seconds: float = 45.0,
     defer_final_cleanup: bool = False,
+    skip_initial_restore: bool = False,
 ) -> SingleRunOptions:
     return SingleRunOptions(
         instance_id="lhins-example",
@@ -1172,4 +1200,5 @@ def _options(
         ),
         salvage_timeout=salvage_timeout or NetworkTimeoutProfile(2, 5),
         defer_final_cleanup=defer_final_cleanup,
+        skip_initial_restore=skip_initial_restore,
     )

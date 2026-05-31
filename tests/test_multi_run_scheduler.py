@@ -235,7 +235,7 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             batch_dir, _runner = _plan_and_execute(
                 tmp,
-                indexes=(1,),
+                indexes=(1, 2),
                 fastmode=True,
                 runner=StrongAttributionRunner(),
             )
@@ -243,6 +243,15 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
             self.assertTrue(state["fastmode_enabled"])
             self.assertTrue(state["cases"][0]["fastmode_eligible"])
+            self.assertTrue(state["cases"][1]["fastmode_used"])
+            self.assertEqual(
+                state["cases"][1]["environment_reused_from_case_id"],
+                state["cases"][0]["case_id"],
+            )
+            self.assertEqual(
+                [case["cleanup_status"] for case in state["cases"]],
+                ["deferred_to_next_case", "restored"],
+            )
             self.assertEqual(
                 state["cases"][0]["fastmode_reason"],
                 "evaluator_detected_or_blocked_high_confidence_strong_attribution",
@@ -252,7 +261,7 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             batch_dir, _runner = _plan_and_execute(
                 tmp,
-                indexes=(1,),
+                indexes=(1, 2),
                 fastmode=True,
             )
 
@@ -262,6 +271,11 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertEqual(
                 state["cases"][0]["fastmode_reason"],
                 "case_summary_missing",
+            )
+            self.assertFalse(state["cases"][1]["fastmode_used"])
+            self.assertEqual(
+                [case["cleanup_status"] for case in state["cases"]],
+                ["deferred_to_next_case", "restored"],
             )
             self.assertEqual(state["batch_cleanup_status"], "restored")
             self.assertEqual(state["emergency_poweroff_status"], "not_needed")
@@ -721,7 +735,9 @@ class StrongAttributionRunner:
             final_status="completed",
             case_status="completed",
             single_run_status="completed",
-            cleanup_status="restored",
+            cleanup_status=(
+                "deferred_to_next_case" if request.defer_final_cleanup else "restored"
+            ),
             evidence_status="exported",
             summary_status="collected",
             verdict="detected_or_blocked",
