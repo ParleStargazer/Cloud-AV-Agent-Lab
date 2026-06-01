@@ -462,14 +462,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help=(
-            "enable product-side lightweight observation during post-execution delay"
+            "enable product-side lightweight observation during execution and "
+            "post-execution delay"
         ),
     )
     single_run_probe.add_argument(
         "--disable-product-probe",
         dest="product_probe_enabled",
         action="store_false",
-        help="disable product-side lightweight observation during post-execution delay",
+        help="disable product-side lightweight observation",
     )
     single_run.add_argument(
         "--post-execution-probe-interval-seconds",
@@ -623,14 +624,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help=(
-            "enable product-side lightweight observation during post-execution delay"
+            "enable product-side lightweight observation during execution and "
+            "post-execution delay"
         ),
     )
     multi_run_probe.add_argument(
         "--disable-product-probe",
         dest="product_probe_enabled",
         action="store_false",
-        help="disable product-side lightweight observation during post-execution delay",
+        help="disable product-side lightweight observation",
     )
     multi_run.add_argument(
         "--post-execution-probe-interval-seconds",
@@ -1297,6 +1299,7 @@ def _handle_multi_run(
                 ),
                 product_probe_available=product_probe_availability.available,
                 product_probe_skip_reason=(product_probe_availability.skip_reason),
+                execution_product_probe_enabled=product_probe_enabled,
             )
         else:
             artifacts = load_existing_multi_run_batch(
@@ -1551,7 +1554,8 @@ def _product_probe_value_or_prompt(value: bool | None) -> bool:
     if not sys.stdin.isatty():
         return False
     return prompt_bool(
-        "是否启用产品侧轻量probe？yes/no：可缩短等待时间，但正式结论仍以完整收集为准",
+        "是否启用产品侧轻量probe？yes/no：将在执行观测和执行后等待阶段使用，"
+        "可缩短等待时间，但正式结论仍以完整收集为准",
         default=False,
     )
 
@@ -1794,6 +1798,7 @@ def _single_run_options_from_args(
         ),
         product_probe_available=product_probe_available,
         product_probe_skip_reason=product_probe_skip_reason,
+        execution_product_probe_enabled=product_probe_enabled,
         salvage_timeout=NetworkTimeoutProfile(
             connect_seconds=args.salvage_connect_timeout_seconds,
             read_seconds=args.salvage_read_timeout_seconds,
@@ -1842,7 +1847,11 @@ def _confirm_single_run_real_operation(
     )
     print(
         "Product-side lightweight probe: "
-        + ("enabled" if options.product_probe_enabled else "disabled")
+        + (
+            "enabled (execution and post-execution)"
+            if options.product_probe_enabled
+            else "disabled"
+        )
     )
     if not sys.stdin.isatty():
         parser.exit(

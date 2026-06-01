@@ -777,7 +777,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             )
             self.assertTrue(plan["execution"]["product_probe_available"])
             self.assertEqual(plan["execution"]["product_probe_skip_reason"], "")
-            self.assertFalse(plan["execution"]["execution_product_probe_enabled"])
+            self.assertTrue(plan["execution"]["execution_product_probe_enabled"])
             self.assertEqual(
                 plan["execution"]["execution_product_probe_interval_seconds"],
                 1.0,
@@ -816,7 +816,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertIn("product_probe_available = true", generated_config)
             self.assertIn('product_probe_skip_reason = ""', generated_config)
             self.assertIn(
-                "execution_product_probe_enabled = false",
+                "execution_product_probe_enabled = true",
                 generated_config,
             )
             self.assertIn(
@@ -1740,6 +1740,7 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertTrue(options.product_probe_available)
         self.assertEqual(options.product_probe_skip_reason, "")
         self.assertEqual(options.post_execution_probe_interval_seconds, 1.0)
+        self.assertTrue(options.execution_product_probe_enabled)
         output = stdout.getvalue()
         self.assertIn("Single-run finished: completed", output)
         self.assertIn("Verdict: detected_or_blocked", output)
