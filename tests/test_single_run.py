@@ -961,6 +961,48 @@ class SingleRunTests(TestCase):
             self.assertTrue(execution["product_signal_seen_during_execution"])
             self.assertEqual(execution["product_probe_elapsed_seconds"], 4.0)
 
+    def test_execution_strong_signal_selects_short_post_execution_delay(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.bat"
+            sample_path.write_text("echo harmless", encoding="utf-8")
+            client = FakeGuestClient(probe_states=["strong_signal_observed"])
+            sleeps: list[float] = []
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="tencent-pc-manager",
+                    product_probe_available=True,
+                    execution_product_probe_enabled=True,
+                    product_probe_enabled=True,
+                    post_execution_collection_delay_seconds=45.0,
+                    post_execution_quarantine_delay_seconds=3.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertIn(3.0, sleeps)
+            self.assertNotIn(45.0, sleeps)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            collection = run_state["stages"]["collection"]
+            self.assertEqual(
+                collection["post_execution_collection_delay_seconds"],
+                3.0,
+            )
+            self.assertEqual(
+                collection["post_execution_delay_decision_source"],
+                "execution_strong_signal_observed",
+            )
+            self.assertEqual(
+                collection["product_probe_exit_reason"],
+                "execution_strong_signal_fixed_delay",
+            )
+
     def test_product_probe_unsupported_falls_back_to_fixed_delay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1473,6 +1515,7 @@ def _options(
     guest_ready_timeout_seconds: float = 180.0,
     guest_ready_successes: int = 2,
     post_execution_collection_delay_seconds: float = 45.0,
+    post_execution_quarantine_delay_seconds: float = 3.0,
     product_probe_enabled: bool = False,
     post_execution_probe_interval_seconds: float = 1.0,
     product_probe_available: bool = False,
@@ -1505,6 +1548,7 @@ def _options(
         post_execution_collection_delay_seconds=(
             post_execution_collection_delay_seconds
         ),
+        post_execution_quarantine_delay_seconds=post_execution_quarantine_delay_seconds,
         product_probe_enabled=product_probe_enabled,
         post_execution_probe_interval_seconds=post_execution_probe_interval_seconds,
         product_probe_available=product_probe_available,

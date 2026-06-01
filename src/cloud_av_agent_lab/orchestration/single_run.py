@@ -277,6 +277,15 @@ class _ExecutionProbeState:
 
 
 @dataclass(frozen=True)
+class _PostExecutionDelayDecision:
+    delay_seconds: float
+    default_delay_seconds: float
+    quarantine_delay_seconds: float
+    source: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class SingleRunResult:
     run_id: str
     case_id: str
@@ -885,9 +894,23 @@ def _run_single_case_locked(
                 warning_count += 1
 
         with state.step("post_execution_collection_delay"):
-            delay_seconds = max(options.post_execution_collection_delay_seconds, 0.0)
+            delay_decision = _select_post_execution_collection_delay(
+                execution_result,
+                default_delay_seconds=max(
+                    options.post_execution_collection_delay_seconds, 0.0
+                ),
+                quarantine_delay_seconds=max(
+                    options.post_execution_quarantine_delay_seconds, 0.0
+                ),
+            )
+            delay_seconds = delay_decision.delay_seconds
             probe_interval_seconds = max(
                 options.post_execution_probe_interval_seconds, 0.0
+            )
+            state.mark_stage(
+                "collection",
+                "post_execution_default_delay_seconds",
+                delay_decision.default_delay_seconds,
             )
             state.mark_stage(
                 "collection",
@@ -907,7 +930,17 @@ def _run_single_case_locked(
             state.mark_stage(
                 "collection",
                 "post_execution_quarantine_delay_seconds",
-                max(options.post_execution_quarantine_delay_seconds, 0.0),
+                delay_decision.quarantine_delay_seconds,
+            )
+            state.mark_stage(
+                "collection",
+                "post_execution_delay_decision_source",
+                delay_decision.source,
+            )
+            state.mark_stage(
+                "collection",
+                "post_execution_delay_decision_reason",
+                delay_decision.reason,
             )
             execution_state = execution_result["execution_state"]
             if options.dry_run:
@@ -936,7 +969,11 @@ def _run_single_case_locked(
                     reason,
                     delay_seconds,
                 )
-                if options.product_probe_enabled and probe_interval_seconds > 0:
+                if (
+                    options.product_probe_enabled
+                    and probe_interval_seconds > 0
+                    and delay_decision.source != "execution_strong_signal_observed"
+                ):
                     probe_result = _adaptive_post_execution_collection_delay(
                         client=client,
                         case_id=case_id,
@@ -958,7 +995,9 @@ def _run_single_case_locked(
                     state.mark_stage(
                         "collection",
                         "product_probe_exit_reason",
-                        "disabled_fixed_delay",
+                        "execution_strong_signal_fixed_delay"
+                        if delay_decision.source == "execution_strong_signal_observed"
+                        else "disabled_fixed_delay",
                     )
                 LOGGER.info(
                     "post-execution collection delay finished; continue log collection"
@@ -1658,6 +1697,31 @@ def _should_wait_after_execution_for_collection(
     if execution_result.get("status") not in {"observed", "not_started"}:
         return False
     return execution_result.get("execution_state") in TERMINAL_EXECUTION_STATES
+
+
+def _select_post_execution_collection_delay(
+    execution_result: dict[str, Any],
+    *,
+    default_delay_seconds: float,
+    quarantine_delay_seconds: float,
+) -> _PostExecutionDelayDecision:
+    if execution_result.get("strong_signal_observed"):
+        return _PostExecutionDelayDecision(
+            delay_seconds=quarantine_delay_seconds,
+            default_delay_seconds=default_delay_seconds,
+            quarantine_delay_seconds=quarantine_delay_seconds,
+            source="execution_strong_signal_observed",
+            reason=(
+                "execution-stage product probe observed a strong quarantine signal"
+            ),
+        )
+    return _PostExecutionDelayDecision(
+        delay_seconds=default_delay_seconds,
+        default_delay_seconds=default_delay_seconds,
+        quarantine_delay_seconds=quarantine_delay_seconds,
+        source="default",
+        reason="no execution-stage strong signal observed",
+    )
 
 
 def _adaptive_post_execution_collection_delay(
