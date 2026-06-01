@@ -848,6 +848,69 @@ class SingleRunTests(TestCase):
                 "strong_signal_observed",
             )
 
+    def test_execution_stage_probe_unsupported_continues_polling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.bat"
+            sample_path.write_text("echo harmless", encoding="utf-8")
+            client = FakeGuestClient(probe_states=["unsupported"])
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="tencent-pc-manager",
+                    product_probe_available=True,
+                    execution_product_probe_enabled=True,
+                    post_execution_collection_delay_seconds=0.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda _seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(client.probe_products, ["tencent-pc-manager"])
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            execution = run_state["stages"]["execution"]
+            self.assertTrue(execution["execution_product_probe_enabled"])
+            self.assertEqual(execution["product_probe_count"], 1)
+            self.assertEqual(execution["product_probe_last_state"], "unsupported")
+            self.assertFalse(execution["strong_signal_observed"])
+
+    def test_execution_stage_probe_failure_records_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.bat"
+            sample_path.write_text("echo harmless", encoding="utf-8")
+            client = FakeGuestClient(
+                probe_error=GuestAgentError("probe failed", source="remote")
+            )
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="tencent-pc-manager",
+                    product_probe_available=True,
+                    execution_product_probe_enabled=True,
+                    post_execution_collection_delay_seconds=0.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda _seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            execution = run_state["stages"]["execution"]
+            self.assertEqual(execution["product_probe_failed_count"], 1)
+            self.assertEqual(execution["product_probe_last_state"], "probe_failed")
+            self.assertIn(
+                "execution-stage product observation probe failed",
+                execution["product_probe_warning"],
+            )
+
     def test_product_probe_unsupported_falls_back_to_fixed_delay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1353,6 +1416,8 @@ def _options(
     post_execution_collection_delay_seconds: float = 45.0,
     product_probe_enabled: bool = False,
     post_execution_probe_interval_seconds: float = 1.0,
+    product_probe_available: bool = False,
+    execution_product_probe_enabled: bool = False,
     defer_final_cleanup: bool = False,
     skip_initial_restore: bool = False,
 ) -> SingleRunOptions:
@@ -1378,6 +1443,8 @@ def _options(
         ),
         product_probe_enabled=product_probe_enabled,
         post_execution_probe_interval_seconds=post_execution_probe_interval_seconds,
+        product_probe_available=product_probe_available,
+        execution_product_probe_enabled=execution_product_probe_enabled,
         salvage_timeout=salvage_timeout or NetworkTimeoutProfile(2, 5),
         defer_final_cleanup=defer_final_cleanup,
         skip_initial_restore=skip_initial_restore,

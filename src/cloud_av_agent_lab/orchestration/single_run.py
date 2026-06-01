@@ -230,7 +230,9 @@ class ExecutionObservationResult:
     product_probe_enabled: bool = False
     product_probe_supported: bool = False
     product_probe_count: int = 0
+    product_probe_failed_count: int = 0
     product_probe_last_state: str = ""
+    product_probe_warning: str = ""
     strong_signal_observed: bool = False
     exit_reason: str = ""
 
@@ -243,10 +245,24 @@ class ExecutionObservationResult:
             "product_probe_enabled": self.product_probe_enabled,
             "product_probe_supported": self.product_probe_supported,
             "product_probe_count": self.product_probe_count,
+            "product_probe_failed_count": self.product_probe_failed_count,
             "product_probe_last_state": self.product_probe_last_state,
+            "product_probe_warning": self.product_probe_warning,
             "strong_signal_observed": self.strong_signal_observed,
             "observation_exit_reason": self.exit_reason,
         }
+
+
+@dataclass
+class _ExecutionProbeState:
+    enabled: bool
+    supported: bool
+    count: int = 0
+    failed_count: int = 0
+    last_state: str = ""
+    warning: str = ""
+    strong_signal_observed: bool = False
+    disabled_after_fallback: bool = False
 
 
 @dataclass(frozen=True)
@@ -715,6 +731,9 @@ def _run_single_case_locked(
                 dry_run=options.dry_run,
                 poll_interval_seconds=options.execution_poll_interval_seconds,
                 poll_timeout_seconds=options.execution_poll_timeout_seconds,
+                product_id=product_id,
+                product_probe_enabled=options.execution_product_probe_enabled,
+                product_probe_supported=options.product_probe_available,
                 sleep=sleep,
             )
             state.mark("execution_action_status", execution_result["status"])
@@ -796,8 +815,18 @@ def _run_single_case_locked(
             )
             state.mark_stage(
                 "execution",
+                "product_probe_failed_count",
+                int(execution_result.get("product_probe_failed_count") or 0),
+            )
+            state.mark_stage(
+                "execution",
                 "product_probe_last_state",
                 str(execution_result.get("product_probe_last_state") or ""),
+            )
+            state.mark_stage(
+                "execution",
+                "product_probe_warning",
+                str(execution_result.get("product_probe_warning") or ""),
             )
             state.mark_stage(
                 "execution",
@@ -811,6 +840,11 @@ def _run_single_case_locked(
             )
             if execution_result["status"] in {"skipped", "not_started"}:
                 state.add_warning("execution", execution_result["reason"])
+                warning_count += 1
+            if execution_result.get("product_probe_warning"):
+                state.add_warning(
+                    "execution", str(execution_result["product_probe_warning"])
+                )
                 warning_count += 1
 
         with state.step("post_execution_collection_delay"):
@@ -1443,8 +1477,11 @@ def _execute_after_upload_observation(
     dry_run: bool,
     poll_interval_seconds: float,
     poll_timeout_seconds: float,
+    product_id: str,
+    product_probe_enabled: bool,
+    product_probe_supported: bool,
     sleep: SleepFunc,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     normalized_upload_state = upload_state.casefold()
     if normalized_upload_state != "stable":
         execution_state = f"skipped_{normalized_upload_state or 'unknown'}"
@@ -1543,6 +1580,9 @@ def _execute_after_upload_observation(
         case_id,
         poll_interval_seconds=poll_interval_seconds,
         timeout_seconds=poll_timeout_seconds,
+        product_id=product_id,
+        product_probe_enabled=product_probe_enabled,
+        product_probe_supported=product_probe_supported,
         sleep=sleep,
     )
     final_response = final_observation.response
@@ -1690,10 +1730,17 @@ def _poll_execution_status(
     *,
     poll_interval_seconds: float,
     timeout_seconds: float,
+    product_id: str,
+    product_probe_enabled: bool,
+    product_probe_supported: bool,
     sleep: SleepFunc,
 ) -> ExecutionObservationResult:
     elapsed = 0.0
     last_response: GuestAgentResponse | None = None
+    probe_state = _ExecutionProbeState(
+        enabled=product_probe_enabled,
+        supported=product_probe_supported,
+    )
     while True:
         last_response = client.execution_status(case_id)
         execution_state = str(_extract_execution_state(last_response.data) or "unknown")
@@ -1705,12 +1752,19 @@ def _poll_execution_status(
             execution_state,
             children_count,
         )
+        _probe_during_execution(
+            client=client,
+            case_id=case_id,
+            product_id=product_id,
+            state=probe_state,
+        )
         if execution_state in TERMINAL_EXECUTION_STATES:
             return _execution_observation_result(
                 last_response,
                 execution_state=execution_state,
                 elapsed_seconds=elapsed,
                 exit_reason="terminal_state",
+                probe_state=probe_state,
             )
         if elapsed >= timeout_seconds:
             if execution_state == "running":
@@ -1727,12 +1781,14 @@ def _poll_execution_status(
                     execution_state=timeout_state,
                     elapsed_seconds=elapsed,
                     exit_reason="timeout",
+                    probe_state=probe_state,
                 )
             return _execution_observation_result(
                 last_response,
                 execution_state=execution_state,
                 elapsed_seconds=elapsed,
                 exit_reason="timeout",
+                probe_state=probe_state,
             )
         wait_seconds = min(poll_interval_seconds, timeout_seconds - elapsed)
         if wait_seconds <= 0:
@@ -1741,6 +1797,7 @@ def _poll_execution_status(
                 execution_state=execution_state,
                 elapsed_seconds=elapsed,
                 exit_reason="poll_interval_exhausted",
+                probe_state=probe_state,
             )
         sleep(wait_seconds)
         elapsed += wait_seconds
@@ -1752,6 +1809,7 @@ def _execution_observation_result(
     execution_state: str,
     elapsed_seconds: float,
     exit_reason: str,
+    probe_state: _ExecutionProbeState,
 ) -> ExecutionObservationResult:
     return ExecutionObservationResult(
         response=response,
@@ -1760,8 +1818,60 @@ def _execution_observation_result(
         root_pid=_extract_root_pid(response.data),
         children_count=_children_count(response.data),
         elapsed_seconds=elapsed_seconds,
+        product_probe_enabled=probe_state.enabled,
+        product_probe_supported=probe_state.supported,
+        product_probe_count=probe_state.count,
+        product_probe_failed_count=probe_state.failed_count,
+        product_probe_last_state=probe_state.last_state,
+        product_probe_warning=probe_state.warning,
+        strong_signal_observed=probe_state.strong_signal_observed,
         exit_reason=exit_reason,
     )
+
+
+def _probe_during_execution(
+    *,
+    client: GuestAgentClient,
+    case_id: str,
+    product_id: str,
+    state: _ExecutionProbeState,
+) -> None:
+    if (
+        not state.enabled
+        or not state.supported
+        or state.disabled_after_fallback
+        or not product_id
+    ):
+        return
+    state.count += 1
+    try:
+        response = client.probe_collection(
+            case_id,
+            product_id,
+            timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+        )
+    except GuestAgentError:
+        state.failed_count += 1
+        state.last_state = "probe_failed"
+        state.warning = (
+            "execution-stage product observation probe failed; "
+            "execution polling continued"
+        )
+        state.disabled_after_fallback = True
+        return
+
+    probe_state = str(response.data.get("probe_state") or "unknown")
+    state.last_state = probe_state
+    if probe_state == "strong_signal_observed":
+        state.strong_signal_observed = True
+    if probe_state in {"unsupported", "probe_failed"}:
+        if probe_state == "probe_failed":
+            state.failed_count += 1
+            state.warning = (
+                "execution-stage product observation probe returned probe_failed; "
+                "execution polling continued"
+            )
+        state.disabled_after_fallback = True
 
 
 def _write_summary_outputs(run_dir: Path, summary: dict[str, Any]) -> Path:
