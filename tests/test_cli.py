@@ -868,6 +868,51 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertIn('"type": "plan_created"', events)
             self.assertIn('"type": "single_run_completed"', events)
 
+    def test_multi_run_enable_product_probe_requires_supported_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            manifest_path = tmp_path / "sample_manifest.jsonl"
+            _write_multi_run_manifest(
+                manifest_path,
+                [_multi_run_manifest_entry(1)],
+            )
+            stderr = StringIO()
+
+            with (
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
+                main(
+                    [
+                        "multi-run",
+                        "--product",
+                        "huorong",
+                        "--instance-id",
+                        "lhins-example",
+                        "--snapshot-id",
+                        "lhsnap-example",
+                        "--region",
+                        "ap-singapore",
+                        "--guest-agent-url",
+                        "http://127.0.0.1:8080",
+                        "--manifest",
+                        str(manifest_path),
+                        "--batch-root",
+                        str(tmp_path / "batches"),
+                        "--batch-id",
+                        "unsupported-probe-test",
+                        "--all",
+                        "--dry-run",
+                        "--enable-product-probe",
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn(
+            "product-side lightweight probe is not available",
+            stderr.getvalue(),
+        )
+
     def test_multi_run_plan_only_writes_config_without_secret_or_token(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -1050,7 +1095,6 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "",
                         "",
                         "",
-                        "",
                         "yes",
                     ],
                 ) as input_mock,
@@ -1086,7 +1130,7 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertFalse(plan["execution"]["product_probe_enabled"])
             self.assertEqual(plan["execution"]["cleanup_strategy"], "deferred")
             prompts = [call.args[0] for call in input_mock.call_args_list]
-            self.assertIn("是否启用产品侧轻量probe", prompts[-4])
+            self.assertFalse(any("是否启用产品侧轻量probe" in item for item in prompts))
             self.assertIn("是否开启快速模式", prompts[-2])
             self.assertIn("是否启用中间case切换只回滚一次快照", prompts[-1])
             self.assertEqual(plan["selection"]["mode"], "all")
@@ -1161,7 +1205,6 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "lhsnap-example",
                         "",
                         "http://127.0.0.1:8080",
-                        "",
                         "",
                         "",
                         "",
@@ -1669,7 +1712,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                         "--sample-path",
                         str(sample_path),
                         "--product",
-                        "huorong",
+                        "tencent-pc-manager",
                         "--guest-agent-url",
                         "http://127.0.0.1:8080",
                         "--settling-cooldown-seconds",
@@ -1694,6 +1737,8 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(options.upload_poll_timeout_seconds, 11.0)
         self.assertEqual(options.post_execution_collection_delay_seconds, 66.0)
         self.assertTrue(options.product_probe_enabled)
+        self.assertTrue(options.product_probe_available)
+        self.assertEqual(options.product_probe_skip_reason, "")
         self.assertEqual(options.post_execution_probe_interval_seconds, 1.0)
         output = stdout.getvalue()
         self.assertIn("Single-run finished: completed", output)
@@ -1868,6 +1913,46 @@ class CloudLifecycleCliGuardTests(TestCase):
         self.assertEqual(
             run_single.call_args.args[0].product_id,
             "tencent-pc-manager",
+        )
+
+    def test_single_run_enable_product_probe_requires_supported_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.txt"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            stderr = StringIO()
+
+            with (
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_error,
+            ):
+                main(
+                    [
+                        "single-run",
+                        "--dry-run",
+                        "--instance-id",
+                        "lhins-example",
+                        "--snapshot-id",
+                        "lhsnap-example",
+                        "--region",
+                        "ap-singapore",
+                        "--sample-name",
+                        "eicar",
+                        "--sample-path",
+                        str(sample_path),
+                        "--product",
+                        "huorong",
+                        "--guest-agent-url",
+                        "http://127.0.0.1:8080",
+                        "--enable-product-probe",
+                        "--runs-dir",
+                        str(root / "runs"),
+                    ]
+                )
+
+        self.assertEqual(exit_error.exception.code, 2)
+        self.assertIn(
+            "product-side lightweight probe is not available", stderr.getvalue()
         )
 
     def test_single_run_prompts_product_before_generated_config_inputs(self) -> None:

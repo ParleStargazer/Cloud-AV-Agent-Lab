@@ -1234,6 +1234,17 @@ def _handle_multi_run(
     ):
         if not value:
             parser.exit(2, f"error: {name} is required for multi-run planning\n")
+    product_probe_availability = resolve_product_probe_availability(
+        args.product,
+        supported_product_observation_probes(),
+    )
+    if product_probe_enabled and not product_probe_availability.available:
+        parser.exit(
+            2,
+            "error: [Local Check] product-side lightweight probe is not "
+            f"available for {args.product!r}; supported probe products: "
+            f"{', '.join(supported_product_observation_probes()) or 'none'}\n",
+        )
 
     try:
         if args.manifest:
@@ -1259,10 +1270,6 @@ def _handle_multi_run(
             max_cases=args.max_cases,
         )
         if execution_mode == "run":
-            product_probe_availability = resolve_product_probe_availability(
-                args.product,
-                supported_product_observation_probes(),
-            )
             artifacts = create_multi_run_batch_plan(
                 batch_root=args.batch_root,
                 batch_id=batch_id,
@@ -1484,9 +1491,12 @@ def _multi_run_prompt_missing_inputs(
         args.post_execution_collection_delay_seconds,
         DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
     )
-    args.product_probe_enabled = _product_probe_value_or_prompt(
-        args.product_probe_enabled
+    product_probe_enabled, _, _ = _product_probe_value_for_product(
+        parser,
+        product_id=args.product,
+        value=args.product_probe_enabled,
     )
+    args.product_probe_enabled = product_probe_enabled
     if not args.manifest and not args.sample_dir:
         args.sample_dir = prompt_default(
             "Cloud platform sample directory",
@@ -1544,6 +1554,37 @@ def _product_probe_value_or_prompt(value: bool | None) -> bool:
         "是否启用产品侧轻量probe？yes/no：可缩短等待时间，但正式结论仍以完整收集为准",
         default=False,
     )
+
+
+def _product_probe_value_for_product(
+    parser: argparse.ArgumentParser,
+    *,
+    product_id: str,
+    value: bool | None,
+) -> tuple[bool, bool, str]:
+    availability = resolve_product_probe_availability(
+        product_id,
+        supported_product_observation_probes(),
+    )
+    if availability.available:
+        return (
+            _product_probe_value_or_prompt(value),
+            availability.available,
+            availability.skip_reason,
+        )
+    if value is True:
+        parser.exit(
+            2,
+            "error: [Local Check] product-side lightweight probe is not "
+            f"available for {product_id!r}; supported probe products: "
+            f"{', '.join(supported_product_observation_probes()) or 'none'}\n",
+        )
+    if value is None and sys.stdin.isatty():
+        print(
+            f"Product probe is not available for {product_id}; using default "
+            "execution/status polling and post-execution delay."
+        )
+    return False, availability.available, availability.skip_reason
 
 
 def _delay_value_or_default(
@@ -1715,7 +1756,15 @@ def _single_run_options_from_args(
         args.post_execution_collection_delay_seconds,
         DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
     )
-    product_probe_enabled = _product_probe_value_or_prompt(args.product_probe_enabled)
+    (
+        product_probe_enabled,
+        product_probe_available,
+        product_probe_skip_reason,
+    ) = _product_probe_value_for_product(
+        parser,
+        product_id=product_id,
+        value=args.product_probe_enabled,
+    )
     return SingleRunOptions(
         instance_id=instance_id,
         snapshot_id=snapshot_id,
@@ -1743,6 +1792,8 @@ def _single_run_options_from_args(
         post_execution_probe_interval_seconds=(
             args.post_execution_probe_interval_seconds
         ),
+        product_probe_available=product_probe_available,
+        product_probe_skip_reason=product_probe_skip_reason,
         salvage_timeout=NetworkTimeoutProfile(
             connect_seconds=args.salvage_connect_timeout_seconds,
             read_seconds=args.salvage_read_timeout_seconds,
