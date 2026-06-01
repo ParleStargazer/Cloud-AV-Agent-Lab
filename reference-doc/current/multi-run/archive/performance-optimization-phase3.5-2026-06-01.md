@@ -799,3 +799,102 @@ OK
 - 未读取、上传或执行样本文件。
 - 未新增 shell / PowerShell / cmd / subprocess 路径。
 - 未改变 product probe / collector / evaluator 的职责边界。
+
+### Phase 3.5 封口验证：20260601-162301 Tencent PC Manager batch
+
+验证时间：2026-06-01
+
+验证对象：
+
+```text
+runs/batch_20260601-162301_tencent-pc-manager
+```
+
+功能结论：
+
+- batch 进入 terminal state：
+  - `final_status = completed_with_warnings`
+  - `batch_cleanup_status = restored`
+  - `emergency_poweroff_status = not_needed`
+  - `unsafe_to_continue = false`
+  - `manual_intervention_required = false`
+- 94 个 case 全部完成：
+  - `case_status = completed`: 94
+  - `summary_status = collected`: 94
+  - `evidence_status = exported`: 94
+  - `indexed_sample_state = burned`: 94
+  - `failure_kind = none`: 94
+- cleanup 语义符合 fastmode / deferred cleanup 设计：
+  - 93 个中间 case 记录 `cleanup_status = deferred_to_next_case`
+  - 最后一个 case 记录 `cleanup_status = restored`
+  - batch terminal 前完成最终 snapshot restore。
+- product probe 行为符合 Phase 3.5 预期：
+  - `product_probe_enabled = true`
+  - `execution_product_probe_enabled = true`
+  - `product_probe_available = true`
+  - post-execution probe 对强信号 case 可提前结束等待。
+- verdict 统计：
+  - `detected_or_blocked = 63`
+  - `inconclusive = 31`
+  - `evaluable_cases = 94`
+  - `fastmode_observed_detection_rate = 63/94`
+- 该 detection rate 是 fastmode 下的 exploratory metric，不可与 clean snapshot baseline 直接比较。
+
+耗时结论：
+
+- 当前批次：
+  - average case seconds: `58.161309`
+  - p95 case seconds: `143.307952`
+  - total timed case seconds: `5467.16306`
+- 对比 Phase 2 封版批次 `runs/batch_20260531-234709_tencent-pc-manager`：
+  - average case seconds: `68.952027 -> 58.161309`
+  - p95 case seconds: `165.695424 -> 143.307952`
+- 对比 Phase 3 半封口批次 `runs/batch_20260601-110658_tencent-pc-manager`：
+  - average case seconds: `66.3264 -> 58.161309`
+  - p95 case seconds: `156.543989 -> 143.307952`
+- 主要阶段耗时：
+  - `wait_guest_agent_ready`: total `1572.34s`, avg `16.73s`
+  - `restore_snapshot_initial`: total `1047.36s`, avg `33.79s`, count `31`
+  - `post_execution_collection_delay`: total `826.63s`, avg `8.79s`
+  - `stop_before_restore`: total `792.48s`, avg `25.56s`, count `31`
+  - `execute_action`: total `446.48s`, avg `4.75s`
+  - `upload_sample`: total `343.94s`, avg `3.66s`
+  - `settling_cooldown`: total `283.21s`, avg `3.01s`
+- Phase 3.5 的 upload polling 修正已经生效：
+  - Phase 3 半封口 upload avg `10.63s`
+  - Phase 3.5 封口 upload avg `3.66s`
+- post-execution adaptive probe 修正已经生效：
+  - 63 个 case 以 `strong_signal_observed` 提前进入 collection；
+  - 29 个 case 跑满 max delay；
+  - 2 个 timeout-running case 未进入 post-execution delay。
+- 当前主要瓶颈已经转移到环境 ready 和必要 restore：
+  - fastmode 可减少 restore 次数，但 Guest Agent ready 仍受 Windows / 网络 / 服务启动波动影响；
+  - 后续优化应优先考虑 ready gate 的观测解释、超时统计和重试策略，而不是继续缩短 collector 本身。
+
+检出波动说明：
+
+- 与 `runs/batch_20260601-110658_tencent-pc-manager` 相比：
+  - 本轮减少检出 index: `9, 67, 80, 85`
+  - 本轮新增检出 index: `81, 86`
+- 在四次近期 fastmode batch 中稳定检出的样本数为 54。
+- 波动符合当前 fastmode / 产品异步处理 / TAV 元数据归因模型预期。
+- fastmode 结果继续标记为 exploratory，不作为 clean snapshot baseline 统计。
+
+封口结论：
+
+- Phase 3.5 的工程目标已完成：
+  - probe 引导联动；
+  - upload 状态即时轮询；
+  - runtime 参数进入 aggregate summary；
+  - Windows lock 写入鲁棒性和 post-collection heartbeat 降级；
+  - post-execution probe fallback hotfix。
+- 最新真实 batch 未发现阻断性逻辑问题。
+- 本文档进入归档，不再作为当前 active plan 继续追加功能。
+
+边界确认：
+
+- 未读取 `configs/real.toml`。
+- 未触发额外真实云 API。
+- 未读取、上传或执行额外样本文件。
+- 未新增 shell / PowerShell / cmd / subprocess 路径。
+- 未改变 collector / evaluator / evidence exporter 的职责边界。

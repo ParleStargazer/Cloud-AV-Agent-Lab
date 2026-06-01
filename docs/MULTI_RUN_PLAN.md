@@ -197,27 +197,59 @@ Result:
 - 0 environment failures
 - 0 case failures
 - verdicts: 70 `detected_or_blocked`, 24 `inconclusive`
-- timing showed the next bottlenecks are upload status polling, Guest Agent
-  ready checks, fixed post-execution collection delay, and settling cooldown.
+- timing at this point showed the next bottlenecks were upload status polling,
+  Guest Agent ready checks, fixed post-execution collection delay, and settling
+  cooldown. Later Phase 2 / Phase 3.5 work addressed these where safe.
 - fastmode metrics remain exploratory and are not comparable with clean
   snapshot baseline detection rates.
 
-## Next Optimization Work
+## Performance Optimization Closure
 
-The next stage is dynamic waiting and product-compatible observation probes,
-not another feature rewrite.
+Phase 2 and Phase 3.5 performance optimization are now closed. The current
+implementation includes:
 
-Planned work:
+1. `upload-status-timeout-seconds` in `single-run` and `multi-run`.
+2. Fastmode quick ready gate for reused environments, with the settling
+   cooldown reduced to 3 seconds.
+3. Product-compatible observation probe schema and registry.
+4. Adaptive post-execution collection waiting: wait up to the configured
+   maximum, probe once per second, and continue early when a strong product
+   signal appears.
+5. Product probe heartbeats during execution observation. Probe signals are
+   timing hints only; they do not replace collection or evaluator verdicts.
+6. Runtime parameter capture in aggregate summaries so batch timing comparisons
+   are tied to the actual delays and probe settings.
+7. Windows lock/write robustness fixes for post-collection summary and evidence
+   persistence.
 
-1. Expose `upload-status-timeout-seconds` in `single-run` and `multi-run`.
-2. In fastmode reused environments, use a quick Guest Agent / Worker ready gate
-   and reduce settling cooldown to 3 seconds.
-3. Add a product-compatible collector probe schema and registry.
-4. Replace fixed post-execution collection delay with adaptive polling:
-   wait up to the configured maximum, probe once per second, and continue early
-   when a strong product signal appears.
-5. Add product probe heartbeats during execution observation without treating
-   a still-running process as safe to clean up.
+Latest closure smoke:
 
-Detailed planning lives in
-`reference-doc/current/multi-run/performance-optimization-plan.md`.
+```text
+runs/batch_20260601-162301_tencent-pc-manager
+```
+
+Result:
+
+- `product_id = tencent-pc-manager`
+- `fastmode = true`
+- 94 selected samples
+- final status `completed_with_warnings`
+- batch cleanup `restored`
+- emergency poweroff `not_needed`
+- 94/94 cases completed
+- 94/94 summary collected
+- 94/94 evidence exported
+- 94/94 indexed mirrors burned after persisted terminal results
+- 0 environment failures
+- 0 case failures
+- verdicts: 63 `detected_or_blocked`, 31 `inconclusive`
+- average case seconds: `58.161309`
+- p95 case seconds: `143.307952`
+
+The major remaining time sinks are Guest Agent ready waits and necessary
+snapshot restore/stop operations. Fastmode metrics remain exploratory and are
+not comparable with clean snapshot baseline detection rates.
+
+Detailed historical planning lives in
+`reference-doc/current/multi-run/performance-optimization-plan.md` and
+`reference-doc/current/multi-run/archive/`.

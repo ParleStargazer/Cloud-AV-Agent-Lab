@@ -392,11 +392,14 @@ Manifest 中的 `redaction_policy` 是结构化自描述对象：当前默认开
   metadata，不读取样本本体、raw product logs、token、云密钥或
   `configs/real.toml`。
 
-`runs/batch_20260530-235629_tencent-pc-manager` 的云端批量 smoke 已验证：
-94 个样本全部完成，readiness / cleanup / summary / evidence 均闭环，0 个
-environment failure，最终 `completed_with_warnings`。下一阶段优化重点是
-timing aggregation、indexed 样本“测后即焚”和 opt-in deferred cleanup。详细设计见
-`docs/MULTI_RUN_PLAN.md` 和 `reference-doc/current/multi-run/performance-optimization-plan.md`。
+`multi-run` MVP 与三轮性能优化已经完成云端验证。当前实现支持 timing
+aggregation、indexed 样本“测后即焚”、fastmode / deferred cleanup、upload
+即时状态轮询、产品侧 observation probe、execution-stage probe、adaptive
+post-execution delay、runtime 参数记录和 Windows lock 写入鲁棒性收口。最新
+封口批次 `runs/batch_20260601-162301_tencent-pc-manager` 验证 94 个样本全部
+完成，summary / evidence 全部导出，indexed mirror 全部 burned，最终
+`completed_with_warnings` 且 `batch_cleanup_status = restored`。详细设计与历史
+记录见 `docs/MULTI_RUN_PLAN.md` 和 `reference-doc/current/multi-run/archive/`。
 
 ## 结构拆分记录
 

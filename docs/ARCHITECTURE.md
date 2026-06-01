@@ -228,11 +228,14 @@ credentials, or real cloud configs. Cloud platform sample indexing writes an
 indexed mirror under the batch directory for stable digest-checked `single-run`
 inputs, but that mirror is not evidence and is excluded from evidence bundles.
 
-The next optimization phase is storage and runtime reduction: indexed sample
-burn-after-case, timing aggregation, and opt-in deferred cleanup. Deferred
-cleanup must still preserve the invariant that every case starts with an
-initial snapshot restore, and the batch end / failure path must still perform
-final cleanup or emergency stop. See `docs/MULTI_RUN_PLAN.md`.
+The storage and runtime optimization rounds are now closed. Multi-run records
+timing aggregates, burns indexed mirrors only after terminal case artifacts are
+persisted, supports opt-in fastmode / deferred cleanup, polls upload status
+immediately, uses product observation probes as timing hints, and captures the
+runtime parameters used by each batch. Deferred cleanup still preserves the
+invariant that every case starts with an initial snapshot restore, and the
+batch end / failure path must still perform final cleanup or emergency stop.
+See `docs/MULTI_RUN_PLAN.md`.
 
 `VmProfile` represents a recoverable test environment profile, not necessarily a unique cloud machine. Multiple profiles may share the same Lighthouse `instance_id` when each profile points to a different `baseline_snapshot` and `product_id`. This single-instance, multi-snapshot layout is supported as long as orchestration remains serial or future schedulers lock by `instance_id`.
 
