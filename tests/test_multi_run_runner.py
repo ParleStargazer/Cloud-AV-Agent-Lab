@@ -150,6 +150,11 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
         self.assertEqual(payload["post_execution_collection_delay_seconds"], 45.0)
         self.assertFalse(payload["product_probe_enabled"])
         self.assertEqual(payload["post_execution_probe_interval_seconds"], 1.0)
+        self.assertFalse(payload["product_probe_available"])
+        self.assertEqual(payload["product_probe_skip_reason"], "")
+        self.assertFalse(payload["execution_product_probe_enabled"])
+        self.assertEqual(payload["execution_product_probe_interval_seconds"], 1.0)
+        self.assertEqual(payload["post_execution_quarantine_delay_seconds"], 3.0)
         self.assertNotIn("sample_bytes", payload)
         self.assertNotIn("content", payload)
 
@@ -189,6 +194,21 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
                 )
                 captured["post_execution_probe_interval_seconds"] = getattr(
                     options, "post_execution_probe_interval_seconds"
+                )
+                captured["product_probe_available"] = getattr(
+                    options, "product_probe_available"
+                )
+                captured["product_probe_skip_reason"] = getattr(
+                    options, "product_probe_skip_reason"
+                )
+                captured["execution_product_probe_enabled"] = getattr(
+                    options, "execution_product_probe_enabled"
+                )
+                captured["execution_product_probe_interval_seconds"] = getattr(
+                    options, "execution_product_probe_interval_seconds"
+                )
+                captured["post_execution_quarantine_delay_seconds"] = getattr(
+                    options, "post_execution_quarantine_delay_seconds"
                 )
                 run_dir = Path(getattr(options, "runs_dir")) / "run-001"
                 run_dir.mkdir(parents=True)
@@ -240,6 +260,11 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
             self.assertEqual(captured["post_execution_collection_delay_seconds"], 45.0)
             self.assertFalse(captured["product_probe_enabled"])
             self.assertEqual(captured["post_execution_probe_interval_seconds"], 1.0)
+            self.assertFalse(captured["product_probe_available"])
+            self.assertEqual(captured["product_probe_skip_reason"], "")
+            self.assertFalse(captured["execution_product_probe_enabled"])
+            self.assertEqual(captured["execution_product_probe_interval_seconds"], 1.0)
+            self.assertEqual(captured["post_execution_quarantine_delay_seconds"], 3.0)
             self.assertEqual(result.run_id, "real-run-001")
             self.assertEqual(result.case_id, "real-case-001")
             self.assertEqual(result.result_source, "single_run_runner")

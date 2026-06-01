@@ -52,6 +52,7 @@ DEFAULT_EXECUTION_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_EXECUTION_POLL_TIMEOUT_SECONDS = 60.0
 DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS = 45.0
 DEFAULT_POST_EXECUTION_PROBE_INTERVAL_SECONDS = 1.0
+DEFAULT_POST_EXECUTION_QUARANTINE_DELAY_SECONDS = 3.0
 TERMINAL_EXECUTION_STATES = {
     "exited_cleanly",
     "exited_with_error",
@@ -192,6 +193,15 @@ class SingleRunOptions:
     product_probe_enabled: bool = False
     post_execution_probe_interval_seconds: float = (
         DEFAULT_POST_EXECUTION_PROBE_INTERVAL_SECONDS
+    )
+    product_probe_available: bool = False
+    product_probe_skip_reason: str = ""
+    execution_product_probe_enabled: bool = False
+    execution_product_probe_interval_seconds: float = (
+        DEFAULT_POST_EXECUTION_PROBE_INTERVAL_SECONDS
+    )
+    post_execution_quarantine_delay_seconds: float = (
+        DEFAULT_POST_EXECUTION_QUARANTINE_DELAY_SECONDS
     )
     cloud_poll_timeout_seconds: float = 600.0
     cloud_poll_interval_seconds: float = 5.0
@@ -704,6 +714,26 @@ def _run_single_case_locked(
                 "execution_mode",
                 execution_result.get("execution_mode", ""),
             )
+            state.mark_stage(
+                "execution",
+                "product_probe_available",
+                options.product_probe_available,
+            )
+            state.mark_stage(
+                "execution",
+                "product_probe_skip_reason",
+                options.product_probe_skip_reason,
+            )
+            state.mark_stage(
+                "execution",
+                "execution_product_probe_enabled",
+                options.execution_product_probe_enabled,
+            )
+            state.mark_stage(
+                "execution",
+                "execution_product_probe_interval_seconds",
+                max(options.execution_product_probe_interval_seconds, 0.0),
+            )
             if execution_result["status"] in {"skipped", "not_started"}:
                 state.add_warning("execution", execution_result["reason"])
                 warning_count += 1
@@ -727,6 +757,11 @@ def _run_single_case_locked(
                 "collection",
                 "post_execution_probe_interval_seconds",
                 probe_interval_seconds,
+            )
+            state.mark_stage(
+                "collection",
+                "post_execution_quarantine_delay_seconds",
+                max(options.post_execution_quarantine_delay_seconds, 0.0),
             )
             execution_state = execution_result["execution_state"]
             if options.dry_run:

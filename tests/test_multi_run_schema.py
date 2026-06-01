@@ -83,6 +83,11 @@ class MultiRunSchemaTests(unittest.TestCase):
                 post_execution_collection_delay_seconds=66.0,
                 product_probe_enabled=True,
                 post_execution_probe_interval_seconds=1.5,
+                product_probe_available=True,
+                product_probe_skip_reason="",
+                execution_product_probe_enabled=True,
+                execution_product_probe_interval_seconds=0.75,
+                post_execution_quarantine_delay_seconds=3.0,
                 cleanup_strategy="deferred",
             ),
             single_run_runner_version="single-run.v1",
@@ -112,6 +117,17 @@ class MultiRunSchemaTests(unittest.TestCase):
         self.assertEqual(
             payload["execution"]["post_execution_probe_interval_seconds"],
             1.5,
+        )
+        self.assertTrue(payload["execution"]["product_probe_available"])
+        self.assertEqual(payload["execution"]["product_probe_skip_reason"], "")
+        self.assertTrue(payload["execution"]["execution_product_probe_enabled"])
+        self.assertEqual(
+            payload["execution"]["execution_product_probe_interval_seconds"],
+            0.75,
+        )
+        self.assertEqual(
+            payload["execution"]["post_execution_quarantine_delay_seconds"],
+            3.0,
         )
         self.assertEqual(payload["execution"]["cleanup_strategy"], "deferred")
         json.dumps(payload)

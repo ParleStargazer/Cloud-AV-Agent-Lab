@@ -25,6 +25,7 @@ DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS = 15.0
 DEFAULT_MULTI_RUN_UPLOAD_STATUS_TIMEOUT_SECONDS = 30.0
 DEFAULT_MULTI_RUN_POST_EXECUTION_COLLECTION_DELAY_SECONDS = 45.0
 DEFAULT_MULTI_RUN_POST_EXECUTION_PROBE_INTERVAL_SECONDS = 1.0
+DEFAULT_MULTI_RUN_POST_EXECUTION_QUARANTINE_DELAY_SECONDS = 3.0
 IGNORED_SAMPLE_INDEX_FILENAMES = frozenset(
     {".gitignore", ".gitkeep", "readme", "readme.md", "readme.txt"}
 )
@@ -979,6 +980,15 @@ class BatchExecutionPolicy:
     post_execution_probe_interval_seconds: float = (
         DEFAULT_MULTI_RUN_POST_EXECUTION_PROBE_INTERVAL_SECONDS
     )
+    product_probe_available: bool = False
+    product_probe_skip_reason: str = ""
+    execution_product_probe_enabled: bool = False
+    execution_product_probe_interval_seconds: float = (
+        DEFAULT_MULTI_RUN_POST_EXECUTION_PROBE_INTERVAL_SECONDS
+    )
+    post_execution_quarantine_delay_seconds: float = (
+        DEFAULT_MULTI_RUN_POST_EXECUTION_QUARANTINE_DELAY_SECONDS
+    )
     environment_failure_policy: str = "stop"
     cleanup_strategy: CleanupStrategy = "per_case"
 
@@ -998,6 +1008,15 @@ class BatchExecutionPolicy:
             "product_probe_enabled": self.product_probe_enabled,
             "post_execution_probe_interval_seconds": (
                 self.post_execution_probe_interval_seconds
+            ),
+            "product_probe_available": self.product_probe_available,
+            "product_probe_skip_reason": self.product_probe_skip_reason,
+            "execution_product_probe_enabled": (self.execution_product_probe_enabled),
+            "execution_product_probe_interval_seconds": (
+                self.execution_product_probe_interval_seconds
+            ),
+            "post_execution_quarantine_delay_seconds": (
+                self.post_execution_quarantine_delay_seconds
             ),
             "environment_failure_policy": self.environment_failure_policy,
             "cleanup_strategy": self.cleanup_strategy,
@@ -1189,6 +1208,15 @@ def create_multi_run_batch_plan(
     post_execution_probe_interval_seconds: float = (
         DEFAULT_MULTI_RUN_POST_EXECUTION_PROBE_INTERVAL_SECONDS
     ),
+    product_probe_available: bool = False,
+    product_probe_skip_reason: str = "",
+    execution_product_probe_enabled: bool = False,
+    execution_product_probe_interval_seconds: float = (
+        DEFAULT_MULTI_RUN_POST_EXECUTION_PROBE_INTERVAL_SECONDS
+    ),
+    post_execution_quarantine_delay_seconds: float = (
+        DEFAULT_MULTI_RUN_POST_EXECUTION_QUARANTINE_DELAY_SECONDS
+    ),
 ) -> MultiRunPlanArtifacts:
     resolved_batch_id = _safe_batch_id(batch_id or default_batch_id(product_id))
     if cleanup_strategy not in CLEANUP_STRATEGIES:
@@ -1205,6 +1233,14 @@ def create_multi_run_batch_plan(
     _ensure_non_negative_delay(
         "post_execution_probe_interval_seconds",
         post_execution_probe_interval_seconds,
+    )
+    _ensure_non_negative_delay(
+        "execution_product_probe_interval_seconds",
+        execution_product_probe_interval_seconds,
+    )
+    _ensure_non_negative_delay(
+        "post_execution_quarantine_delay_seconds",
+        post_execution_quarantine_delay_seconds,
     )
     batch_dir = Path(batch_root) / resolved_batch_id
     batch_dir.mkdir(parents=True, exist_ok=True)
@@ -1245,6 +1281,15 @@ def create_multi_run_batch_plan(
         ),
         product_probe_enabled=product_probe_enabled,
         post_execution_probe_interval_seconds=post_execution_probe_interval_seconds,
+        product_probe_available=product_probe_available,
+        product_probe_skip_reason=product_probe_skip_reason,
+        execution_product_probe_enabled=execution_product_probe_enabled,
+        execution_product_probe_interval_seconds=(
+            execution_product_probe_interval_seconds
+        ),
+        post_execution_quarantine_delay_seconds=(
+            post_execution_quarantine_delay_seconds
+        ),
     )
     generated_config_bytes = generated_config.encode("utf-8")
     generated_config_sha256 = compute_bytes_sha256(generated_config_bytes)
@@ -1277,6 +1322,15 @@ def create_multi_run_batch_plan(
             ),
             product_probe_enabled=product_probe_enabled,
             post_execution_probe_interval_seconds=post_execution_probe_interval_seconds,
+            product_probe_available=product_probe_available,
+            product_probe_skip_reason=product_probe_skip_reason,
+            execution_product_probe_enabled=execution_product_probe_enabled,
+            execution_product_probe_interval_seconds=(
+                execution_product_probe_interval_seconds
+            ),
+            post_execution_quarantine_delay_seconds=(
+                post_execution_quarantine_delay_seconds
+            ),
             cleanup_strategy=cleanup_strategy,
         ),
     )
@@ -1328,6 +1382,15 @@ def create_multi_run_batch_plan(
             "product_probe_enabled": product_probe_enabled,
             "post_execution_probe_interval_seconds": (
                 post_execution_probe_interval_seconds
+            ),
+            "product_probe_available": product_probe_available,
+            "product_probe_skip_reason": product_probe_skip_reason,
+            "execution_product_probe_enabled": execution_product_probe_enabled,
+            "execution_product_probe_interval_seconds": (
+                execution_product_probe_interval_seconds
+            ),
+            "post_execution_quarantine_delay_seconds": (
+                post_execution_quarantine_delay_seconds
             ),
         },
     )
@@ -1417,6 +1480,15 @@ def render_multi_run_generated_config(
     post_execution_probe_interval_seconds: float = (
         DEFAULT_MULTI_RUN_POST_EXECUTION_PROBE_INTERVAL_SECONDS
     ),
+    product_probe_available: bool = False,
+    product_probe_skip_reason: str = "",
+    execution_product_probe_enabled: bool = False,
+    execution_product_probe_interval_seconds: float = (
+        DEFAULT_MULTI_RUN_POST_EXECUTION_PROBE_INTERVAL_SECONDS
+    ),
+    post_execution_quarantine_delay_seconds: float = (
+        DEFAULT_MULTI_RUN_POST_EXECUTION_QUARANTINE_DELAY_SECONDS
+    ),
 ) -> str:
     return "\n".join(
         [
@@ -1443,6 +1515,14 @@ def render_multi_run_generated_config(
             f"product_probe_enabled = {_toml_bool(product_probe_enabled)}",
             "post_execution_probe_interval_seconds = "
             f"{float(post_execution_probe_interval_seconds):g}",
+            f"product_probe_available = {_toml_bool(product_probe_available)}",
+            f"product_probe_skip_reason = {_toml_string(product_probe_skip_reason)}",
+            "execution_product_probe_enabled = "
+            f"{_toml_bool(execution_product_probe_enabled)}",
+            "execution_product_probe_interval_seconds = "
+            f"{float(execution_product_probe_interval_seconds):g}",
+            "post_execution_quarantine_delay_seconds = "
+            f"{float(post_execution_quarantine_delay_seconds):g}",
             "",
         ]
     )
@@ -1675,6 +1755,15 @@ class SingleRunRequest:
     post_execution_probe_interval_seconds: float = (
         DEFAULT_MULTI_RUN_POST_EXECUTION_PROBE_INTERVAL_SECONDS
     )
+    product_probe_available: bool = False
+    product_probe_skip_reason: str = ""
+    execution_product_probe_enabled: bool = False
+    execution_product_probe_interval_seconds: float = (
+        DEFAULT_MULTI_RUN_POST_EXECUTION_PROBE_INTERVAL_SECONDS
+    )
+    post_execution_quarantine_delay_seconds: float = (
+        DEFAULT_MULTI_RUN_POST_EXECUTION_QUARANTINE_DELAY_SECONDS
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1711,6 +1800,15 @@ class SingleRunRequest:
             "product_probe_enabled": self.product_probe_enabled,
             "post_execution_probe_interval_seconds": (
                 self.post_execution_probe_interval_seconds
+            ),
+            "product_probe_available": self.product_probe_available,
+            "product_probe_skip_reason": self.product_probe_skip_reason,
+            "execution_product_probe_enabled": (self.execution_product_probe_enabled),
+            "execution_product_probe_interval_seconds": (
+                self.execution_product_probe_interval_seconds
+            ),
+            "post_execution_quarantine_delay_seconds": (
+                self.post_execution_quarantine_delay_seconds
             ),
         }
 
@@ -1867,6 +1965,17 @@ class RealSingleRunRunner:
                     product_probe_enabled=request.product_probe_enabled,
                     post_execution_probe_interval_seconds=(
                         request.post_execution_probe_interval_seconds
+                    ),
+                    product_probe_available=request.product_probe_available,
+                    product_probe_skip_reason=request.product_probe_skip_reason,
+                    execution_product_probe_enabled=(
+                        request.execution_product_probe_enabled
+                    ),
+                    execution_product_probe_interval_seconds=(
+                        request.execution_product_probe_interval_seconds
+                    ),
+                    post_execution_quarantine_delay_seconds=(
+                        request.post_execution_quarantine_delay_seconds
                     ),
                     runs_dir=request.case_dir,
                 )
@@ -2965,6 +3074,25 @@ def load_batch_plan(path: Path | str) -> BatchPlan:
             plan_path,
             DEFAULT_MULTI_RUN_POST_EXECUTION_PROBE_INTERVAL_SECONDS,
         ),
+        product_probe_available=bool(
+            execution_payload.get("product_probe_available", False)
+        ),
+        product_probe_skip_reason=str(
+            execution_payload.get("product_probe_skip_reason", "")
+        ),
+        execution_product_probe_enabled=bool(
+            execution_payload.get("execution_product_probe_enabled", False)
+        ),
+        execution_product_probe_interval_seconds=_optional_float_with_default(
+            execution_payload.get("execution_product_probe_interval_seconds"),
+            plan_path,
+            DEFAULT_MULTI_RUN_POST_EXECUTION_PROBE_INTERVAL_SECONDS,
+        ),
+        post_execution_quarantine_delay_seconds=_optional_float_with_default(
+            execution_payload.get("post_execution_quarantine_delay_seconds"),
+            plan_path,
+            DEFAULT_MULTI_RUN_POST_EXECUTION_QUARANTINE_DELAY_SECONDS,
+        ),
         environment_failure_policy=str(
             execution_payload.get("environment_failure_policy", "stop")
         ),
@@ -3149,6 +3277,17 @@ def _single_run_request_for_entry(
         product_probe_enabled=plan.execution.product_probe_enabled,
         post_execution_probe_interval_seconds=(
             plan.execution.post_execution_probe_interval_seconds
+        ),
+        product_probe_available=plan.execution.product_probe_available,
+        product_probe_skip_reason=plan.execution.product_probe_skip_reason,
+        execution_product_probe_enabled=(
+            plan.execution.execution_product_probe_enabled
+        ),
+        execution_product_probe_interval_seconds=(
+            plan.execution.execution_product_probe_interval_seconds
+        ),
+        post_execution_quarantine_delay_seconds=(
+            plan.execution.post_execution_quarantine_delay_seconds
         ),
     )
 

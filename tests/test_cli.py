@@ -775,6 +775,17 @@ class CloudLifecycleCliGuardTests(TestCase):
                 plan["execution"]["post_execution_probe_interval_seconds"],
                 1.0,
             )
+            self.assertFalse(plan["execution"]["product_probe_available"])
+            self.assertEqual(plan["execution"]["product_probe_skip_reason"], "")
+            self.assertFalse(plan["execution"]["execution_product_probe_enabled"])
+            self.assertEqual(
+                plan["execution"]["execution_product_probe_interval_seconds"],
+                1.0,
+            )
+            self.assertEqual(
+                plan["execution"]["post_execution_quarantine_delay_seconds"],
+                3.0,
+            )
             self.assertEqual(
                 plan["generated_config_sha256"],
                 _sha256_file(
@@ -800,6 +811,20 @@ class CloudLifecycleCliGuardTests(TestCase):
             self.assertIn("product_probe_enabled = true", generated_config)
             self.assertIn(
                 "post_execution_probe_interval_seconds = 1",
+                generated_config,
+            )
+            self.assertIn("product_probe_available = false", generated_config)
+            self.assertIn('product_probe_skip_reason = ""', generated_config)
+            self.assertIn(
+                "execution_product_probe_enabled = false",
+                generated_config,
+            )
+            self.assertIn(
+                "execution_product_probe_interval_seconds = 1",
+                generated_config,
+            )
+            self.assertIn(
+                "post_execution_quarantine_delay_seconds = 3",
                 generated_config,
             )
             state = json.loads(
