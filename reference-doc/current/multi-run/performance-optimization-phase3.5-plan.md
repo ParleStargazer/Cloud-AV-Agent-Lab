@@ -652,3 +652,48 @@ OK
 - 未读取、上传或执行样本文件。
 - 未改变 instance lock 的并发保护语义。
 - 未新增 shell / PowerShell / cmd / subprocess 路径。
+
+### Commit 5：lock failure attribution review
+
+完成时间：2026-06-01
+
+完成内容：
+
+- 在 `single_run.py` 中新增 `_heartbeat_lock()` 辅助函数。
+- 保持严格边界：
+  - 初始 `acquire_lock()` 失败不降级；
+  - collection 之前的 heartbeat 失败不降级；
+  - cleanup restore / emergency stop 失败不降级；
+  - unsafe / manual intervention 语义不变。
+- 仅在 collection 阶段已经完成后，`case_summary` / `export_evidence` 前的 lock heartbeat `OSError` 会降级为 warning：
+  - 继续生成 `case_summary.json` / `case_summary.md`；
+  - 继续导出 evidence bundle；
+  - `run_state.json` 记录 `lock_heartbeat_status = "warning"` 和具体错误；
+  - 最终状态按 warning 处理，而不是误判为 case failure。
+- 新增测试：
+  - 模拟 collection 完成后 heartbeat 发生 `PermissionError`；
+  - 验证 summary / evidence 仍然落盘；
+  - 验证最终状态为 `completed_with_warnings`；
+  - 验证 lock release 仍然执行。
+
+验证结果：
+
+```text
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m ruff format --check --no-cache src tests
+140 files already formatted
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m ruff check --no-cache src tests
+All checks passed!
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m unittest tests.test_single_run tests.test_multi_run_runner
+Ran 52 tests in 20.267s
+OK
+```
+
+边界确认：
+
+- 未读取 `configs/real.toml`。
+- 未触发真实云 API。
+- 未读取、上传或执行样本文件。
+- 未降低初始锁获取、active lock、cleanup failure、unsafe_to_continue 的优先级。
+- 未新增 shell / PowerShell / cmd / subprocess 路径。

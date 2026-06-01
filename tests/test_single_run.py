@@ -208,6 +208,45 @@ class SingleRunTests(TestCase):
                 3.0,
             )
 
+    def test_lock_heartbeat_failure_after_collection_is_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.exe"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            client = FakeGuestClient()
+            lock = FakeInstanceLock(fail_on_call=8)
+
+            with patch(
+                "cloud_av_agent_lab.orchestration.single_run.acquire_lock",
+                return_value=lock,
+            ):
+                result = run_single_case(
+                    _options(root, sample_path, skip_initial_restore=True),
+                    cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                    guest_client_factory=lambda config: client,
+                    sleep=lambda seconds: None,
+                )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            self.assertTrue(lock.released)
+            self.assertTrue((result.run_dir / "case_summary.json").is_file())
+            self.assertTrue(result.evidence_bundle_path)
+            self.assertTrue(result.evidence_bundle_path.is_file())
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                run_state["stages"]["case_summary"]["lock_heartbeat_status"],
+                "warning",
+            )
+            self.assertNotIn("fatal_errors", run_state["stages"]["case_summary"])
+            self.assertTrue(
+                any(
+                    warning["stage"] == "case_summary"
+                    and "lock heartbeat failed after collection completed"
+                    in warning["message"]
+                    for warning in run_state["warnings"]
+                )
+            )
+
     def test_fastmode_quick_gate_failure_stops_before_prepare_case(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1430,6 +1469,21 @@ class FakeCloudAdapter:
 
     def resolve_instance_id(self, vm: object) -> str:
         return "lhins-example"
+
+
+class FakeInstanceLock:
+    def __init__(self, *, fail_on_call: int) -> None:
+        self.fail_on_call = fail_on_call
+        self.heartbeat_calls = 0
+        self.released = False
+
+    def heartbeat(self) -> None:
+        self.heartbeat_calls += 1
+        if self.heartbeat_calls == self.fail_on_call:
+            raise PermissionError("transient heartbeat failure")
+
+    def release(self) -> None:
+        self.released = True
 
 
 class FakeGuestClient:

@@ -517,6 +517,7 @@ def _run_single_case_locked(
     confidence = ""
     case_started = False
     evidence_saved = False
+    collection_completed = False
     case_error: BaseException | None = None
     warning_count = 0
 
@@ -1061,9 +1062,15 @@ def _run_single_case_locked(
                     "evidence_count",
                     collection_response.data.get("evidence_count", 0),
                 )
+            collection_completed = True
 
         with state.step("case_summary"):
-            lock.heartbeat()
+            _heartbeat_lock(
+                lock,
+                state=state,
+                stage="case_summary",
+                allow_warning=collection_completed,
+            )
             summary_response = client.case_summary(
                 case_id,
                 timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
@@ -1079,7 +1086,12 @@ def _run_single_case_locked(
             state.mark_artifact("summary_markdown", str(run_dir / "case_summary.md"))
 
         with state.step("export_evidence"):
-            lock.heartbeat()
+            _heartbeat_lock(
+                lock,
+                state=state,
+                stage="export_evidence",
+                allow_warning=collection_completed,
+            )
             evidence_response = client.export_evidence_bundle(
                 case_id,
                 run_dir / f"case_evidence_{case_id}.zip",
@@ -1165,6 +1177,28 @@ def _run_single_case_locked(
         cleanup_status=str(state.data.get("cleanup_status", "")),
         emergency_poweroff_status=str(state.data.get("emergency_poweroff_status", "")),
     )
+
+
+def _heartbeat_lock(
+    lock: InstanceLock,
+    *,
+    state: RunState,
+    stage: str,
+    allow_warning: bool = False,
+) -> None:
+    try:
+        lock.heartbeat()
+    except OSError as exc:
+        if not allow_warning:
+            raise
+        message = (
+            "lock heartbeat failed after collection completed; continuing to "
+            f"persist summary/evidence: {exc}"
+        )
+        state.add_warning(stage, message)
+        state.mark_stage(stage, "lock_heartbeat_status", "warning")
+        state.mark_stage(stage, "lock_heartbeat_error", str(exc))
+        LOGGER.warning("%s", message)
 
 
 def _restore_and_start_clean_instance(
