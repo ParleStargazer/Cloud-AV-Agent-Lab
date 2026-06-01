@@ -2926,6 +2926,7 @@ def build_multi_run_aggregate_summary(
         "emergency_poweroff_status": state.emergency_poweroff_status,
         "fastmode_enabled": state.fastmode_enabled,
         "fastmode": fastmode_metrics,
+        "runtime_parameters": _build_runtime_parameters(root, state, cases),
         "manifest_sha256": state.manifest_sha256,
         "batch_plan_sha256": state.batch_plan_sha256,
         "selected_indexes": list(state.selected_indexes),
@@ -2959,6 +2960,7 @@ def render_multi_run_aggregate_markdown(summary: Mapping[str, Any]) -> str:
     denominator = _mapping_or_empty(summary.get("denominator"))
     detection_rate = _mapping_or_empty(summary.get("detection_rate"))
     fastmode = _mapping_or_empty(summary.get("fastmode"))
+    runtime_parameters = _mapping_or_empty(summary.get("runtime_parameters"))
     timing = _mapping_or_empty(summary.get("timing"))
     stages = _mapping_or_empty(timing.get("stages"))
     case_errors = summary.get("case_errors")
@@ -2994,6 +2996,34 @@ def render_multi_run_aggregate_markdown(summary: Mapping[str, Any]) -> str:
                 f"- Environment reuse cases: {fastmode.get('used_cases', 0)}",
                 f"- Deferred cleanup cases: {fastmode.get('deferred_cleanup_cases', 0)}",
                 f"- Detection metric kind: {detection_rate.get('rate_kind', '')}",
+                "",
+            ]
+        )
+    if runtime_parameters:
+        lines.extend(
+            [
+                "## Runtime Parameters",
+                "",
+                f"- fastmode: {_enabled_label(runtime_parameters.get('fastmode'))}",
+                f"- cleanup strategy: {runtime_parameters.get('cleanup_strategy', '')}",
+                "- effective cleanup strategy: "
+                f"{runtime_parameters.get('effective_cleanup_strategy', '')}",
+                "- settling cooldown seconds: "
+                f"{runtime_parameters.get('settling_cooldown_seconds', '')}",
+                "- upload status timeout seconds: "
+                f"{runtime_parameters.get('upload_status_timeout_seconds', '')}",
+                "- post-execution default delay seconds: "
+                f"{runtime_parameters.get('post_execution_collection_delay_seconds', '')}",
+                "- product probe: "
+                f"{_enabled_label(runtime_parameters.get('product_probe_enabled'))}",
+                "- execution-stage probe: "
+                f"{_enabled_label(runtime_parameters.get('execution_product_probe_enabled'))}",
+                "- post-execution probe interval seconds: "
+                f"{runtime_parameters.get('post_execution_probe_interval_seconds', '')}",
+                "- execution probe interval seconds: "
+                f"{runtime_parameters.get('execution_product_probe_interval_seconds', '')}",
+                "- quarantine short delay seconds: "
+                f"{runtime_parameters.get('post_execution_quarantine_delay_seconds', '')}",
                 "",
             ]
         )
@@ -3953,6 +3983,76 @@ def _build_fastmode_metrics(
             else ""
         ),
     }
+
+
+def _build_runtime_parameters(
+    root: Path,
+    state: MultiRunState,
+    cases: Iterable[CaseState],
+) -> dict[str, Any]:
+    execution = _load_batch_execution_payload(root)
+    deferred_cleanup_seen = any(
+        case.cleanup_status == "deferred_to_next_case" for case in cases
+    )
+    cleanup_strategy = str(execution.get("cleanup_strategy", ""))
+    return {
+        "fastmode": state.fastmode_enabled,
+        "cleanup_strategy": cleanup_strategy,
+        "effective_cleanup_strategy": (
+            "deferred_between_cases" if deferred_cleanup_seen else cleanup_strategy
+        ),
+        "settling_cooldown_seconds": _runtime_float(
+            execution, "settling_cooldown_seconds"
+        ),
+        "upload_status_timeout_seconds": _runtime_float(
+            execution, "upload_status_timeout_seconds"
+        ),
+        "post_execution_collection_delay_seconds": _runtime_float(
+            execution, "post_execution_collection_delay_seconds"
+        ),
+        "product_probe_enabled": _runtime_bool(execution, "product_probe_enabled"),
+        "post_execution_probe_interval_seconds": _runtime_float(
+            execution, "post_execution_probe_interval_seconds"
+        ),
+        "execution_product_probe_enabled": _runtime_bool(
+            execution, "execution_product_probe_enabled"
+        ),
+        "execution_product_probe_interval_seconds": _runtime_float(
+            execution, "execution_product_probe_interval_seconds"
+        ),
+        "post_execution_quarantine_delay_seconds": _runtime_float(
+            execution, "post_execution_quarantine_delay_seconds"
+        ),
+    }
+
+
+def _load_batch_execution_payload(root: Path) -> Mapping[str, Any]:
+    try:
+        payload = json.loads((root / "batch_plan.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    execution = payload.get("execution")
+    return execution if isinstance(execution, Mapping) else {}
+
+
+def _runtime_float(payload: Mapping[str, Any], key: str) -> float | None:
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
+def _runtime_bool(payload: Mapping[str, Any], key: str) -> bool:
+    value = payload.get(key)
+    return bool(value) if isinstance(value, bool) else False
+
+
+def _enabled_label(value: Any) -> str:
+    return "enabled" if bool(value) else "disabled"
 
 
 def _build_multi_run_timing_summary(cases: Iterable[CaseState]) -> dict[str, Any]:

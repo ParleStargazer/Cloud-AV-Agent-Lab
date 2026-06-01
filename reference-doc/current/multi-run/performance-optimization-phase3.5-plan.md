@@ -564,3 +564,49 @@ OK
 - 未读取、上传或执行样本文件。
 - 未改变 upload endpoint、collector 或 evaluator 的安全边界。
 - 未新增 shell / PowerShell / cmd / subprocess 路径。
+
+### Commit 3：aggregate summary 记录 runtime parameters
+
+完成时间：2026-06-01
+
+完成内容：
+
+- `aggregate_summary.json` 新增 `runtime_parameters` 区域。
+- `runtime_parameters` 从 batch 根目录下的 `batch_plan.json` 读取非敏感 execution 参数：
+  - `fastmode`
+  - `cleanup_strategy`
+  - `effective_cleanup_strategy`
+  - `settling_cooldown_seconds`
+  - `upload_status_timeout_seconds`
+  - `post_execution_collection_delay_seconds`
+  - `product_probe_enabled`
+  - `post_execution_probe_interval_seconds`
+  - `execution_product_probe_enabled`
+  - `execution_product_probe_interval_seconds`
+  - `post_execution_quarantine_delay_seconds`
+- `aggregate_summary.md` 新增 `Runtime Parameters` 小节，显示便于人工对比的简版参数。
+- Markdown 不展示 Guest Agent URL / Desktop Worker URL，避免把运行地址混入外部摘要。
+- 旧 batch 缺少 `batch_plan.json` 或 execution 字段时，runtime parameters 仍可生成默认安全值，不影响 summary 构建。
+
+验证结果：
+
+```text
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m ruff format --check --no-cache src tests
+140 files already formatted
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m ruff check --no-cache src tests
+All checks passed!
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m unittest tests.test_multi_run_runner tests.test_multi_run_schema tests.test_multi_run_scheduler
+Ran 46 tests in 1.940s
+OK
+```
+
+边界确认：
+
+- 未读取 `configs/real.toml`。
+- 未触发真实云 API。
+- 未读取、上传或执行样本文件。
+- 未向 Markdown 暴露 Guest Agent / Desktop Worker URL。
+- 未改变 collector / evaluator verdict 语义。
+- 未新增 shell / PowerShell / cmd / subprocess 路径。

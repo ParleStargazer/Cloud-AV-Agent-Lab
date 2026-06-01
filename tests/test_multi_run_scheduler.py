@@ -270,6 +270,10 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertEqual(summary["fastmode"]["eligible_cases"], 2)
             self.assertEqual(summary["fastmode"]["used_cases"], 1)
             self.assertEqual(summary["fastmode"]["deferred_cleanup_cases"], 1)
+            self.assertEqual(
+                summary["runtime_parameters"]["effective_cleanup_strategy"],
+                "deferred_between_cases",
+            )
             self.assertIn("clean snapshot baseline", markdown)
             self.assertIn("Fastmode", markdown)
 
@@ -455,6 +459,19 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertEqual(summary["cases"][0]["duration_seconds"], 1.0)
             self.assertEqual(summary["cases"][0]["indexed_sample_state"], "available")
             self.assertEqual(summary["cases"][0]["timing"]["total_seconds"], 1.0)
+            runtime_parameters = summary["runtime_parameters"]
+            self.assertFalse(runtime_parameters["fastmode"])
+            self.assertEqual(runtime_parameters["cleanup_strategy"], "per_case")
+            self.assertEqual(
+                runtime_parameters["effective_cleanup_strategy"],
+                "per_case",
+            )
+            self.assertEqual(
+                runtime_parameters["upload_status_timeout_seconds"],
+                30.0,
+            )
+            self.assertFalse(runtime_parameters["product_probe_enabled"])
+            self.assertFalse(runtime_parameters["execution_product_probe_enabled"])
             self.assertEqual(summary["case_errors"][0]["failure_kind"], "case_failure")
             self.assertEqual(
                 summary["cases"][0]["paths"]["evidence_bundle"],
@@ -465,6 +482,11 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertNotIn("\\", summary["cases"][0]["paths"]["evidence_bundle"])
             self.assertIn("Multi-Run Aggregate Summary", markdown)
             self.assertIn("Case failures: 1", markdown)
+            self.assertIn("## Runtime Parameters", markdown)
+            self.assertIn("upload status timeout seconds: 30.0", markdown)
+            self.assertIn("execution-stage probe: disabled", markdown)
+            self.assertNotIn("http://127.0.0.1:8080", markdown)
+            self.assertNotIn("http://127.0.0.1:8001", markdown)
             self.assertIn("## Timing", markdown)
             self.assertIn("Average case seconds: 1.0", markdown)
 
