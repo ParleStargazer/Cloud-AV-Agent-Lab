@@ -231,8 +231,11 @@ class ExecutionObservationResult:
     product_probe_supported: bool = False
     product_probe_count: int = 0
     product_probe_failed_count: int = 0
+    product_probe_elapsed_seconds: float = 0.0
+    product_probe_first_signal_state: str = ""
     product_probe_last_state: str = ""
     product_probe_warning: str = ""
+    activity_signal_observed: bool = False
     strong_signal_observed: bool = False
     exit_reason: str = ""
 
@@ -246,8 +249,11 @@ class ExecutionObservationResult:
             "product_probe_supported": self.product_probe_supported,
             "product_probe_count": self.product_probe_count,
             "product_probe_failed_count": self.product_probe_failed_count,
+            "product_probe_elapsed_seconds": self.product_probe_elapsed_seconds,
+            "product_probe_first_signal_state": self.product_probe_first_signal_state,
             "product_probe_last_state": self.product_probe_last_state,
             "product_probe_warning": self.product_probe_warning,
+            "activity_signal_observed": self.activity_signal_observed,
             "strong_signal_observed": self.strong_signal_observed,
             "observation_exit_reason": self.exit_reason,
         }
@@ -257,10 +263,15 @@ class ExecutionObservationResult:
 class _ExecutionProbeState:
     enabled: bool
     supported: bool
+    interval_seconds: float
     count: int = 0
     failed_count: int = 0
+    elapsed_seconds: float = 0.0
+    next_probe_at_seconds: float = 0.0
+    first_signal_state: str = ""
     last_state: str = ""
     warning: str = ""
+    activity_signal_observed: bool = False
     strong_signal_observed: bool = False
     disabled_after_fallback: bool = False
 
@@ -734,6 +745,9 @@ def _run_single_case_locked(
                 product_id=product_id,
                 product_probe_enabled=options.execution_product_probe_enabled,
                 product_probe_supported=options.product_probe_available,
+                product_probe_interval_seconds=(
+                    options.execution_product_probe_interval_seconds
+                ),
                 sleep=sleep,
             )
             state.mark("execution_action_status", execution_result["status"])
@@ -820,6 +834,16 @@ def _run_single_case_locked(
             )
             state.mark_stage(
                 "execution",
+                "product_probe_elapsed_seconds",
+                float(execution_result.get("product_probe_elapsed_seconds") or 0.0),
+            )
+            state.mark_stage(
+                "execution",
+                "product_probe_first_signal_state",
+                str(execution_result.get("product_probe_first_signal_state") or ""),
+            )
+            state.mark_stage(
+                "execution",
                 "product_probe_last_state",
                 str(execution_result.get("product_probe_last_state") or ""),
             )
@@ -827,6 +851,19 @@ def _run_single_case_locked(
                 "execution",
                 "product_probe_warning",
                 str(execution_result.get("product_probe_warning") or ""),
+            )
+            state.mark_stage(
+                "execution",
+                "activity_signal_observed",
+                bool(execution_result.get("activity_signal_observed", False)),
+            )
+            state.mark_stage(
+                "execution",
+                "product_signal_seen_during_execution",
+                bool(
+                    execution_result.get("activity_signal_observed", False)
+                    or execution_result.get("strong_signal_observed", False)
+                ),
             )
             state.mark_stage(
                 "execution",
@@ -1480,6 +1517,7 @@ def _execute_after_upload_observation(
     product_id: str,
     product_probe_enabled: bool,
     product_probe_supported: bool,
+    product_probe_interval_seconds: float,
     sleep: SleepFunc,
 ) -> dict[str, Any]:
     normalized_upload_state = upload_state.casefold()
@@ -1583,6 +1621,7 @@ def _execute_after_upload_observation(
         product_id=product_id,
         product_probe_enabled=product_probe_enabled,
         product_probe_supported=product_probe_supported,
+        product_probe_interval_seconds=product_probe_interval_seconds,
         sleep=sleep,
     )
     final_response = final_observation.response
@@ -1733,6 +1772,7 @@ def _poll_execution_status(
     product_id: str,
     product_probe_enabled: bool,
     product_probe_supported: bool,
+    product_probe_interval_seconds: float,
     sleep: SleepFunc,
 ) -> ExecutionObservationResult:
     elapsed = 0.0
@@ -1740,6 +1780,7 @@ def _poll_execution_status(
     probe_state = _ExecutionProbeState(
         enabled=product_probe_enabled,
         supported=product_probe_supported,
+        interval_seconds=max(product_probe_interval_seconds, 0.0),
     )
     while True:
         last_response = client.execution_status(case_id)
@@ -1757,6 +1798,7 @@ def _poll_execution_status(
             case_id=case_id,
             product_id=product_id,
             state=probe_state,
+            elapsed_seconds=elapsed,
         )
         if execution_state in TERMINAL_EXECUTION_STATES:
             return _execution_observation_result(
@@ -1822,8 +1864,11 @@ def _execution_observation_result(
         product_probe_supported=probe_state.supported,
         product_probe_count=probe_state.count,
         product_probe_failed_count=probe_state.failed_count,
+        product_probe_elapsed_seconds=probe_state.elapsed_seconds,
+        product_probe_first_signal_state=probe_state.first_signal_state,
         product_probe_last_state=probe_state.last_state,
         product_probe_warning=probe_state.warning,
+        activity_signal_observed=probe_state.activity_signal_observed,
         strong_signal_observed=probe_state.strong_signal_observed,
         exit_reason=exit_reason,
     )
@@ -1835,15 +1880,21 @@ def _probe_during_execution(
     case_id: str,
     product_id: str,
     state: _ExecutionProbeState,
+    elapsed_seconds: float,
 ) -> None:
     if (
         not state.enabled
         or not state.supported
         or state.disabled_after_fallback
         or not product_id
+        or state.interval_seconds <= 0
     ):
         return
+    if elapsed_seconds + 0.000001 < state.next_probe_at_seconds:
+        return
     state.count += 1
+    state.elapsed_seconds = elapsed_seconds
+    state.next_probe_at_seconds = elapsed_seconds + state.interval_seconds
     try:
         response = client.probe_collection(
             case_id,
@@ -1861,9 +1912,20 @@ def _probe_during_execution(
         return
 
     probe_state = str(response.data.get("probe_state") or "unknown")
+    previous_state = state.last_state
     state.last_state = probe_state
+    if _is_product_signal_state(probe_state) and not state.first_signal_state:
+        state.first_signal_state = probe_state
+    if probe_state == "activity_observed":
+        state.activity_signal_observed = True
     if probe_state == "strong_signal_observed":
         state.strong_signal_observed = True
+    if probe_state != previous_state:
+        LOGGER.info(
+            "execution product observation signal changed: product=%s state=%s",
+            product_id,
+            probe_state,
+        )
     if probe_state in {"unsupported", "probe_failed"}:
         if probe_state == "probe_failed":
             state.failed_count += 1
@@ -1872,6 +1934,16 @@ def _probe_during_execution(
                 "execution polling continued"
             )
         state.disabled_after_fallback = True
+
+
+def _is_product_signal_state(probe_state: str) -> bool:
+    return probe_state not in {
+        "",
+        "unknown",
+        "no_signal",
+        "unsupported",
+        "probe_failed",
+    }
 
 
 def _write_summary_outputs(run_dir: Path, summary: dict[str, Any]) -> Path:

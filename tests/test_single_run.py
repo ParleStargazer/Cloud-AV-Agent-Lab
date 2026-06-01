@@ -911,6 +911,56 @@ class SingleRunTests(TestCase):
                 execution["product_probe_warning"],
             )
 
+    def test_execution_stage_probe_tracks_activity_and_strong_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.bat"
+            sample_path.write_text("echo harmless", encoding="utf-8")
+            client = FakeGuestClient(
+                execution_states=["running", "running", "exited_cleanly"],
+                probe_states=["activity_observed", "strong_signal_observed"],
+            )
+            sleeps: list[float] = []
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="tencent-pc-manager",
+                    product_probe_available=True,
+                    execution_product_probe_enabled=True,
+                    execution_product_probe_interval_seconds=4.0,
+                    execution_poll_interval_seconds=2.0,
+                    execution_poll_timeout_seconds=10.0,
+                    post_execution_collection_delay_seconds=0.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(
+                client.probe_products,
+                ["tencent-pc-manager", "tencent-pc-manager"],
+            )
+            self.assertGreaterEqual(sleeps.count(2.0), 2)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            execution = run_state["stages"]["execution"]
+            self.assertEqual(execution["product_probe_count"], 2)
+            self.assertEqual(
+                execution["product_probe_first_signal_state"],
+                "activity_observed",
+            )
+            self.assertEqual(
+                execution["product_probe_last_state"],
+                "strong_signal_observed",
+            )
+            self.assertTrue(execution["activity_signal_observed"])
+            self.assertTrue(execution["strong_signal_observed"])
+            self.assertTrue(execution["product_signal_seen_during_execution"])
+            self.assertEqual(execution["product_probe_elapsed_seconds"], 4.0)
+
     def test_product_probe_unsupported_falls_back_to_fixed_delay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1191,6 +1241,7 @@ class FakeGuestClient:
         execute_error: GuestAgentError | None = None,
         worker_ready: bool = True,
         worker_reason: str = "",
+        execution_states: list[str] | None = None,
         probe_states: list[str] | None = None,
         probe_error: GuestAgentError | None = None,
     ) -> None:
@@ -1201,6 +1252,7 @@ class FakeGuestClient:
         self.execute_error = execute_error
         self.worker_ready = worker_ready
         self.worker_reason = worker_reason
+        self.execution_states = list(execution_states or [])
         self.probe_states = list(probe_states or [])
         self.probe_error = probe_error
         self.health_calls = 0
@@ -1330,10 +1382,17 @@ class FakeGuestClient:
         mark_timeout: bool = False,
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
+        execution_state = (
+            self.execution_states.pop(0) if self.execution_states else "exited_cleanly"
+        )
         return GuestAgentResponse(
             status="ok",
             message="execution",
-            data={"execution_state": "exited_cleanly", "children": []},
+            data={
+                "execution_state": execution_state,
+                "root_pid": 4321 if execution_state == "running" else None,
+                "children": [{"pid": 4322}] if execution_state == "running" else [],
+            },
         )
 
     def collect_logs(
@@ -1418,6 +1477,9 @@ def _options(
     post_execution_probe_interval_seconds: float = 1.0,
     product_probe_available: bool = False,
     execution_product_probe_enabled: bool = False,
+    execution_product_probe_interval_seconds: float = 1.0,
+    execution_poll_interval_seconds: float = 2.0,
+    execution_poll_timeout_seconds: float = 60.0,
     defer_final_cleanup: bool = False,
     skip_initial_restore: bool = False,
 ) -> SingleRunOptions:
@@ -1438,6 +1500,8 @@ def _options(
         upload_initial_wait_seconds=0,
         upload_poll_interval_seconds=0.1,
         upload_poll_timeout_seconds=0.1,
+        execution_poll_interval_seconds=execution_poll_interval_seconds,
+        execution_poll_timeout_seconds=execution_poll_timeout_seconds,
         post_execution_collection_delay_seconds=(
             post_execution_collection_delay_seconds
         ),
@@ -1445,6 +1509,9 @@ def _options(
         post_execution_probe_interval_seconds=post_execution_probe_interval_seconds,
         product_probe_available=product_probe_available,
         execution_product_probe_enabled=execution_product_probe_enabled,
+        execution_product_probe_interval_seconds=(
+            execution_product_probe_interval_seconds
+        ),
         salvage_timeout=salvage_timeout or NetworkTimeoutProfile(2, 5),
         defer_final_cleanup=defer_final_cleanup,
         skip_initial_restore=skip_initial_restore,
