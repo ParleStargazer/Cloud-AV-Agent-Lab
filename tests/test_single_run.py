@@ -1068,7 +1068,9 @@ class SingleRunTests(TestCase):
                 "execution_strong_signal_fixed_delay",
             )
 
-    def test_execution_stage_probe_disables_post_execution_probe(self) -> None:
+    def test_execution_stage_probe_without_strong_keeps_post_execution_probe(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             sample_path = root / "eicar.bat"
@@ -1094,8 +1096,12 @@ class SingleRunTests(TestCase):
             )
 
             self.assertEqual(result.final_status, "completed")
-            self.assertEqual(client.probe_products, ["tencent-pc-manager"])
-            self.assertIn(45.0, sleeps)
+            self.assertEqual(
+                client.probe_products,
+                ["tencent-pc-manager", "tencent-pc-manager"],
+            )
+            self.assertIn(1.0, sleeps)
+            self.assertNotIn(45.0, sleeps)
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
             collection = run_state["stages"]["collection"]
             self.assertEqual(
@@ -1104,11 +1110,11 @@ class SingleRunTests(TestCase):
             )
             self.assertEqual(
                 collection["product_probe_exit_reason"],
-                "execution_stage_delay_decision_fixed_delay",
+                "strong_signal_observed",
             )
             self.assertEqual(
                 collection["post_execution_product_probe_elapsed_seconds"],
-                0.0,
+                1.0,
             )
 
     def test_execution_stage_probe_summary_survives_execution_timeout(self) -> None:
@@ -1150,6 +1156,54 @@ class SingleRunTests(TestCase):
             )
             self.assertTrue(execution["activity_signal_observed"])
             self.assertFalse(execution["strong_signal_observed"])
+
+    def test_launch_failure_preserves_product_probe_capability_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.exe"
+            sample_path.write_bytes(b"MZ harmless placeholder")
+            client = FakeGuestClient(
+                execute_error=GuestAgentError(
+                    "Guest Agent action failed: Desktop Worker execute returned "
+                    "HTTP 400: uploaded sample failed to start: OSError "
+                    "reason_code=blocked_by_security_product",
+                    status_code=400,
+                    source="remote",
+                ),
+                probe_states=["strong_signal_observed"],
+            )
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="tencent-pc-manager",
+                    product_probe_available=True,
+                    product_probe_enabled=True,
+                    execution_product_probe_enabled=True,
+                    post_execution_collection_delay_seconds=25.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda _seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            execution = run_state["stages"]["execution"]
+            self.assertEqual(execution["state"], "launch_failed")
+            self.assertTrue(execution["execution_product_probe_enabled"])
+            self.assertTrue(execution["product_probe_supported"])
+            self.assertEqual(execution["product_probe_count"], 0)
+            self.assertEqual(
+                execution["observation_exit_reason"],
+                "launch_failed_before_polling",
+            )
+            collection = run_state["stages"]["collection"]
+            self.assertEqual(
+                collection["product_probe_exit_reason"],
+                "strong_signal_observed",
+            )
 
     def test_product_probe_unsupported_falls_back_to_fixed_delay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1279,6 +1333,56 @@ class SingleRunTests(TestCase):
             self.assertIn(
                 "post-execution collection delay started after launch failure: 45s",
                 run_log,
+            )
+
+    def test_post_execution_probe_runs_after_launch_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.exe"
+            sample_path.write_bytes(b"MZ harmless placeholder")
+            sleeps: list[float] = []
+            client = FakeGuestClient(
+                execute_error=GuestAgentError(
+                    "Guest Agent action failed: Desktop Worker execute returned "
+                    "HTTP 400: uploaded sample failed to start: OSError "
+                    "reason_code=blocked_by_security_product",
+                    status_code=400,
+                    source="remote",
+                ),
+                probe_states=["strong_signal_observed"],
+            )
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="tencent-pc-manager",
+                    product_probe_available=True,
+                    product_probe_enabled=True,
+                    execution_product_probe_enabled=True,
+                    post_execution_collection_delay_seconds=25.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            self.assertEqual(client.probe_products, ["tencent-pc-manager"])
+            self.assertIn(1.0, sleeps)
+            self.assertNotIn(25.0, sleeps)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            collection = run_state["stages"]["collection"]
+            self.assertEqual(
+                collection["product_probe_exit_reason"],
+                "strong_signal_observed",
+            )
+            self.assertEqual(
+                collection["post_execution_product_probe_elapsed_seconds"], 1.0
+            )
+            self.assertEqual(
+                collection["post_execution_delay_decision_reason"],
+                "no execution-stage strong signal observed",
             )
 
     def test_powershell_script_is_recognized_but_disabled(self) -> None:

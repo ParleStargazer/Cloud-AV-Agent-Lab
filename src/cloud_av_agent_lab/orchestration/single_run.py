@@ -908,9 +908,8 @@ def _run_single_case_locked(
             probe_interval_seconds = max(
                 options.post_execution_probe_interval_seconds, 0.0
             )
-            execution_stage_probe_active = (
-                options.execution_product_probe_enabled
-                and options.product_probe_available
+            execution_stage_strong_signal_observed = bool(
+                execution_result.get("strong_signal_observed", False)
             )
             state.mark_stage(
                 "collection",
@@ -987,7 +986,7 @@ def _run_single_case_locked(
                 if (
                     options.product_probe_enabled
                     and probe_interval_seconds > 0
-                    and not execution_stage_probe_active
+                    and not execution_stage_strong_signal_observed
                 ):
                     probe_result = _adaptive_post_execution_collection_delay(
                         client=client,
@@ -1017,8 +1016,6 @@ def _run_single_case_locked(
                         "product_probe_exit_reason",
                         "execution_strong_signal_fixed_delay"
                         if delay_decision.source == "execution_strong_signal_observed"
-                        else "execution_stage_delay_decision_fixed_delay"
-                        if execution_stage_probe_active
                         else "disabled_fixed_delay",
                     )
                 LOGGER.info(
@@ -1633,6 +1630,11 @@ def _execute_after_upload_observation(
             "via": "",
             "handler_id": "",
             "execution_mode": "",
+            **_default_execution_probe_result_fields(
+                product_probe_enabled=product_probe_enabled,
+                product_probe_supported=product_probe_supported,
+                exit_reason="skipped_post_upload_state",
+            ),
         }
 
     decision = resolve_execution_mode(stored_filename)
@@ -1652,6 +1654,11 @@ def _execute_after_upload_observation(
             "via": "",
             "handler_id": decision.handler_id,
             "execution_mode": decision.execution_mode,
+            **_default_execution_probe_result_fields(
+                product_probe_enabled=product_probe_enabled,
+                product_probe_supported=product_probe_supported,
+                exit_reason="execution_handler_disabled",
+            ),
         }
 
     try:
@@ -1679,6 +1686,11 @@ def _execute_after_upload_observation(
                 else "",
                 "handler_id": decision.handler_id,
                 "execution_mode": decision.execution_mode,
+                **_default_execution_probe_result_fields(
+                    product_probe_enabled=product_probe_enabled,
+                    product_probe_supported=product_probe_supported,
+                    exit_reason="launch_failed_before_polling",
+                ),
             }
         raise
 
@@ -1694,6 +1706,11 @@ def _execute_after_upload_observation(
             "via": str(execute_response.data.get("execution_via", "")),
             "handler_id": decision.handler_id,
             "execution_mode": decision.execution_mode,
+            **_default_execution_probe_result_fields(
+                product_probe_enabled=product_probe_enabled,
+                product_probe_supported=product_probe_supported,
+                exit_reason="dry_run",
+            ),
         }
     if execution_state not in {"running", "execution_started"}:
         reason = f"execution action returned {execution_state}; polling skipped"
@@ -1707,6 +1724,11 @@ def _execute_after_upload_observation(
             "via": str(execute_response.data.get("execution_via", "")),
             "handler_id": decision.handler_id,
             "execution_mode": decision.execution_mode,
+            **_default_execution_probe_result_fields(
+                product_probe_enabled=product_probe_enabled,
+                product_probe_supported=product_probe_supported,
+                exit_reason="execution_not_running",
+            ),
         }
 
     final_observation = _poll_execution_status(
@@ -1735,6 +1757,31 @@ def _execute_after_upload_observation(
         "handler_id": decision.handler_id,
         "execution_mode": decision.execution_mode,
         **final_observation.to_result_fields(),
+    }
+
+
+def _default_execution_probe_result_fields(
+    *,
+    product_probe_enabled: bool,
+    product_probe_supported: bool,
+    exit_reason: str,
+) -> dict[str, Any]:
+    return {
+        "execution_terminal": False,
+        "root_pid": None,
+        "children_count": 0,
+        "observation_elapsed_seconds": 0.0,
+        "product_probe_enabled": product_probe_enabled,
+        "product_probe_supported": product_probe_supported,
+        "product_probe_count": 0,
+        "product_probe_failed_count": 0,
+        "product_probe_elapsed_seconds": 0.0,
+        "product_probe_first_signal_state": "",
+        "product_probe_last_state": "",
+        "product_probe_warning": "",
+        "activity_signal_observed": False,
+        "strong_signal_observed": False,
+        "observation_exit_reason": exit_reason,
     }
 
 

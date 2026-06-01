@@ -746,3 +746,56 @@ OK
 - 未读取、上传或执行样本文件。
 - 未新增 shell / PowerShell / cmd / subprocess 路径。
 - 未改变安全产品 collector / evaluator 的职责边界。
+
+### Commit 7：post-execution probe fallback hotfix
+
+完成时间：2026-06-01
+
+触发问题：
+
+- `runs/batch_20260601-140430_tencent-pc-manager` 中已经满足：
+  - `product_probe_enabled = true`
+  - `execution_product_probe_enabled = true`
+  - `product_probe_available = true`
+- 但多个 case 在 execution 启动阶段返回 `launch_failed / not_started`，没有进入 execution status polling。
+- 原逻辑把“execution-stage probe 开关已启用”误当成“execution-stage probe 已完成接管”，导致 post-execution 阶段不再执行 probe 轮询，而是固定等待用户配置的 25 秒。
+- `run_state.json` 中 `product_probe_supported = false` 也具有误导性：这并不表示腾讯电脑管家不支持 probe，只表示 early return 没有填充该字段。
+
+修复内容：
+
+- post-execution delay 判断改为：
+  - 如果 execution-stage probe 已经观测到 `strong_signal_observed`，使用短等待；
+  - 如果 execution-stage 没有观测到 strong signal，即使 execution probe 开关启用，post-execution waiting 仍继续按 interval 调用 product probe；
+  - 如果 product probe 在 post-execution 阶段观测到 `strong_signal_observed`，提前结束等待并进入正式 collection。
+- execution early return 结果补齐 product probe capability metadata：
+  - `product_probe_supported` 表示产品/计划是否支持 probe；
+  - `product_probe_count = 0` 表示 execution-stage probe 未运行；
+  - `observation_exit_reason` 区分 `launch_failed_before_polling` / `dry_run` / `execution_handler_disabled` 等原因。
+
+验证结果：
+
+```text
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m ruff format --check --no-cache src tests
+140 files already formatted
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m ruff check --no-cache src tests
+All checks passed!
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m unittest tests.test_single_run tests.test_multi_run_runner tests.test_cli
+Ran 126 tests in 19.400s
+OK
+```
+
+新增/调整测试：
+
+- execution-stage probe 没有 strong signal 时，post-execution probe 仍会继续运行并可提前结束等待；
+- launch failure 场景下仍保留 `product_probe_supported = true`，并通过 post-execution probe 捕获 strong signal；
+- strong signal 已在 execution-stage 捕获时，仍保持短等待逻辑不变。
+
+边界确认：
+
+- 未读取 `configs/real.toml`。
+- 未触发真实腾讯云 API。
+- 未读取、上传或执行样本文件。
+- 未新增 shell / PowerShell / cmd / subprocess 路径。
+- 未改变 product probe / collector / evaluator 的职责边界。
