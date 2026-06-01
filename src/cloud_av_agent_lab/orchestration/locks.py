@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .run_state import utc_now
 
@@ -97,13 +99,35 @@ def _read_json(path: Path) -> dict[str, Any]:
     return decoded if isinstance(decoded, dict) else {}
 
 
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    temp_path = path.with_suffix(path.suffix + ".tmp")
+def _write_json_atomic(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    attempts: int = 3,
+    retry_delay_seconds: float = 0.05,
+    sleep: Callable[[float], object] = time.sleep,
+) -> None:
+    temp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     temp_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    temp_path.replace(path)
+    last_error: OSError | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            temp_path.replace(path)
+            return
+        except OSError as exc:
+            last_error = exc
+            if attempt >= max(1, attempts) - 1:
+                break
+            sleep(retry_delay_seconds)
+    try:
+        temp_path.unlink()
+    except OSError:
+        pass
+    if last_error is not None:
+        raise last_error
 
 
 def _is_expired(payload: dict[str, Any]) -> bool:

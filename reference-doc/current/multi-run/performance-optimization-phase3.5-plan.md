@@ -610,3 +610,45 @@ OK
 - 未向 Markdown 暴露 Guest Agent / Desktop Worker URL。
 - 未改变 collector / evaluator verdict 语义。
 - 未新增 shell / PowerShell / cmd / subprocess 路径。
+
+### Commit 4：Windows-safe lock atomic write retry
+
+完成时间：2026-06-01
+
+完成内容：
+
+- `orchestration/locks.py` 的 lock JSON 原子写入改为唯一临时文件名：
+  - 不再固定使用 `*.lock.tmp`；
+  - 临时文件格式包含随机 UUID，降低 stale temp 与杀软/索引器短暂占用导致的冲突概率。
+- 对 `temp_path.replace(lock_path)` 增加短重试：
+  - 默认 3 次；
+  - 默认重试间隔 0.05 秒；
+  - 重试耗尽后继续抛出原始 `OSError`，不吞掉真实锁失败。
+- 重试失败时会尽量删除本次创建的唯一临时文件。
+- 新增测试覆盖：
+  - 第一次 `replace()` 失败、第二次成功时能够完成写入；
+  - 重试耗尽时抛出 `PermissionError`；
+  - 失败后不残留本次 `.tmp` 文件；
+  - 原有 acquire / force unlock 行为不变。
+
+验证结果：
+
+```text
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m ruff format --check --no-cache src tests
+140 files already formatted
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m ruff check --no-cache src tests
+All checks passed!
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m unittest tests.test_single_run tests.test_multi_run_runner
+Ran 51 tests in 17.874s
+OK
+```
+
+边界确认：
+
+- 未读取 `configs/real.toml`。
+- 未触发真实云 API。
+- 未读取、上传或执行样本文件。
+- 未改变 instance lock 的并发保护语义。
+- 未新增 shell / PowerShell / cmd / subprocess 路径。

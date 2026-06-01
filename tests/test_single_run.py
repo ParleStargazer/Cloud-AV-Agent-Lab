@@ -21,6 +21,7 @@ from cloud_av_agent_lab.adapters.guest_agent_client import (
 from cloud_av_agent_lab.cli import main
 from cloud_av_agent_lab.orchestration.locks import (
     InstanceLockedError,
+    _write_json_atomic,
     acquire_lock,
     lock_file_for,
 )
@@ -1327,6 +1328,56 @@ class SingleRunLockTests(TestCase):
             self.assertTrue(list(locks_dir.glob("*.stale-*")))
             second.release()
             first.acquired = False
+
+    def test_atomic_lock_write_retries_transient_replace_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "lhins-example.lock"
+            original_replace = Path.replace
+            replace_calls = 0
+
+            def flaky_replace(self: Path, target_path: Path) -> Path:
+                nonlocal replace_calls
+                replace_calls += 1
+                if replace_calls == 1:
+                    raise PermissionError("transient replace failure")
+                return original_replace(self, target_path)
+
+            with patch.object(Path, "replace", flaky_replace):
+                _write_json_atomic(
+                    target,
+                    {"status": "ok"},
+                    retry_delay_seconds=0,
+                    sleep=lambda _seconds: None,
+                )
+
+            self.assertEqual(replace_calls, 2)
+            self.assertEqual(
+                json.loads(target.read_text(encoding="utf-8")),
+                {"status": "ok"},
+            )
+            self.assertFalse(list(Path(tmp).glob("*.tmp")))
+
+    def test_atomic_lock_write_cleans_temp_after_retry_exhaustion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "lhins-example.lock"
+
+            def failing_replace(self: Path, target_path: Path) -> Path:
+                raise PermissionError("still locked")
+
+            with (
+                patch.object(Path, "replace", failing_replace),
+                self.assertRaises(PermissionError),
+            ):
+                _write_json_atomic(
+                    target,
+                    {"status": "ok"},
+                    attempts=2,
+                    retry_delay_seconds=0,
+                    sleep=lambda _seconds: None,
+                )
+
+            self.assertFalse(target.exists())
+            self.assertFalse(list(Path(tmp).glob("*.tmp")))
 
 
 class FakeCloudAdapter:
