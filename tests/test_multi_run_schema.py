@@ -14,12 +14,34 @@ from cloud_av_agent_lab.orchestration.multi_run import (
     CaseState,
     MultiRunEvent,
     MultiRunState,
+    ProductProbeAvailability,
     SampleManifestEntry,
     VERDICTS,
+    resolve_product_probe_availability,
 )
 
 
 class MultiRunSchemaTests(unittest.TestCase):
+    def test_product_probe_availability_uses_supported_products(self) -> None:
+        available = resolve_product_probe_availability(
+            "Tencent-PC-Manager",
+            ("tencent-pc-manager",),
+        )
+        unavailable = resolve_product_probe_availability(
+            "huorong",
+            ("tencent-pc-manager",),
+        )
+
+        self.assertIsInstance(available, ProductProbeAvailability)
+        self.assertTrue(available.available)
+        self.assertEqual(available.skip_reason, "")
+        self.assertEqual(available.to_dict()["available"], True)
+        self.assertFalse(unavailable.available)
+        self.assertEqual(
+            unavailable.skip_reason,
+            "product_probe_not_registered",
+        )
+
     def test_sample_manifest_entry_serializes_manifest_schema(self) -> None:
         entry = SampleManifestEntry(
             manifest_id="manifest-001",

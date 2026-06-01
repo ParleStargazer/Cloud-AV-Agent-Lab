@@ -26,6 +26,7 @@ from cloud_av_agent_lab.core.pipeline import TestPipeline
 from cloud_av_agent_lab.core.safety import SafetyError, assert_safe_config
 from cloud_av_agent_lab.guest_agent_server.collectors.registry import (
     supported_product_log_collectors,
+    supported_product_observation_probes,
 )
 from cloud_av_agent_lab.guest_agent_server.security_product_readiness import (
     supported_security_product_readiness_probes,
@@ -46,6 +47,7 @@ from cloud_av_agent_lab.orchestration import (
     load_existing_multi_run_batch,
     load_sample_manifest,
     parse_sample_selection,
+    resolve_product_probe_availability,
     run_single_case,
 )
 from cloud_av_agent_lab.orchestration.locks import InstanceLockedError
@@ -1257,6 +1259,10 @@ def _handle_multi_run(
             max_cases=args.max_cases,
         )
         if execution_mode == "run":
+            product_probe_availability = resolve_product_probe_availability(
+                args.product,
+                supported_product_observation_probes(),
+            )
             artifacts = create_multi_run_batch_plan(
                 batch_root=args.batch_root,
                 batch_id=batch_id,
@@ -1282,6 +1288,8 @@ def _handle_multi_run(
                 post_execution_probe_interval_seconds=(
                     post_execution_probe_interval_seconds
                 ),
+                product_probe_available=product_probe_availability.available,
+                product_probe_skip_reason=(product_probe_availability.skip_reason),
             )
         else:
             artifacts = load_existing_multi_run_batch(

@@ -775,7 +775,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                 plan["execution"]["post_execution_probe_interval_seconds"],
                 1.0,
             )
-            self.assertFalse(plan["execution"]["product_probe_available"])
+            self.assertTrue(plan["execution"]["product_probe_available"])
             self.assertEqual(plan["execution"]["product_probe_skip_reason"], "")
             self.assertFalse(plan["execution"]["execution_product_probe_enabled"])
             self.assertEqual(
@@ -813,7 +813,7 @@ class CloudLifecycleCliGuardTests(TestCase):
                 "post_execution_probe_interval_seconds = 1",
                 generated_config,
             )
-            self.assertIn("product_probe_available = false", generated_config)
+            self.assertIn("product_probe_available = true", generated_config)
             self.assertIn('product_probe_skip_reason = ""', generated_config)
             self.assertIn(
                 "execution_product_probe_enabled = false",

@@ -245,6 +245,32 @@ class MultiRunStateError(ValueError):
     failure_kind: FailureKind = "planning_or_policy_failure"
 
 
+@dataclass(frozen=True)
+class ProductProbeAvailability:
+    available: bool
+    skip_reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "available": self.available,
+            "skip_reason": self.skip_reason,
+        }
+
+
+def resolve_product_probe_availability(
+    product_id: str,
+    supported_products: Iterable[str],
+) -> ProductProbeAvailability:
+    normalized_product = str(product_id or "").strip().casefold()
+    supported = {str(item or "").strip().casefold() for item in supported_products}
+    if normalized_product and normalized_product in supported:
+        return ProductProbeAvailability(available=True)
+    return ProductProbeAvailability(
+        available=False,
+        skip_reason="product_probe_not_registered",
+    )
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
