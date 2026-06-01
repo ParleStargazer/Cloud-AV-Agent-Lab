@@ -1046,6 +1046,46 @@ class SingleRunTests(TestCase):
                 0.0,
             )
 
+    def test_execution_stage_probe_summary_survives_execution_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.bat"
+            sample_path.write_text("echo harmless", encoding="utf-8")
+            client = FakeGuestClient(
+                execution_states=["running", "running"],
+                probe_states=["activity_observed", "activity_observed"],
+            )
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="tencent-pc-manager",
+                    product_probe_available=True,
+                    execution_product_probe_enabled=True,
+                    execution_product_probe_interval_seconds=1.0,
+                    execution_poll_interval_seconds=1.0,
+                    execution_poll_timeout_seconds=1.0,
+                    post_execution_collection_delay_seconds=0.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda _seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            execution = run_state["stages"]["execution"]
+            self.assertEqual(execution["state"], "timeout_still_running")
+            self.assertEqual(execution["observation_exit_reason"], "timeout")
+            self.assertEqual(execution["product_probe_count"], 2)
+            self.assertEqual(
+                execution["product_probe_first_signal_state"],
+                "activity_observed",
+            )
+            self.assertTrue(execution["activity_signal_observed"])
+            self.assertFalse(execution["strong_signal_observed"])
+
     def test_product_probe_unsupported_falls_back_to_fixed_delay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1467,9 +1507,14 @@ class FakeGuestClient:
         mark_timeout: bool = False,
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
-        execution_state = (
-            self.execution_states.pop(0) if self.execution_states else "exited_cleanly"
-        )
+        if mark_timeout:
+            execution_state = "timeout_still_running"
+        else:
+            execution_state = (
+                self.execution_states.pop(0)
+                if self.execution_states
+                else "exited_cleanly"
+            )
         return GuestAgentResponse(
             status="ok",
             message="execution",
