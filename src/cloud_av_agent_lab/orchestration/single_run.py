@@ -907,6 +907,10 @@ def _run_single_case_locked(
             probe_interval_seconds = max(
                 options.post_execution_probe_interval_seconds, 0.0
             )
+            execution_stage_probe_active = (
+                options.execution_product_probe_enabled
+                and options.product_probe_available
+            )
             state.mark_stage(
                 "collection",
                 "post_execution_default_delay_seconds",
@@ -942,6 +946,16 @@ def _run_single_case_locked(
                 "post_execution_delay_decision_reason",
                 delay_decision.reason,
             )
+            state.mark_stage(
+                "collection",
+                "execution_product_probe_elapsed_seconds",
+                float(execution_result.get("product_probe_elapsed_seconds") or 0.0),
+            )
+            state.mark_stage(
+                "collection",
+                "post_execution_product_probe_elapsed_seconds",
+                0.0,
+            )
             execution_state = execution_result["execution_state"]
             if options.dry_run:
                 LOGGER.info(
@@ -972,7 +986,7 @@ def _run_single_case_locked(
                 if (
                     options.product_probe_enabled
                     and probe_interval_seconds > 0
-                    and delay_decision.source != "execution_strong_signal_observed"
+                    and not execution_stage_probe_active
                 ):
                     probe_result = _adaptive_post_execution_collection_delay(
                         client=client,
@@ -984,6 +998,11 @@ def _run_single_case_locked(
                     )
                     for key, value in probe_result.items():
                         state.mark_stage("collection", key, value)
+                    state.mark_stage(
+                        "collection",
+                        "post_execution_product_probe_elapsed_seconds",
+                        float(probe_result.get("product_probe_elapsed_seconds") or 0.0),
+                    )
                     if probe_result.get("product_probe_warning"):
                         state.add_warning(
                             "collection",
@@ -997,6 +1016,8 @@ def _run_single_case_locked(
                         "product_probe_exit_reason",
                         "execution_strong_signal_fixed_delay"
                         if delay_decision.source == "execution_strong_signal_observed"
+                        else "execution_stage_delay_decision_fixed_delay"
+                        if execution_stage_probe_active
                         else "disabled_fixed_delay",
                     )
                 LOGGER.info(
