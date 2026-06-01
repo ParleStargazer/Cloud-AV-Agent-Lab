@@ -220,6 +220,36 @@ class SingleRunOptions:
 
 
 @dataclass(frozen=True)
+class ExecutionObservationResult:
+    response: GuestAgentResponse
+    execution_state: str
+    execution_terminal: bool
+    root_pid: int | None
+    children_count: int
+    elapsed_seconds: float
+    product_probe_enabled: bool = False
+    product_probe_supported: bool = False
+    product_probe_count: int = 0
+    product_probe_last_state: str = ""
+    strong_signal_observed: bool = False
+    exit_reason: str = ""
+
+    def to_result_fields(self) -> dict[str, Any]:
+        return {
+            "execution_terminal": self.execution_terminal,
+            "root_pid": self.root_pid,
+            "children_count": self.children_count,
+            "observation_elapsed_seconds": self.elapsed_seconds,
+            "product_probe_enabled": self.product_probe_enabled,
+            "product_probe_supported": self.product_probe_supported,
+            "product_probe_count": self.product_probe_count,
+            "product_probe_last_state": self.product_probe_last_state,
+            "strong_signal_observed": self.strong_signal_observed,
+            "observation_exit_reason": self.exit_reason,
+        }
+
+
+@dataclass(frozen=True)
 class SingleRunResult:
     run_id: str
     case_id: str
@@ -733,6 +763,51 @@ def _run_single_case_locked(
                 "execution",
                 "execution_product_probe_interval_seconds",
                 max(options.execution_product_probe_interval_seconds, 0.0),
+            )
+            state.mark_stage(
+                "execution",
+                "execution_terminal",
+                bool(execution_result.get("execution_terminal", False)),
+            )
+            state.mark_stage(
+                "execution",
+                "root_pid",
+                execution_result.get("root_pid"),
+            )
+            state.mark_stage(
+                "execution",
+                "children_count",
+                int(execution_result.get("children_count") or 0),
+            )
+            state.mark_stage(
+                "execution",
+                "observation_elapsed_seconds",
+                float(execution_result.get("observation_elapsed_seconds") or 0.0),
+            )
+            state.mark_stage(
+                "execution",
+                "product_probe_supported",
+                bool(execution_result.get("product_probe_supported", False)),
+            )
+            state.mark_stage(
+                "execution",
+                "product_probe_count",
+                int(execution_result.get("product_probe_count") or 0),
+            )
+            state.mark_stage(
+                "execution",
+                "product_probe_last_state",
+                str(execution_result.get("product_probe_last_state") or ""),
+            )
+            state.mark_stage(
+                "execution",
+                "strong_signal_observed",
+                bool(execution_result.get("strong_signal_observed", False)),
+            )
+            state.mark_stage(
+                "execution",
+                "observation_exit_reason",
+                str(execution_result.get("observation_exit_reason") or ""),
             )
             if execution_result["status"] in {"skipped", "not_started"}:
                 state.add_warning("execution", execution_result["reason"])
@@ -1463,14 +1538,15 @@ def _execute_after_upload_observation(
             "execution_mode": decision.execution_mode,
         }
 
-    final_response = _poll_execution_status(
+    final_observation = _poll_execution_status(
         client,
         case_id,
         poll_interval_seconds=poll_interval_seconds,
         timeout_seconds=poll_timeout_seconds,
         sleep=sleep,
     )
-    final_state = str(_extract_execution_state(final_response.data) or execution_state)
+    final_response = final_observation.response
+    final_state = final_observation.execution_state or execution_state
     return {
         "status": "observed",
         "execution_state": final_state,
@@ -1483,6 +1559,7 @@ def _execute_after_upload_observation(
         ),
         "handler_id": decision.handler_id,
         "execution_mode": decision.execution_mode,
+        **final_observation.to_result_fields(),
     }
 
 
@@ -1497,7 +1574,7 @@ def _nonfatal_remote_execution_state(error: GuestAgentError) -> str:
 
 
 def _should_wait_after_execution_for_collection(
-    execution_result: dict[str, str],
+    execution_result: dict[str, Any],
 ) -> bool:
     if execution_result.get("status") not in {"observed", "not_started"}:
         return False
@@ -1614,7 +1691,7 @@ def _poll_execution_status(
     poll_interval_seconds: float,
     timeout_seconds: float,
     sleep: SleepFunc,
-) -> GuestAgentResponse:
+) -> ExecutionObservationResult:
     elapsed = 0.0
     last_response: GuestAgentResponse | None = None
     while True:
@@ -1629,20 +1706,62 @@ def _poll_execution_status(
             children_count,
         )
         if execution_state in TERMINAL_EXECUTION_STATES:
-            return last_response
+            return _execution_observation_result(
+                last_response,
+                execution_state=execution_state,
+                elapsed_seconds=elapsed,
+                exit_reason="terminal_state",
+            )
         if elapsed >= timeout_seconds:
             if execution_state == "running":
-                return client.execution_status(
+                timeout_response = client.execution_status(
                     case_id,
                     mark_timeout=True,
                     timeout_seconds=timeout_seconds,
                 )
-            return last_response
+                timeout_state = str(
+                    _extract_execution_state(timeout_response.data) or execution_state
+                )
+                return _execution_observation_result(
+                    timeout_response,
+                    execution_state=timeout_state,
+                    elapsed_seconds=elapsed,
+                    exit_reason="timeout",
+                )
+            return _execution_observation_result(
+                last_response,
+                execution_state=execution_state,
+                elapsed_seconds=elapsed,
+                exit_reason="timeout",
+            )
         wait_seconds = min(poll_interval_seconds, timeout_seconds - elapsed)
         if wait_seconds <= 0:
-            return last_response
+            return _execution_observation_result(
+                last_response,
+                execution_state=execution_state,
+                elapsed_seconds=elapsed,
+                exit_reason="poll_interval_exhausted",
+            )
         sleep(wait_seconds)
         elapsed += wait_seconds
+
+
+def _execution_observation_result(
+    response: GuestAgentResponse,
+    *,
+    execution_state: str,
+    elapsed_seconds: float,
+    exit_reason: str,
+) -> ExecutionObservationResult:
+    return ExecutionObservationResult(
+        response=response,
+        execution_state=execution_state,
+        execution_terminal=execution_state in TERMINAL_EXECUTION_STATES,
+        root_pid=_extract_root_pid(response.data),
+        children_count=_children_count(response.data),
+        elapsed_seconds=elapsed_seconds,
+        exit_reason=exit_reason,
+    )
 
 
 def _write_summary_outputs(run_dir: Path, summary: dict[str, Any]) -> Path:
@@ -1807,6 +1926,20 @@ def _children_count(data: dict[str, object]) -> int:
         else data.get("children", [])
     )
     return len(children) if isinstance(children, list) else 0
+
+
+def _extract_root_pid(data: dict[str, object]) -> int | None:
+    execution = data.get("execution")
+    value = (
+        execution.get("root_pid")
+        if isinstance(execution, dict)
+        else data.get("root_pid")
+    )
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdecimal():
+        return int(value)
+    return None
 
 
 def _final_status(

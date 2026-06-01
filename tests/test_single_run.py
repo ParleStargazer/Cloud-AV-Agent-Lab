@@ -792,6 +792,12 @@ class SingleRunTests(TestCase):
 
             self.assertIn(45.0, sleeps)
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            execution = run_state["stages"]["execution"]
+            self.assertTrue(execution["execution_terminal"])
+            self.assertEqual(execution["children_count"], 0)
+            self.assertEqual(execution["observation_exit_reason"], "terminal_state")
+            self.assertEqual(execution["product_probe_count"], 0)
+            self.assertEqual(execution["product_probe_last_state"], "")
             self.assertEqual(
                 run_state["stages"]["collection"][
                     "post_execution_collection_delay_seconds"
