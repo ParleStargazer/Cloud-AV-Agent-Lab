@@ -525,3 +525,42 @@ OK
 - 未读取、上传或执行样本文件。
 - 未改变 collector / evaluator verdict 语义。
 - 未新增 shell / PowerShell / cmd / subprocess 路径。
+
+### Commit 2：upload status immediate polling
+
+完成时间：2026-06-01
+
+完成内容：
+
+- 将 `DEFAULT_UPLOAD_INITIAL_WAIT_SECONDS` 从 `10.0` 调整为 `0.0`。
+- 上传 HTTP 成功后默认立即进入 post-upload status polling。
+- 保留内部 `upload_initial_wait_seconds` 字段作为兼容扩展点，但默认行为不再包含隐藏的 10 秒前置等待。
+- 更新 upload polling 日志：
+  - 默认记录 `upload saved; polling post-upload state immediately`；
+  - 只有内部显式设置初始等待时才记录 `waiting Ns before polling`。
+- 新增测试覆盖：
+  - `upload_status_timeout_seconds = 0` 时仍会立即查询 `case_status`；
+  - 不会调用固定 10 秒 sleep；
+  - run log 不再出现 `upload saved; waiting 10s`。
+
+验证结果：
+
+```text
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m ruff format --check --no-cache src tests
+140 files already formatted
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m ruff check --no-cache src tests
+All checks passed!
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m unittest tests.test_single_run
+Ran 35 tests in 15.279s
+OK
+```
+
+边界确认：
+
+- 未读取 `configs/real.toml`。
+- 未触发真实云 API。
+- 未读取、上传或执行样本文件。
+- 未改变 upload endpoint、collector 或 evaluator 的安全边界。
+- 未新增 shell / PowerShell / cmd / subprocess 路径。

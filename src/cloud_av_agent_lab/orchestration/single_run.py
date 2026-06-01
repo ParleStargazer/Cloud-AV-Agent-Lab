@@ -45,7 +45,7 @@ DEFAULT_GUEST_READY_SUCCESSES = 2
 DEFAULT_SETTLING_COOLDOWN_SECONDS = 15.0
 DEFAULT_FASTMODE_REUSE_GUEST_READY_SUCCESSES = 1
 DEFAULT_FASTMODE_REUSE_SETTLING_COOLDOWN_SECONDS = 3.0
-DEFAULT_UPLOAD_INITIAL_WAIT_SECONDS = 10.0
+DEFAULT_UPLOAD_INITIAL_WAIT_SECONDS = 0.0
 DEFAULT_UPLOAD_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS = 30.0
 DEFAULT_EXECUTION_POLL_INTERVAL_SECONDS = 2.0
@@ -1335,14 +1335,16 @@ def _poll_upload_status(
     timeout_seconds: float,
     sleep: SleepFunc,
 ) -> GuestAgentResponse:
-    LOGGER.info(
-        "upload saved; waiting %.0fs before polling post-upload state",
-        initial_wait_seconds,
-    )
     elapsed = 0.0
     if initial_wait_seconds > 0:
+        LOGGER.info(
+            "upload saved; waiting %.0fs before polling post-upload state",
+            initial_wait_seconds,
+        )
         sleep(initial_wait_seconds)
         elapsed = min(initial_wait_seconds, timeout_seconds)
+    else:
+        LOGGER.info("upload saved; polling post-upload state immediately")
 
     last_response: GuestAgentResponse | None = None
     while True:

@@ -689,6 +689,31 @@ class SingleRunTests(TestCase):
                 "skipped_locked_or_busy",
             )
 
+    def test_upload_status_polling_starts_immediately_without_fixed_wait(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.exe"
+            sample_path.write_bytes(b"harmless")
+            sleeps: list[float] = []
+            client = FakeGuestClient(status_upload_state="stable")
+
+            result = run_single_case(
+                _options(root, sample_path, upload_poll_timeout_seconds=0.0),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertNotIn(10.0, sleeps)
+            self.assertGreaterEqual(client.case_status_calls, 1)
+            run_log = (result.run_dir / "run.log").read_text(encoding="utf-8")
+            self.assertIn(
+                "upload saved; polling post-upload state immediately",
+                run_log,
+            )
+            self.assertNotIn("upload saved; waiting 10s", run_log)
+
     def test_nonfatal_execute_error_continues_to_collection_and_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1382,6 +1407,7 @@ class FakeGuestClient:
         self.probe_error = probe_error
         self.health_calls = 0
         self.worker_status_calls = 0
+        self.case_status_calls = 0
         self.export_timeouts: list[float | None] = []
         self.execute_dry_runs: list[bool] = []
         self.execute_handler_ids: list[str] = []
@@ -1470,6 +1496,7 @@ class FakeGuestClient:
         case_id: str,
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
+        self.case_status_calls += 1
         return GuestAgentResponse(
             status="ok",
             message="status",
@@ -1611,6 +1638,7 @@ def _options(
     execution_product_probe_interval_seconds: float = 1.0,
     execution_poll_interval_seconds: float = 2.0,
     execution_poll_timeout_seconds: float = 60.0,
+    upload_poll_timeout_seconds: float = 0.1,
     defer_final_cleanup: bool = False,
     skip_initial_restore: bool = False,
 ) -> SingleRunOptions:
@@ -1628,9 +1656,8 @@ def _options(
         guest_ready_interval_seconds=0.1,
         guest_ready_successes=guest_ready_successes,
         settling_cooldown_seconds=0,
-        upload_initial_wait_seconds=0,
         upload_poll_interval_seconds=0.1,
-        upload_poll_timeout_seconds=0.1,
+        upload_poll_timeout_seconds=upload_poll_timeout_seconds,
         execution_poll_interval_seconds=execution_poll_interval_seconds,
         execution_poll_timeout_seconds=execution_poll_timeout_seconds,
         post_execution_collection_delay_seconds=(
