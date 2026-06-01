@@ -697,3 +697,52 @@ OK
 - 未读取、上传或执行样本文件。
 - 未降低初始锁获取、active lock、cleanup failure、unsafe_to_continue 的优先级。
 - 未新增 shell / PowerShell / cmd / subprocess 路径。
+
+### Commit 6：Phase 3.5 final verification
+
+完成时间：2026-06-01
+
+封口结论：
+
+- Phase 3.5 的四个修正点已经完成：
+  - probe 引导统一为 execution-stage + post-execution waiting 双阶段语义；
+  - upload 状态查询移除固定 10 秒等待，文件落地后立即开始轮询；
+  - aggregate summary / Markdown 记录关键运行参数，避免跨 batch 耗时误读；
+  - lock/run_state 写入与 post-collection heartbeat 归因完成 Windows 兼容收口。
+- 当前实现没有改变 collector / evaluator 的产品证据语义。
+- 当前实现没有把 fastmode / probe 结果解释为最终 verdict；最终结论仍由 summary/evaluator 输出决定。
+- 0039 类似的“证据已产生但本地状态写入/lock refresh 偶发失败”场景已经降低误判概率：
+  - run_state 原子写入已有 Windows 短重试；
+  - lock heartbeat 写入已有唯一临时文件与短重试；
+  - collection 完成后的 heartbeat 失败不会再阻断 summary/evidence 持久化。
+
+完整验证结果：
+
+```text
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m ruff format --check --no-cache src tests
+140 files already formatted
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m ruff check --no-cache src tests
+All checks passed!
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m unittest discover -s tests
+Ran 485 tests in 26.899s
+OK
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m compileall src tests
+OK
+
+C:\Users\Parle\.conda\envs\cloud-av-agent-lab\python.exe -m cloud_av_agent_lab validate --config configs/lab.example.toml
+ok: 2 samples, 4 products, 4 VMs, 8 planned cases
+
+git diff --check -- . ':!configs/real.toml'
+OK
+```
+
+边界确认：
+
+- 未读取 `configs/real.toml`。
+- 未触发真实腾讯云 API。
+- 未读取、上传或执行样本文件。
+- 未新增 shell / PowerShell / cmd / subprocess 路径。
+- 未改变安全产品 collector / evaluator 的职责边界。
