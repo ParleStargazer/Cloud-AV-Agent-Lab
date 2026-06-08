@@ -3825,9 +3825,15 @@ def _fastmode_gate_decision(
     summary = _read_optional_json_mapping(summary_path) if summary_path else {}
     if not summary:
         return False, "case_summary_missing"
-    if not _summary_contains_strong_attribution(summary):
-        return False, "strong_attribution_missing"
-    return True, "evaluator_detected_or_blocked_high_confidence_strong_attribution"
+    if not _summary_contains_fastmode_strong_evidence(summary):
+        return False, "strong_evidence_missing"
+    return True, "evaluator_detected_or_blocked_high_confidence_strong_evidence"
+
+
+def _summary_contains_fastmode_strong_evidence(value: Any) -> bool:
+    return _summary_contains_strong_attribution(
+        value
+    ) or _summary_contains_matched_product_log_evidence(value)
 
 
 def _summary_contains_strong_attribution(value: Any) -> bool:
@@ -3845,6 +3851,43 @@ def _summary_contains_strong_attribution(value: Any) -> bool:
     if isinstance(value, list | tuple):
         return any(_summary_contains_strong_attribution(item) for item in value)
     return False
+
+
+def _summary_contains_matched_product_log_evidence(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        reason = str(value.get("reason", "")).casefold()
+        verdict = str(value.get("verdict", "")).casefold()
+        evidence_count = _coerce_non_negative_int(value.get("evidence_count"))
+        intercepted = value.get("intercepted") is True
+        matched_case = reason == "product_log_evidence_matched_case"
+        positive_verdict = verdict in {
+            "blocked",
+            "detected",
+            "detected_or_blocked",
+            "intercepted",
+            "quarantined",
+        }
+        if matched_case and evidence_count > 0 and (intercepted or positive_verdict):
+            return True
+        return any(
+            _summary_contains_matched_product_log_evidence(item)
+            for item in value.values()
+        )
+    if isinstance(value, list | tuple):
+        return any(
+            _summary_contains_matched_product_log_evidence(item) for item in value
+        )
+    return False
+
+
+def _coerce_non_negative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, number)
 
 
 def _with_terminal_batch_cleanup_state(state: MultiRunState) -> MultiRunState:

@@ -254,7 +254,7 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             )
             self.assertEqual(
                 state["cases"][0]["fastmode_reason"],
-                "evaluator_detected_or_blocked_high_confidence_strong_attribution",
+                "evaluator_detected_or_blocked_high_confidence_strong_evidence",
             )
             summary = json.loads(
                 (batch_dir / "aggregate_summary.json").read_text(encoding="utf-8")
@@ -277,7 +277,29 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertIn("clean snapshot baseline", markdown)
             self.assertIn("Fastmode", markdown)
 
-    def test_fastmode_gate_requires_strong_attribution_from_summary(self) -> None:
+    def test_fastmode_gate_uses_matched_product_log_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, _runner = _plan_and_execute(
+                tmp,
+                indexes=(1, 2),
+                fastmode=True,
+                runner=MatchedProductLogEvidenceRunner(),
+            )
+
+            state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
+            self.assertTrue(state["fastmode_enabled"])
+            self.assertTrue(state["cases"][0]["fastmode_eligible"])
+            self.assertTrue(state["cases"][1]["fastmode_used"])
+            self.assertEqual(
+                state["cases"][1]["environment_reused_from_case_id"],
+                state["cases"][0]["case_id"],
+            )
+            self.assertEqual(
+                state["cases"][0]["fastmode_reason"],
+                "evaluator_detected_or_blocked_high_confidence_strong_evidence",
+            )
+
+    def test_fastmode_gate_requires_strong_evidence_from_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             batch_dir, _runner = _plan_and_execute(
                 tmp,
@@ -762,6 +784,54 @@ class StrongAttributionRunner:
                                 }
                             ]
                         }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SingleRunRunnerResult(
+            run_id=request.run_id,
+            case_id=request.case_id,
+            final_status="completed",
+            case_status="completed",
+            single_run_status="completed",
+            cleanup_status=(
+                "deferred_to_next_case" if request.defer_final_cleanup else "restored"
+            ),
+            evidence_status="exported",
+            summary_status="collected",
+            verdict="detected_or_blocked",
+            confidence="high",
+            result_source="test_runner",
+            simulated=True,
+            case_summary_path=summary_path.relative_to(batch_root).as_posix(),
+        )
+
+
+class MatchedProductLogEvidenceRunner:
+    requests: list[SingleRunRequest]
+
+    def __init__(self) -> None:
+        self.requests = []
+
+    def run(self, request: SingleRunRequest) -> SingleRunRunnerResult:
+        self.requests.append(request)
+        batch_root = request.case_dir.parent.parent
+        run_dir = request.case_dir / "single_run"
+        run_dir.mkdir(parents=True)
+        summary_path = run_dir / "case_summary.json"
+        summary_path.write_text(
+            json.dumps(
+                {
+                    "verdict": "detected_or_blocked",
+                    "confidence": "high",
+                    "collection": {
+                        "product_id": "huorong",
+                        "state": "collected",
+                        "verdict": "intercepted",
+                        "intercepted": True,
+                        "reason": "product_log_evidence_matched_case",
+                        "evidence_count": 1,
                     },
                 }
             ),
