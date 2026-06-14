@@ -212,6 +212,60 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
                 [event["type"] for event in events],
             )
 
+    def test_scheduler_burns_failed_indexed_sample_with_failed_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_dir = tmp_path / "raw_sample"
+            raw_dir.mkdir()
+            (raw_dir / "sample-a.exe").write_bytes(b"harmless-placeholder")
+            batch_root = tmp_path / "batches"
+            batch_id = "burn-failed-test"
+            index_artifacts = build_sample_manifest_from_directory(
+                raw_dir,
+                batch_root / batch_id / "sample_index",
+            )
+            manifest = load_sample_manifest(index_artifacts.manifest_path)
+            selection = parse_sample_selection(manifest.indexes, indexes_text="1")
+            artifacts = create_multi_run_batch_plan(
+                batch_root=batch_root,
+                batch_id=batch_id,
+                product_id="huorong",
+                instance_id="lhins-test",
+                snapshot_id="lhsnap-test",
+                region="ap-singapore",
+                guest_agent_url="http://127.0.0.1:8080",
+                desktop_worker_url="http://127.0.0.1:8001",
+                manifest=manifest,
+                selection=selection,
+                dry_run=True,
+                failure_policy="continue",
+            )
+            indexed_path = Path(manifest.entries[0].sample_ref)
+            failed_marker_path = indexed_path.with_name(f"{indexed_path.name}.failed")
+            self.assertGreater(indexed_path.stat().st_size, 0)
+
+            execute_multi_run_batch(
+                artifacts.batch_dir,
+                runner=FakeSingleRunRunner(scenarios_by_sample_index={1: "timeout"}),
+            )
+
+            state = json.loads(
+                (artifacts.batch_dir / "multi_run_state.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            events = read_multi_run_events(
+                artifacts.batch_dir / "multi_run_events.jsonl"
+            )
+            self.assertEqual(state["cases"][0]["indexed_sample_state"], "burned")
+            self.assertFalse(indexed_path.exists())
+            self.assertTrue(failed_marker_path.is_file())
+            self.assertEqual(failed_marker_path.stat().st_size, 0)
+            self.assertIn(
+                "indexed_sample_burned",
+                [event["type"] for event in events],
+            )
+
     def test_deferred_cleanup_strategy_defers_only_middle_cases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             batch_dir, runner = _plan_and_execute(

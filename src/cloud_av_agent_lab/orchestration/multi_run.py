@@ -3925,22 +3925,28 @@ def _burn_indexed_sample_after_persisted_result(
     request: SingleRunRequest,
     result: SingleRunRunnerResult,
 ) -> tuple[IndexedSampleState | None, str]:
-    if not _is_indexed_sample_burn_eligible(result):
+    write_failed_marker = _is_indexed_sample_failed_marker_eligible(result)
+    if not _is_indexed_sample_burn_eligible(result) and not write_failed_marker:
         return None, ""
 
     sample_path = Path(request.sample_ref)
     indexed_dir = root / "sample_index" / "indexed"
     if not _is_path_relative_to(sample_path, indexed_dir):
         return None, ""
-    if not sample_path.is_file():
+    failed_marker_path = sample_path.with_name(f"{sample_path.name}.failed")
+    if not sample_path.is_file() and not write_failed_marker:
         return (
             "burn_failed",
             "indexed sample mirror was not found when burn-after-use ran",
         )
 
     try:
-        sample_path.unlink()
-        sample_path.write_bytes(b"")
+        if sample_path.exists():
+            sample_path.unlink()
+        if write_failed_marker:
+            failed_marker_path.write_bytes(b"")
+        else:
+            sample_path.write_bytes(b"")
     except OSError as exc:
         return (
             "burn_failed",
@@ -3950,6 +3956,23 @@ def _burn_indexed_sample_after_persisted_result(
         )
 
     return "burned", ""
+
+
+def _is_indexed_sample_failed_marker_eligible(
+    result: SingleRunRunnerResult,
+) -> bool:
+    terminal_case = result.case_status in {
+        "completed",
+        "failed",
+        "skipped",
+        "stopped_environment_failure",
+    }
+    failure_kind = classify_runner_result(result)
+    return (
+        result.indexed_sample_state == "available"
+        and terminal_case
+        and failure_kind is not None
+    )
 
 
 def _is_indexed_sample_burn_eligible(result: SingleRunRunnerResult) -> bool:
