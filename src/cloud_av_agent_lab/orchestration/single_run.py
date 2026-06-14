@@ -53,6 +53,9 @@ DEFAULT_EXECUTION_POLL_TIMEOUT_SECONDS = 60.0
 DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS = 45.0
 DEFAULT_POST_EXECUTION_PROBE_INTERVAL_SECONDS = 1.0
 DEFAULT_POST_EXECUTION_QUARANTINE_DELAY_SECONDS = 3.0
+DEFAULT_GUEST_RECONNECT_TIMEOUT_SECONDS = 10.0
+DEFAULT_GUEST_RECONNECT_INTERVAL_SECONDS = 1.0
+DEFAULT_GUEST_RECONNECT_SUCCESSES = 2
 TERMINAL_EXECUTION_STATES = {
     "exited_cleanly",
     "exited_with_error",
@@ -1379,10 +1382,23 @@ def _poll_upload_status(
 
     last_response: GuestAgentResponse | None = None
     while True:
-        last_response = client.case_status(
-            case_id,
-            timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
-        )
+        try:
+            last_response = client.case_status(
+                case_id,
+                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+            )
+        except GuestAgentError as exc:
+            if exc.source != "network":
+                raise
+            recovered, reconnect_elapsed = _try_reconnect_guest_agent(
+                client,
+                sleep=sleep,
+            )
+            elapsed = min(timeout_seconds, elapsed + reconnect_elapsed)
+            if recovered:
+                LOGGER.info("Guest Agent reconnected; retrying upload status query")
+                continue
+            raise
         upload_state = str(_extract_upload_state(last_response.data) or "unknown")
         LOGGER.info(
             "upload polling (%.0fs/%.0fs): state=%s",
@@ -1397,6 +1413,48 @@ def _poll_upload_status(
             return last_response
         sleep(wait_seconds)
         elapsed += wait_seconds
+
+
+def _try_reconnect_guest_agent(
+    client: GuestAgentClient,
+    *,
+    sleep: SleepFunc,
+    timeout_seconds: float = DEFAULT_GUEST_RECONNECT_TIMEOUT_SECONDS,
+    interval_seconds: float = DEFAULT_GUEST_RECONNECT_INTERVAL_SECONDS,
+    required_successes: int = DEFAULT_GUEST_RECONNECT_SUCCESSES,
+) -> tuple[bool, float]:
+    successes = 0
+    elapsed = 0.0
+    deadline = max(timeout_seconds, 0.0)
+    interval = max(interval_seconds, 0.0)
+    while elapsed <= deadline:
+        try:
+            client.health(timeout_seconds=GUEST_HEALTH_TIMEOUT.socket_timeout_seconds())
+        except GuestAgentError as exc:
+            if exc.source != "network":
+                raise
+            successes = 0
+            LOGGER.warning(
+                "Guest Agent reconnect health failed (%.0fs/%.0fs): %s",
+                elapsed,
+                deadline,
+                exc,
+            )
+        else:
+            successes += 1
+            LOGGER.info(
+                "Guest Agent reconnect health ok %d/%d",
+                successes,
+                required_successes,
+            )
+            if successes >= required_successes:
+                return True, elapsed
+        wait_seconds = min(interval, deadline - elapsed)
+        if wait_seconds <= 0:
+            break
+        sleep(wait_seconds)
+        elapsed += wait_seconds
+    return False, elapsed
 
 
 def _check_security_product_readiness_warning_only(

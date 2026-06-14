@@ -754,6 +754,40 @@ class SingleRunTests(TestCase):
             )
             self.assertNotIn("upload saved; waiting 10s", run_log)
 
+    def test_upload_status_network_error_reconnects_before_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.exe"
+            sample_path.write_bytes(b"harmless")
+            sleeps: list[float] = []
+            client = FakeGuestClient(
+                status_upload_state="stable",
+                case_status_errors=[
+                    GuestAgentError(
+                        "network unavailable",
+                        source="network",
+                    )
+                ],
+            )
+
+            result = run_single_case(
+                _options(root, sample_path, upload_poll_timeout_seconds=2.0),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertGreaterEqual(client.health_calls, 4)
+            self.assertGreater(client.case_status_calls, 1)
+            self.assertIn(1.0, sleeps)
+            run_log = (result.run_dir / "run.log").read_text(encoding="utf-8")
+            self.assertIn("Guest Agent reconnect health ok 2/2", run_log)
+            self.assertIn(
+                "Guest Agent reconnected; retrying upload status query",
+                run_log,
+            )
+
     def test_nonfatal_execute_error_continues_to_collection_and_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1603,6 +1637,7 @@ class FakeGuestClient:
         execution_states: list[str] | None = None,
         probe_states: list[str] | None = None,
         probe_error: GuestAgentError | None = None,
+        case_status_errors: list[GuestAgentError] | None = None,
     ) -> None:
         self.fail_collect = fail_collect
         self.status_upload_state = status_upload_state
@@ -1614,6 +1649,7 @@ class FakeGuestClient:
         self.execution_states = list(execution_states or [])
         self.probe_states = list(probe_states or [])
         self.probe_error = probe_error
+        self.case_status_errors = list(case_status_errors or [])
         self.health_calls = 0
         self.worker_status_calls = 0
         self.case_status_calls = 0
@@ -1706,6 +1742,8 @@ class FakeGuestClient:
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
         self.case_status_calls += 1
+        if self.case_status_errors:
+            raise self.case_status_errors.pop(0)
         return GuestAgentResponse(
             status="ok",
             message="status",

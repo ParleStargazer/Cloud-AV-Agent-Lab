@@ -2786,11 +2786,25 @@ def execute_multi_run_batch(
 
         stop_state = _stop_state_for_result(result, plan)
         if stop_state is not None:
+            (
+                cases_by_index,
+                warnings,
+            ) = _burn_available_indexed_samples_after_batch_stop(
+                root,
+                entries_by_index=entries_by_index,
+                cases_by_index=cases_by_index,
+                selected_indexes=selected_indexes,
+                event_log_path=event_log_path,
+                plan=plan,
+                warnings=warnings,
+            )
             state = replace(
                 state,
+                cases=_cases_in_selected_order(cases_by_index, selected_indexes),
                 batch_state=stop_state,
                 final_status=stop_state,
                 finished_at_utc=utc_now(),
+                warnings=tuple(warnings),
             )
             state = _with_terminal_batch_cleanup_state(state)
             write_multi_run_state(state_path, state)
@@ -3929,7 +3943,73 @@ def _burn_indexed_sample_after_persisted_result(
     if not _is_indexed_sample_burn_eligible(result) and not write_failed_marker:
         return None, ""
 
-    sample_path = Path(request.sample_ref)
+    return _burn_indexed_sample_path(
+        root,
+        sample_ref=request.sample_ref,
+        write_failed_marker=write_failed_marker,
+    )
+
+
+def _burn_available_indexed_samples_after_batch_stop(
+    root: Path,
+    *,
+    entries_by_index: Mapping[int, SampleManifestEntry],
+    cases_by_index: dict[int, CaseState],
+    selected_indexes: tuple[int, ...],
+    event_log_path: Path,
+    plan: BatchPlan,
+    warnings: list[str],
+) -> tuple[dict[int, CaseState], list[str]]:
+    updated_cases = dict(cases_by_index)
+    updated_warnings = list(warnings)
+    for index in selected_indexes:
+        case = updated_cases[index]
+        if case.indexed_sample_state != "available":
+            continue
+        entry = entries_by_index[index]
+        burn_state, burn_warning = _burn_indexed_sample_path(
+            root,
+            sample_ref=entry.sample_ref,
+            write_failed_marker=True,
+        )
+        if burn_state is None:
+            continue
+        case_warnings = case.warnings
+        if burn_warning:
+            updated_warnings.append(burn_warning)
+            case_warnings = (*case_warnings, burn_warning)
+        updated_cases[index] = replace(
+            case,
+            indexed_sample_state=burn_state,
+            warnings=case_warnings,
+        )
+        append_next_multi_run_event(
+            event_log_path,
+            batch_id=plan.batch_id,
+            event_type="indexed_sample_burned_after_batch_stop"
+            if burn_state == "burned"
+            else "indexed_sample_burn_failed_after_batch_stop",
+            sample_index=index,
+            sample_id=entry.sample_id,
+            run_id=case.run_id,
+            case_id=case.case_id,
+            case_status=case.case_status,
+            data={
+                "indexed_sample_state": burn_state,
+                "sample_ref": _relative_batch_path(root, entry.sample_ref),
+                "warning": burn_warning,
+            },
+        )
+    return updated_cases, updated_warnings
+
+
+def _burn_indexed_sample_path(
+    root: Path,
+    *,
+    sample_ref: str,
+    write_failed_marker: bool,
+) -> tuple[IndexedSampleState | None, str]:
+    sample_path = Path(sample_ref)
     indexed_dir = root / "sample_index" / "indexed"
     if not _is_path_relative_to(sample_path, indexed_dir):
         return None, ""

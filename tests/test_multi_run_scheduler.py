@@ -102,6 +102,67 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertEqual(state["cases"][0]["failure_kind"], "environment_failure")
             self.assertEqual(state["cases"][1]["case_status"], "planned")
 
+    def test_environment_failure_burns_remaining_indexed_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_dir = tmp_path / "raw_sample"
+            raw_dir.mkdir()
+            (raw_dir / "sample-a.exe").write_bytes(b"harmless-a")
+            (raw_dir / "sample-b.exe").write_bytes(b"harmless-b")
+            batch_root = tmp_path / "batches"
+            batch_id = "burn-stop-test"
+            index_artifacts = build_sample_manifest_from_directory(
+                raw_dir,
+                batch_root / batch_id / "sample_index",
+            )
+            manifest = load_sample_manifest(index_artifacts.manifest_path)
+            selection = parse_sample_selection(manifest.indexes, indexes_text="1,2")
+            artifacts = create_multi_run_batch_plan(
+                batch_root=batch_root,
+                batch_id=batch_id,
+                product_id="huorong",
+                instance_id="lhins-test",
+                snapshot_id="lhsnap-test",
+                region="ap-singapore",
+                guest_agent_url="http://127.0.0.1:8080",
+                desktop_worker_url="http://127.0.0.1:8001",
+                manifest=manifest,
+                selection=selection,
+                dry_run=True,
+                failure_policy="continue",
+            )
+            indexed_paths = [Path(entry.sample_ref) for entry in manifest.entries]
+
+            execute_multi_run_batch(
+                artifacts.batch_dir,
+                runner=FakeSingleRunRunner(
+                    scenarios_by_sample_index={1: "environment_failed"}
+                ),
+            )
+
+            state = json.loads(
+                (artifacts.batch_dir / "multi_run_state.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            events = read_multi_run_events(
+                artifacts.batch_dir / "multi_run_events.jsonl"
+            )
+            self.assertEqual(state["batch_state"], "stopped_for_environment_failure")
+            self.assertEqual(
+                [case["indexed_sample_state"] for case in state["cases"]],
+                ["burned", "burned"],
+            )
+            for indexed_path in indexed_paths:
+                self.assertFalse(indexed_path.exists())
+                self.assertTrue(
+                    indexed_path.with_name(f"{indexed_path.name}.failed").is_file()
+                )
+            self.assertIn(
+                "indexed_sample_burned_after_batch_stop",
+                [event["type"] for event in events],
+            )
+
     def test_cleanup_restore_failure_stops_batch_as_environment_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             batch_dir, runner = _plan_and_execute(
