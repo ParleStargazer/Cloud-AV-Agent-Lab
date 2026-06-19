@@ -166,4 +166,16 @@ def _error_message(decoded: dict[str, Any]) -> str:
         value = decoded.get(key)
         if isinstance(value, str):
             return value
+        if isinstance(value, dict):
+            nested = _nested_error_message(value)
+            if nested:
+                return nested
     return ""
+
+
+def _nested_error_message(decoded: Mapping[str, Any]) -> str:
+    message = str(decoded.get("message", "")).strip()
+    reason_code = str(decoded.get("reason_code", "")).strip()
+    error_type = str(decoded.get("error_type", "")).strip()
+    parts = [part for part in (message, reason_code, error_type) if part]
+    return " ".join(parts)

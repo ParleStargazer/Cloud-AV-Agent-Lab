@@ -24,19 +24,23 @@ try:
         HuorongLogCollector,
     )
     from cloud_av_agent_lab.guest_agent_server.desktop_worker_client import (
+        DesktopWorkerClient,
         DesktopWorkerClientError,
         DesktopWorkerResponse,
         DesktopWorkerStatus,
     )
     from cloud_av_agent_lab.guest_agent_server.workspace import FileProbe
+    from cloud_av_agent_lab.network.client import NetworkResponse
 except ModuleNotFoundError:  # pragma: no cover - optional dependency absent
     TestClient = None
     create_app = None
     FileProbe = None
+    DesktopWorkerClient = None
     HuorongLogCollector = None
     DesktopWorkerClientError = None
     DesktopWorkerResponse = None
     DesktopWorkerStatus = None
+    NetworkResponse = None
 
 
 TOKEN = "unit-test-token"
@@ -186,6 +190,38 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertFalse(payload["data"]["desktop_worker_ready"])
         self.assertEqual(payload["data"]["worker_error_source"], "network")
         self.assertNotIn("worker-token", response.text)
+
+    def test_desktop_worker_client_decodes_nested_error_detail(self) -> None:
+        class FakeNetwork:
+            def request_json(self, **kwargs):
+                return NetworkResponse(
+                    status=500,
+                    headers={},
+                    body=json.dumps(
+                        {
+                            "detail": {
+                                "reason_code": "desktop_worker_internal_error",
+                                "message": "desktop worker execute failed",
+                                "error_type": "RuntimeError",
+                            }
+                        }
+                    ).encode("utf-8"),
+                )
+
+        client = DesktopWorkerClient(
+            base_url="http://127.0.0.1:8001",
+            token="worker-token",
+            network=FakeNetwork(),
+        )
+
+        with self.assertRaises(DesktopWorkerClientError) as error:
+            client.execute({"case_id": "case-001__huorong"})
+
+        message = str(error.exception)
+        self.assertIn("HTTP 500", message)
+        self.assertIn("desktop_worker_internal_error", message)
+        self.assertIn("RuntimeError", message)
+        self.assertNotIn("worker-token", message)
 
     def test_prepare_case_creates_workspace_and_case_json(self) -> None:
         response = self.client.post(
