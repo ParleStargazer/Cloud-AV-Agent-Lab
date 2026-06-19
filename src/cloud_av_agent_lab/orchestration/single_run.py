@@ -888,7 +888,11 @@ def _run_single_case_locked(
                 "observation_exit_reason",
                 str(execution_result.get("observation_exit_reason") or ""),
             )
-            if execution_result["status"] in {"skipped", "not_started"}:
+            if execution_result["status"] in {
+                "skipped",
+                "not_started",
+                "observation_unavailable",
+            }:
                 state.add_warning("execution", execution_result["reason"])
                 warning_count += 1
             if execution_result.get("product_probe_warning"):
@@ -1789,17 +1793,36 @@ def _execute_after_upload_observation(
             ),
         }
 
-    final_observation = _poll_execution_status(
-        client,
-        case_id,
-        poll_interval_seconds=poll_interval_seconds,
-        timeout_seconds=poll_timeout_seconds,
-        product_id=product_id,
-        product_probe_enabled=product_probe_enabled,
-        product_probe_supported=product_probe_supported,
-        product_probe_interval_seconds=product_probe_interval_seconds,
-        sleep=sleep,
-    )
+    try:
+        final_observation = _poll_execution_status(
+            client,
+            case_id,
+            poll_interval_seconds=poll_interval_seconds,
+            timeout_seconds=poll_timeout_seconds,
+            product_id=product_id,
+            product_probe_enabled=product_probe_enabled,
+            product_probe_supported=product_probe_supported,
+            product_probe_interval_seconds=product_probe_interval_seconds,
+            sleep=sleep,
+        )
+    except GuestAgentError as exc:
+        reason = f"execution status observation failed: {exc}"
+        LOGGER.warning("%s", reason)
+        return {
+            "status": "observation_unavailable",
+            "execution_state": "execution_observation_unavailable",
+            "reason": reason,
+            "error_source": exc.source,
+            "error_status_code": exc.status_code,
+            "via": str(execute_response.data.get("execution_via", "")),
+            "handler_id": decision.handler_id,
+            "execution_mode": decision.execution_mode,
+            **_default_execution_probe_result_fields(
+                product_probe_enabled=product_probe_enabled,
+                product_probe_supported=product_probe_supported,
+                exit_reason="execution_status_unavailable",
+            ),
+        }
     final_response = final_observation.response
     final_state = final_observation.execution_state or execution_state
     return {

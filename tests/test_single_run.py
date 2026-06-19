@@ -208,6 +208,46 @@ class SingleRunTests(TestCase):
                 3.0,
             )
 
+    def test_execution_status_failure_continues_to_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.exe"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            client = FakeGuestClient(
+                execution_status_error=GuestAgentError(
+                    "Desktop Worker execution-status request failed: TimeoutError",
+                    status_code=502,
+                    source="network",
+                )
+            )
+            adapter = FakeCloudAdapter()
+
+            result = run_single_case(
+                _options(root, sample_path),
+                cloud_adapter_factory=lambda *args, **kwargs: adapter,
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            self.assertEqual(client.collection_products, ["huorong"])
+            self.assertTrue(result.evidence_bundle_path)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                run_state["stages"]["execution"]["action_status"],
+                "observation_unavailable",
+            )
+            self.assertEqual(
+                run_state["stages"]["execution"]["state"],
+                "execution_observation_unavailable",
+            )
+            self.assertEqual(
+                run_state["stages"]["execution"]["observation_exit_reason"],
+                "execution_status_unavailable",
+            )
+            self.assertEqual(run_state["stages"]["collection"]["evidence_count"], 1)
+            self.assertEqual(run_state["stages"]["evidence"]["status"], "saved")
+
     def test_lock_heartbeat_failure_after_collection_is_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1637,6 +1677,7 @@ class FakeGuestClient:
         execution_states: list[str] | None = None,
         probe_states: list[str] | None = None,
         probe_error: GuestAgentError | None = None,
+        execution_status_error: GuestAgentError | None = None,
         case_status_errors: list[GuestAgentError] | None = None,
     ) -> None:
         self.fail_collect = fail_collect
@@ -1649,6 +1690,7 @@ class FakeGuestClient:
         self.execution_states = list(execution_states or [])
         self.probe_states = list(probe_states or [])
         self.probe_error = probe_error
+        self.execution_status_error = execution_status_error
         self.case_status_errors = list(case_status_errors or [])
         self.health_calls = 0
         self.worker_status_calls = 0
@@ -1781,6 +1823,8 @@ class FakeGuestClient:
         mark_timeout: bool = False,
         timeout_seconds: float | None = None,
     ) -> GuestAgentResponse:
+        if self.execution_status_error is not None:
+            raise self.execution_status_error
         if mark_timeout:
             execution_state = "timeout_still_running"
         else:
