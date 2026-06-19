@@ -55,6 +55,8 @@ def create_app(
             data = execution_registry.execute(payload)
         except WorkerExecutionError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except Exception as exc:
+            raise _internal_worker_error("desktop worker execute failed", exc) from exc
         return {
             "status": "ok",
             "message": str(data.get("message", "desktop worker execution handled")),
@@ -77,6 +79,10 @@ def create_app(
             )
         except WorkerExecutionError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except Exception as exc:
+            raise _internal_worker_error(
+                "desktop worker execution status failed", exc
+            ) from exc
         return {
             "status": "ok",
             "message": "desktop worker execution status observed",
@@ -91,3 +97,15 @@ def _package_version() -> str:
         return version("cloud-av-agent-lab")
     except PackageNotFoundError:
         return "0.1.0"
+
+
+def _internal_worker_error(message: str, exc: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=500,
+        detail={
+            "status": "error",
+            "reason_code": "desktop_worker_internal_error",
+            "message": message,
+            "error_type": type(exc).__name__,
+        },
+    )

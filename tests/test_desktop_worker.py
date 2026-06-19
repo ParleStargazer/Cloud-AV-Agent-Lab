@@ -133,6 +133,26 @@ class DesktopWorkerTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("unsupported fields", response.text)
 
+    def test_execute_unexpected_error_returns_structured_json(self) -> None:
+        with patch(
+            "cloud_av_agent_lab.desktop_worker.execution.WorkerExecutionRegistry.execute",
+            side_effect=RuntimeError("boom"),
+        ):
+            response = self.client.post(
+                "/execute",
+                headers=self._headers(),
+                json={"case_id": "case-001__huorong"},
+            )
+
+        self.assertEqual(response.status_code, 500)
+        payload = response.json()
+        self.assertEqual(
+            payload["detail"]["reason_code"],
+            "desktop_worker_internal_error",
+        )
+        self.assertEqual(payload["detail"]["error_type"], "RuntimeError")
+        self.assertNotIn(TOKEN, response.text)
+
     def test_execute_starts_registered_exe_with_minimal_env(self) -> None:
         case_id, sample_id, sha256 = _prepare_worker_case(self.workdir)
         lease = _lease(case_id, sample_id, "run-1", sha256)
@@ -412,6 +432,25 @@ class DesktopWorkerTests(TestCase):
         data = response.json()["data"]
         self.assertEqual(data["execution_state"], "exited_cleanly")
         self.assertEqual(data["exit_code"], 0)
+
+    def test_execution_status_unexpected_error_returns_structured_json(self) -> None:
+        with patch(
+            "cloud_av_agent_lab.desktop_worker.execution.WorkerExecutionRegistry.execution_status",
+            side_effect=RuntimeError("boom"),
+        ):
+            response = self.client.get(
+                "/execution-status/case-001__huorong",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(response.status_code, 500)
+        payload = response.json()
+        self.assertEqual(
+            payload["detail"]["reason_code"],
+            "desktop_worker_internal_error",
+        )
+        self.assertEqual(payload["detail"]["error_type"], "RuntimeError")
+        self.assertNotIn(TOKEN, response.text)
 
 
 def _prepare_worker_case(
