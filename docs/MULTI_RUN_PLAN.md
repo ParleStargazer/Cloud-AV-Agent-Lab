@@ -250,6 +250,36 @@ The major remaining time sinks are Guest Agent ready waits and necessary
 snapshot restore/stop operations. Fastmode metrics remain exploratory and are
 not comparable with clean snapshot baseline detection rates.
 
+## Planned Data-Plane Isolation
+
+Recent Defender real-sample batches showed a different failure mode: Guest
+Agent can pass `/health`, then become unreachable during upload or upload-status
+observation. One likely cause is that the security product handles the process
+that receives and writes sample bytes. To avoid coupling the long-lived control
+plane to this high-risk data-plane action, a later phase should split sample
+staging into a dedicated `Sample Downloader` / `Sample Stager` process.
+
+Planned rules:
+
+- Guest Agent remains the control plane and status aggregator.
+- Downloader handles only the current case's registered sample transfer request.
+- Downloader must not expose arbitrary path, command, shell, interpreter, or
+  argument inputs.
+- Downloader status is reported through structured metadata files and Guest
+  Agent case status; uploaded sample bytes still never enter evidence bundles.
+- If downloader is unavailable, `single-run` should trigger a preconfigured
+  Windows Scheduled Task restart and require readiness to recover.
+- If downloader remains unavailable after restart, the current sample becomes a
+  `case_failure`; `multi-run` should burn the indexed mirror with a `.failed`
+  marker and continue to the next case when the Guest Agent/control-plane and
+  cleanup state remain safe.
+- Downloader failure should become an `environment_failure` only when the
+  control plane, cleanup, or safety state is also unsafe to continue.
+
+This is an observability and resilience split, not a bypass mechanism. It must
+not add AV exclusions, evasion behavior, shell execution, or client-controlled
+commands.
+
 Detailed historical planning lives in
 `reference-doc/current/multi-run/performance-optimization-plan.md` and
 `reference-doc/current/multi-run/archive/`.
