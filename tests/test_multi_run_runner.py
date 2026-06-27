@@ -309,6 +309,73 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
             self.assertEqual(result.failure_kind, "case_failure")
             self.assertIn("indexed sample mirror", result.error_summary)
 
+    def test_real_runner_maps_invalid_executable_to_unmatched_instruction(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sample_path = tmp_path / "indexed" / "0001_sample.exe"
+            sample_path.parent.mkdir()
+            sample_path.write_bytes(b"harmless")
+            request = _request_for_sample(sample_path, tmp_path / "case")
+
+            def fake_run_single_case(options: object) -> SingleRunResult:
+                run_dir = Path(getattr(options, "runs_dir")) / "run-001"
+                run_dir.mkdir(parents=True)
+                run_state_path = run_dir / "run_state.json"
+                summary_path = run_dir / "case_summary.json"
+                evidence_path = run_dir / "case_evidence.zip"
+                run_state_path.write_text(
+                    json.dumps(
+                        {
+                            "evidence_export_status": "saved",
+                            "warnings": [
+                                {
+                                    "stage": "execution",
+                                    "message": "reason_code=invalid_executable",
+                                }
+                            ],
+                            "errors": [],
+                            "fatal_errors": [],
+                            "stages": {
+                                "execution": {
+                                    "state": "unmatched_instruction",
+                                    "reason": (
+                                        "execution action did not start: "
+                                        "reason_code=invalid_executable winerror=193"
+                                    ),
+                                },
+                                "summary": {"path": str(summary_path)},
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                summary_path.write_text("{}", encoding="utf-8")
+                evidence_path.write_bytes(b"zip")
+                return SingleRunResult(
+                    run_id="real-run-001",
+                    case_id="real-case-001",
+                    run_dir=run_dir,
+                    run_state_path=run_state_path,
+                    generated_config_path=run_dir / "lab.generated.toml",
+                    summary_path=summary_path,
+                    evidence_bundle_path=evidence_path,
+                    verdict="inconclusive",
+                    confidence="",
+                    final_status="completed_with_warnings",
+                    cleanup_status="restored",
+                    emergency_poweroff_status="not_needed",
+                )
+
+            result = RealSingleRunRunner(run_single_case_func=fake_run_single_case).run(
+                request
+            )
+
+            self.assertEqual(result.verdict, "unmatched_instruction")
+            self.assertEqual(result.case_status, "completed")
+            self.assertEqual(result.failure_kind, None)
+
     def test_real_runner_maps_cleanup_restore_failed_to_environment_failure(
         self,
     ) -> None:

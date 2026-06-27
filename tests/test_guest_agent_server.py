@@ -117,6 +117,8 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertIn("hostname", payload["data"])
         self.assertIn("platform", payload["data"])
+        self.assertIn("machine", payload["data"])
+        self.assertIn("architecture", payload["data"])
         self.assertIn("python_version", payload["data"])
         self.assertEqual(payload["data"]["workdir"], str(self.workdir))
         self.assertNotIn(TOKEN, payload_text)

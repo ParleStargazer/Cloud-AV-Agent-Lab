@@ -46,6 +46,7 @@ Verdict: TypeAlias = Literal[
     "not_executed",
     "inconclusive",
     "not_evaluable",
+    "unmatched_instruction",
     "unknown",
 ]
 ReadinessStatus: TypeAlias = Literal["ok", "warning", "unknown", "skipped"]
@@ -160,7 +161,12 @@ VERDICTS: tuple[str, ...] = (
     "not_executed",
     "inconclusive",
     "not_evaluable",
+    "unmatched_instruction",
     "unknown",
+)
+NON_EVALUABLE_VERDICTS: tuple[str, ...] = (
+    "not_evaluable",
+    "unmatched_instruction",
 )
 READINESS_STATUSES: tuple[str, ...] = ("ok", "warning", "unknown", "skipped")
 CLEANUP_STATUSES: tuple[str, ...] = (
@@ -2255,6 +2261,9 @@ def _single_run_result_to_runner_result(
     final_status = str(getattr(result, "final_status", "unknown"))
     failure_kind = _failure_kind_from_single_run(final_status, cleanup_status)
     duration_seconds = _optional_duration_seconds(timing.get("total_seconds"))
+    verdict = str(getattr(result, "verdict", "") or "unknown")
+    if _run_state_has_unmatched_instruction(run_state_payload):
+        verdict = "unmatched_instruction"
     return SingleRunRunnerResult(
         run_id=str(getattr(result, "run_id", request.run_id)),
         case_id=str(getattr(result, "case_id", request.case_id)),
@@ -2265,7 +2274,7 @@ def _single_run_result_to_runner_result(
         evidence_status=_evidence_status_from_single_run(result, run_state_payload),
         summary_status=_summary_status_from_single_run(result, run_state_payload),
         readiness_status=_readiness_status_from_single_run(run_state_payload),
-        verdict=str(getattr(result, "verdict", "") or "unknown"),
+        verdict=verdict,
         confidence=str(getattr(result, "confidence", "")),
         failure_kind=failure_kind,
         result_source="single_run_runner",
@@ -2920,7 +2929,7 @@ def build_multi_run_aggregate_summary(
     evaluable_cases = [
         case
         for case in completed_cases
-        if case.failure_kind is None and case.verdict != "not_evaluable"
+        if case.failure_kind is None and case.verdict not in NON_EVALUABLE_VERDICTS
     ]
     detected_cases = [
         case for case in evaluable_cases if case.verdict == "detected_or_blocked"
@@ -2928,7 +2937,7 @@ def build_multi_run_aggregate_summary(
     not_evaluable_cases = [
         case
         for case in cases
-        if case.verdict == "not_evaluable" or case.failure_kind is not None
+        if case.verdict in NON_EVALUABLE_VERDICTS or case.failure_kind is not None
     ]
     denominator = {
         "selected_samples": selected_samples,
@@ -3884,6 +3893,8 @@ def _fastmode_gate_decision(
         return False, "unsafe_to_continue"
     if classify_runner_result(result) is not None:
         return False, "case_or_environment_failure"
+    if _unmatched_instruction_fastmode_exception(root, result):
+        return True, "unmatched_instruction_execution_incompatible"
     if result.verdict != "detected_or_blocked":
         return False, f"verdict={result.verdict or 'unknown'}"
     if result.confidence != "high":
@@ -3908,6 +3919,18 @@ def _fastmode_warning_exception_required(result: SingleRunRunnerResult) -> bool:
     return bool(result.warnings)
 
 
+def _unmatched_instruction_fastmode_exception(
+    root: Path,
+    result: SingleRunRunnerResult,
+) -> bool:
+    if result.verdict == "unmatched_instruction":
+        return True
+    if not result.run_state_path:
+        return False
+    run_state = _read_optional_json_mapping(root / result.run_state_path)
+    return _run_state_has_unmatched_instruction(run_state)
+
+
 def _qihoo_execute_timeout_fastmode_exception(
     root: Path,
     result: SingleRunRunnerResult,
@@ -3917,21 +3940,43 @@ def _qihoo_execute_timeout_fastmode_exception(
         return False
     if not result.run_state_path:
         return False
-    run_state_path = root / result.run_state_path
-    run_state = _read_optional_json_mapping(run_state_path)
+    run_state = _read_optional_json_mapping(root / result.run_state_path)
     if not run_state:
         return False
-    execution = _mapping_or_empty(
-        _mapping_or_empty(run_state.get("stages")).get("execution")
-    )
-    execution_state = str(
-        execution.get("state") or run_state.get("execution_action_state") or ""
-    )
+    execution = _execution_stage_from_run_state(run_state)
+    execution_state = _execution_state_from_run_state(run_state)
     observation_exit_reason = str(execution.get("observation_exit_reason") or "")
     return (
         execution_state == "execution_request_timeout"
         and observation_exit_reason == "execute_request_timeout_before_polling"
     )
+
+
+def _run_state_has_unmatched_instruction(payload: Mapping[str, Any]) -> bool:
+    execution = _execution_stage_from_run_state(payload)
+    execution_state = _execution_state_from_run_state(payload)
+    reason = str(
+        execution.get("reason") or payload.get("execution_action_reason") or ""
+    ).casefold()
+    return execution_state == "unmatched_instruction" or any(
+        marker in reason
+        for marker in (
+            "reason_code=invalid_executable",
+            "winerror=193",
+            "不是有效的 win32 应用程序",
+            "reason_code=unsupported_executable_architecture",
+            "winerror=216",
+        )
+    )
+
+
+def _execution_stage_from_run_state(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _mapping_or_empty(_mapping_or_empty(payload.get("stages")).get("execution"))
+
+
+def _execution_state_from_run_state(payload: Mapping[str, Any]) -> str:
+    execution = _execution_stage_from_run_state(payload)
+    return str(execution.get("state") or payload.get("execution_action_state") or "")
 
 
 def _summary_contains_fastmode_strong_evidence(value: Any) -> bool:

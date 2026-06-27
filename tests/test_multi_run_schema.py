@@ -238,6 +238,7 @@ class MultiRunSchemaTests(unittest.TestCase):
         self.assertIn("not_executed", VERDICTS)
         self.assertIn("inconclusive", VERDICTS)
         self.assertIn("not_evaluable", VERDICTS)
+        self.assertIn("unmatched_instruction", VERDICTS)
         self.assertIn("unknown", VERDICTS)
 
 

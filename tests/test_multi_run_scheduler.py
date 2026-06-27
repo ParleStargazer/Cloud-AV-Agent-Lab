@@ -443,6 +443,35 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             )
             self.assertFalse(runner.requests[1].skip_initial_restore)
 
+    def test_fastmode_reuses_environment_for_unmatched_instruction(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, runner = _plan_and_execute(
+                tmp,
+                indexes=(1, 2),
+                fastmode=True,
+                runner=UnmatchedInstructionRunner(),
+            )
+
+            state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
+            self.assertTrue(state["cases"][0]["fastmode_eligible"])
+            self.assertEqual(
+                state["cases"][0]["fastmode_reason"],
+                "unmatched_instruction_execution_incompatible",
+            )
+            self.assertEqual(state["cases"][0]["verdict"], "unmatched_instruction")
+            self.assertEqual(
+                [case["cleanup_status"] for case in state["cases"]],
+                ["deferred_to_next_case", "restored"],
+            )
+            self.assertTrue(runner.requests[1].skip_initial_restore)
+            summary = json.loads(
+                (batch_dir / "aggregate_summary.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(summary["detection_rate"]["denominator"], 1)
+            self.assertEqual(summary["verdict_breakdown"]["unmatched_instruction"], 1)
+
     def test_fastmode_gate_uses_matched_product_log_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             batch_dir, _runner = _plan_and_execute(
@@ -1014,6 +1043,43 @@ class GenericWarningStrongAttributionRunner(StrongAttributionRunner):
             result,
             final_status="completed_with_warnings",
             warnings=("non-timeout warning",),
+        )
+
+
+class UnmatchedInstructionRunner(StrongAttributionRunner):
+    def run(self, request: SingleRunRequest) -> SingleRunRunnerResult:
+        result = super().run(request)
+        if request.sample_index != 1:
+            return result
+        batch_root = request.case_dir.parent.parent
+        run_state_path = request.case_dir / "single_run" / "run_state.json"
+        run_state_path.write_text(
+            json.dumps(
+                {
+                    "stages": {
+                        "execution": {
+                            "state": "unmatched_instruction",
+                            "reason": (
+                                "execution action did not start: "
+                                "reason_code=invalid_executable winerror=193"
+                            ),
+                            "observation_exit_reason": (
+                                "unmatched_instruction_before_polling"
+                            ),
+                        }
+                    },
+                    "execution_action_state": "unmatched_instruction",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return replace(
+            result,
+            final_status="completed_with_warnings",
+            verdict="unmatched_instruction",
+            confidence="",
+            warnings=("invalid executable for current environment",),
+            run_state_path=run_state_path.relative_to(batch_root).as_posix(),
         )
 
 

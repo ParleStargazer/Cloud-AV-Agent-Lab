@@ -115,6 +115,8 @@ def create_app(
             "data": {
                 "hostname": socket.gethostname(),
                 "platform": platform.platform(),
+                "machine": platform.machine(),
+                "architecture": platform.architecture()[0],
                 "python_version": platform.python_version(),
                 "workdir": str(workdir_path),
             },

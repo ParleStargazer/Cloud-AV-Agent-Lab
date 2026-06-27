@@ -80,6 +80,11 @@ NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS = {
     "execution handler is disabled": "execution_handler_disabled",
     "unsupported_file_type": "unsupported_file_type",
     "handler_id does not match": "execution_handler_mismatch",
+    "reason_code=invalid_executable": "unmatched_instruction",
+    "winerror=193": "unmatched_instruction",
+    "不是有效的 win32 应用程序": "unmatched_instruction",
+    "reason_code=unsupported_executable_architecture": "unmatched_instruction",
+    "winerror=216": "unmatched_instruction",
     "uploaded sample failed to start": "launch_failed",
     "execute_uploaded_sample requires a previously uploaded sample": "not_uploaded",
 }
@@ -1995,6 +2000,8 @@ def _nonfatal_remote_execution_state(error: GuestAgentError) -> str:
 def _pre_polling_execution_exit_reason(execution_state: str) -> str:
     if execution_state == "execution_request_timeout":
         return "execute_request_timeout_before_polling"
+    if execution_state == "unmatched_instruction":
+        return "unmatched_instruction_before_polling"
     return "launch_failed_before_polling"
 
 
