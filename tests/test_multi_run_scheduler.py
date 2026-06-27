@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from cloud_av_agent_lab.orchestration.multi_run import (
@@ -391,6 +392,56 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             )
             self.assertIn("clean snapshot baseline", markdown)
             self.assertIn("Fastmode", markdown)
+
+    def test_fastmode_reuses_environment_after_warning_with_strong_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, runner = _plan_and_execute(
+                tmp,
+                indexes=(1, 2),
+                fastmode=True,
+                runner=WarningStrongAttributionRunner(),
+            )
+
+            state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
+            self.assertTrue(state["cases"][0]["fastmode_eligible"])
+            self.assertEqual(
+                state["cases"][0]["fastmode_reason"],
+                "qihoo_execute_timeout_high_confidence_strong_evidence",
+            )
+            self.assertEqual(
+                [case["cleanup_status"] for case in state["cases"]],
+                ["deferred_to_next_case", "restored"],
+            )
+            self.assertTrue(runner.requests[1].skip_initial_restore)
+            self.assertEqual(
+                runner.requests[1].environment_reused_from_case_id,
+                state["cases"][0]["case_id"],
+            )
+
+    def test_fastmode_warning_without_qihoo_timeout_does_not_reuse_environment(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, runner = _plan_and_execute(
+                tmp,
+                indexes=(1, 2),
+                fastmode=True,
+                runner=GenericWarningStrongAttributionRunner(),
+            )
+
+            state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
+            self.assertFalse(state["cases"][0]["fastmode_eligible"])
+            self.assertEqual(
+                state["cases"][0]["fastmode_reason"],
+                "warnings_without_qihoo_execute_timeout_exception",
+            )
+            self.assertEqual(
+                [case["cleanup_status"] for case in state["cases"]],
+                ["deferred_to_next_case", "restored"],
+            )
+            self.assertFalse(runner.requests[1].skip_initial_restore)
 
     def test_fastmode_gate_uses_matched_product_log_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -920,6 +971,49 @@ class StrongAttributionRunner:
             result_source="test_runner",
             simulated=True,
             case_summary_path=summary_path.relative_to(batch_root).as_posix(),
+        )
+
+
+class WarningStrongAttributionRunner(StrongAttributionRunner):
+    def run(self, request: SingleRunRequest) -> SingleRunRunnerResult:
+        result = super().run(request)
+        batch_root = request.case_dir.parent.parent
+        summary_path = batch_root / result.case_summary_path
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        summary["product_id"] = "qihoo-360"
+        summary_path.write_text(json.dumps(summary), encoding="utf-8")
+        run_state_path = request.case_dir / "single_run" / "run_state.json"
+        run_state_path.write_text(
+            json.dumps(
+                {
+                    "stages": {
+                        "execution": {
+                            "state": "execution_request_timeout",
+                            "observation_exit_reason": (
+                                "execute_request_timeout_before_polling"
+                            ),
+                        }
+                    },
+                    "execution_action_state": "execution_request_timeout",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return replace(
+            result,
+            final_status="completed_with_warnings",
+            warnings=("execute request timeout before polling",),
+            run_state_path=run_state_path.relative_to(batch_root).as_posix(),
+        )
+
+
+class GenericWarningStrongAttributionRunner(StrongAttributionRunner):
+    def run(self, request: SingleRunRequest) -> SingleRunRunnerResult:
+        result = super().run(request)
+        return replace(
+            result,
+            final_status="completed_with_warnings",
+            warnings=("non-timeout warning",),
         )
 
 

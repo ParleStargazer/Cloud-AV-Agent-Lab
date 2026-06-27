@@ -3895,7 +3895,43 @@ def _fastmode_gate_decision(
         return False, "case_summary_missing"
     if not _summary_contains_fastmode_strong_evidence(summary):
         return False, "strong_evidence_missing"
+    if _fastmode_warning_exception_required(result):
+        if not _qihoo_execute_timeout_fastmode_exception(root, result, summary):
+            return False, "warnings_without_qihoo_execute_timeout_exception"
+        return True, "qihoo_execute_timeout_high_confidence_strong_evidence"
     return True, "evaluator_detected_or_blocked_high_confidence_strong_evidence"
+
+
+def _fastmode_warning_exception_required(result: SingleRunRunnerResult) -> bool:
+    if result.final_status == "completed_with_warnings":
+        return True
+    return bool(result.warnings)
+
+
+def _qihoo_execute_timeout_fastmode_exception(
+    root: Path,
+    result: SingleRunRunnerResult,
+    summary: Mapping[str, Any],
+) -> bool:
+    if str(summary.get("product_id", "")).casefold() != "qihoo-360":
+        return False
+    if not result.run_state_path:
+        return False
+    run_state_path = root / result.run_state_path
+    run_state = _read_optional_json_mapping(run_state_path)
+    if not run_state:
+        return False
+    execution = _mapping_or_empty(
+        _mapping_or_empty(run_state.get("stages")).get("execution")
+    )
+    execution_state = str(
+        execution.get("state") or run_state.get("execution_action_state") or ""
+    )
+    observation_exit_reason = str(execution.get("observation_exit_reason") or "")
+    return (
+        execution_state == "execution_request_timeout"
+        and observation_exit_reason == "execute_request_timeout_before_polling"
+    )
 
 
 def _summary_contains_fastmode_strong_evidence(value: Any) -> bool:
