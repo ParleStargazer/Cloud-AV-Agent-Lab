@@ -694,13 +694,20 @@ def _run_single_case_locked(
             state.mark_stage("environment", "desktop_worker_gate", "disabled")
 
         with state.step("settling_cooldown"):
+            product_warmup_cooldown_seconds = options.product_warmup_cooldown_seconds
+            product_warmup_cooldown_skip_reason = ""
+            if options.skip_initial_restore:
+                product_warmup_cooldown_seconds = 0.0
+                product_warmup_cooldown_skip_reason = "fastmode_environment_reuse"
             warmup_result = _warm_up_security_product_warning_only(
                 client=client,
                 state=state,
                 product_id=product_id,
                 enabled=options.product_warmup_enabled,
                 dry_run=options.dry_run,
-                cooldown_seconds=options.product_warmup_cooldown_seconds,
+                cooldown_seconds=product_warmup_cooldown_seconds,
+                configured_cooldown_seconds=options.product_warmup_cooldown_seconds,
+                cooldown_skip_reason=product_warmup_cooldown_skip_reason,
                 sleep=sleep,
             )
             if warmup_result["status"] == "warning":
@@ -1611,12 +1618,21 @@ def _warm_up_security_product_warning_only(
     enabled: bool,
     dry_run: bool,
     cooldown_seconds: float,
+    configured_cooldown_seconds: float,
     sleep: Callable[[float], None],
+    cooldown_skip_reason: str = "",
 ) -> dict[str, str]:
     stage = "product_warmup"
     state.mark_stage(stage, "enabled", enabled)
     state.mark_stage(stage, "product_id", product_id)
     state.mark_stage(stage, "cooldown_seconds", max(cooldown_seconds, 0.0))
+    state.mark_stage(
+        stage,
+        "configured_cooldown_seconds",
+        max(configured_cooldown_seconds, 0.0),
+    )
+    if cooldown_skip_reason:
+        state.mark_stage(stage, "cooldown_skipped_reason", cooldown_skip_reason)
     state.mark_stage("environment", "product_warmup_enabled", enabled)
     if not enabled:
         state.mark_stage(stage, "status", "skipped")

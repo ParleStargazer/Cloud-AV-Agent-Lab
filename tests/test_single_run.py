@@ -420,6 +420,47 @@ class SingleRunTests(TestCase):
             self.assertEqual(warmup["cooldown_seconds"], 4.0)
             self.assertFalse(warmup["client_supplied_path"])
 
+    def test_fastmode_reuse_skips_product_warmup_cooldown_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.exe"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            client = FakeGuestClient()
+            sleep_calls: list[float] = []
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="qihoo-360",
+                    product_warmup_enabled=True,
+                    product_warmup_cooldown_seconds=8.0,
+                    skip_initial_restore=True,
+                    post_execution_collection_delay_seconds=0.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleep_calls.append,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(client.warmup_products, ["qihoo-360"])
+            self.assertIn(3.0, sleep_calls)
+            self.assertNotIn(8.0, sleep_calls)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                run_state["stages"]["environment"]["settling_cooldown_seconds"],
+                3.0,
+            )
+            warmup = run_state["stages"]["product_warmup"]
+            self.assertEqual(warmup["status"], "ok")
+            self.assertEqual(warmup["configured_cooldown_seconds"], 8.0)
+            self.assertEqual(warmup["cooldown_seconds"], 0.0)
+            self.assertEqual(
+                warmup["cooldown_skipped_reason"],
+                "fastmode_environment_reuse",
+            )
+
     def test_single_run_windows_defender_product_flows_through_all_stages(
         self,
     ) -> None:
