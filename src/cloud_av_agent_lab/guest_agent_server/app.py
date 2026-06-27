@@ -591,17 +591,6 @@ def create_app(
                     desktop_worker_required_for_execution=(
                         desktop_worker_required_for_execution
                     ),
-                    desktop_worker_recovery_enabled=(desktop_worker_recovery_enabled),
-                    desktop_worker_recovery_task_name=(
-                        desktop_worker_recovery_task_name
-                    ),
-                    desktop_worker_recovery_timeout_seconds=(
-                        desktop_worker_recovery_timeout_seconds
-                    ),
-                    desktop_worker_recovery_interval_seconds=(
-                        desktop_worker_recovery_interval_seconds
-                    ),
-                    desktop_worker_process_name=desktop_worker_process_name,
                 )
             else:
                 action_result = run_case_action(
@@ -905,11 +894,6 @@ def _run_desktop_worker_execute_action(
     desktop_worker_expected_user: str,
     desktop_worker_require_interactive_session: bool,
     desktop_worker_required_for_execution: bool,
-    desktop_worker_recovery_enabled: bool,
-    desktop_worker_recovery_task_name: str,
-    desktop_worker_recovery_timeout_seconds: float,
-    desktop_worker_recovery_interval_seconds: float,
-    desktop_worker_process_name: str,
 ) -> dict[str, Any]:
     worker_status = _worker_status_payload(
         enabled=desktop_worker_enabled,
@@ -917,11 +901,6 @@ def _run_desktop_worker_execute_action(
         expected_user=desktop_worker_expected_user,
         require_interactive_session=desktop_worker_require_interactive_session,
         required_for_execution=desktop_worker_required_for_execution,
-        recovery_enabled=desktop_worker_recovery_enabled,
-        recovery_task_name=desktop_worker_recovery_task_name,
-        recovery_timeout_seconds=desktop_worker_recovery_timeout_seconds,
-        recovery_interval_seconds=desktop_worker_recovery_interval_seconds,
-        worker_process_name=desktop_worker_process_name,
     )
     if not worker_status.get("desktop_worker_ready"):
         raise WorkspaceError(
@@ -942,31 +921,8 @@ def _run_desktop_worker_execute_action(
     )
     try:
         worker_response = desktop_worker_client.execute(worker_payload)
-    except DesktopWorkerClientError as exc:
+    except DesktopWorkerClientError:
         _record_worker_state_file_best_effort(workdir_path, case_id)
-        if desktop_worker_recovery_enabled and exc.source == "network":
-            recovery_payload = _try_recover_desktop_worker(
-                client=desktop_worker_client,
-                task_name=desktop_worker_recovery_task_name,
-                timeout_seconds=desktop_worker_recovery_timeout_seconds,
-                interval_seconds=desktop_worker_recovery_interval_seconds,
-                worker_process_name=desktop_worker_process_name,
-            )
-            if recovery_payload.get("worker_recovery_succeeded"):
-                raise DesktopWorkerClientError(
-                    "Desktop Worker recovered after execute request failure: "
-                    + str(exc),
-                    source="network",
-                ) from exc
-            raise DesktopWorkerClientError(
-                "Desktop Worker recovery failed after execute request failure: "
-                + str(
-                    recovery_payload.get("reason")
-                    or recovery_payload.get("recovery_error")
-                    or exc
-                ),
-                source="network",
-            ) from exc
         raise
     record_worker_execution_started(workdir_path, case_id, worker_response.data)
     return worker_response.data

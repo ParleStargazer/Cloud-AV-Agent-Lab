@@ -1141,7 +1141,7 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(state["execution"]["execution_via"], "desktop_worker")
         self.assertEqual(state["execution"]["run_id"], "run-1")
 
-    def test_action_execute_recovers_worker_via_task_without_retrying_execution(
+    def test_action_execute_failure_does_not_trigger_worker_recovery(
         self,
     ) -> None:
         client = TestClient(
@@ -1185,7 +1185,7 @@ class GuestAgentServerTests(unittest.TestCase):
         with (
             patch(
                 "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.health",
-                side_effect=[ready_status, ready_status],
+                return_value=ready_status,
             ),
             patch(
                 "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.execute",
@@ -1222,11 +1222,11 @@ class GuestAgentServerTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 502)
         self.assertIn(
-            "Desktop Worker recovered after execute request failure",
+            "Desktop Worker execute request failed: ConnectionError",
             response.json()["detail"],
         )
         execute.assert_called_once()
-        recovery_task.assert_called_once_with("Start-Worker")
+        recovery_task.assert_not_called()
         self.assertNotIn("worker-token", response.text)
 
     def test_action_execute_records_desktop_worker_launch_failure_state(self) -> None:
