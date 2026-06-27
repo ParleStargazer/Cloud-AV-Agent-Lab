@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import platform
 import socket
+import subprocess
+import time
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -58,6 +60,11 @@ def create_app(
     desktop_worker_required_for_execution: bool = True,
     desktop_worker_expected_user: str = "AvTester-Admin",
     desktop_worker_require_interactive_session: bool = True,
+    desktop_worker_recovery_enabled: bool = False,
+    desktop_worker_recovery_task_name: str = "Start-Worker",
+    desktop_worker_recovery_timeout_seconds: float = 10.0,
+    desktop_worker_recovery_interval_seconds: float = 1.0,
+    desktop_worker_process_name: str = "desktop-worker.exe",
     app_version: str | None = None,
 ) -> FastAPI:
     workdir_path = Path(workdir)
@@ -133,6 +140,11 @@ def create_app(
             expected_user=desktop_worker_expected_user,
             require_interactive_session=desktop_worker_require_interactive_session,
             required_for_execution=desktop_worker_required_for_execution,
+            recovery_enabled=desktop_worker_recovery_enabled,
+            recovery_task_name=desktop_worker_recovery_task_name,
+            recovery_timeout_seconds=desktop_worker_recovery_timeout_seconds,
+            recovery_interval_seconds=desktop_worker_recovery_interval_seconds,
+            worker_process_name=desktop_worker_process_name,
         )
         return {
             "status": "ok",
@@ -579,6 +591,17 @@ def create_app(
                     desktop_worker_required_for_execution=(
                         desktop_worker_required_for_execution
                     ),
+                    desktop_worker_recovery_enabled=(desktop_worker_recovery_enabled),
+                    desktop_worker_recovery_task_name=(
+                        desktop_worker_recovery_task_name
+                    ),
+                    desktop_worker_recovery_timeout_seconds=(
+                        desktop_worker_recovery_timeout_seconds
+                    ),
+                    desktop_worker_recovery_interval_seconds=(
+                        desktop_worker_recovery_interval_seconds
+                    ),
+                    desktop_worker_process_name=desktop_worker_process_name,
                 )
             else:
                 action_result = run_case_action(
@@ -632,6 +655,11 @@ def _worker_status_payload(
     expected_user: str,
     require_interactive_session: bool,
     required_for_execution: bool,
+    recovery_enabled: bool = False,
+    recovery_task_name: str = "Start-Worker",
+    recovery_timeout_seconds: float = 10.0,
+    recovery_interval_seconds: float = 1.0,
+    worker_process_name: str = "desktop-worker.exe",
 ) -> dict[str, Any]:
     base_payload: dict[str, Any] = {
         "control_agent_ready": True,
@@ -653,15 +681,41 @@ def _worker_status_payload(
             "reason": "desktop worker client is not configured",
         }
 
+    recovery_payload: dict[str, Any] = {}
     try:
         status_payload = client.health().data
     except DesktopWorkerClientError as exc:
-        return {
-            **base_payload,
-            "reason": str(exc),
-            "worker_error_source": exc.source,
-            "worker_error_status_code": exc.status_code,
-        }
+        if recovery_enabled and exc.source == "network":
+            recovery_payload = _try_recover_desktop_worker(
+                client=client,
+                task_name=recovery_task_name,
+                timeout_seconds=recovery_timeout_seconds,
+                interval_seconds=recovery_interval_seconds,
+                worker_process_name=worker_process_name,
+            )
+            recovered_status = recovery_payload.get("recovered_status_payload")
+            if isinstance(recovered_status, dict):
+                status_payload = recovered_status
+            else:
+                return {
+                    **base_payload,
+                    **recovery_payload,
+                    "reason": "desktop worker recovery failed: "
+                    + str(
+                        recovery_payload.get("reason")
+                        or recovery_payload.get("recovery_error")
+                        or str(exc)
+                    ),
+                    "worker_error_source": exc.source,
+                    "worker_error_status_code": exc.status_code,
+                }
+        else:
+            return {
+                **base_payload,
+                "reason": str(exc),
+                "worker_error_source": exc.source,
+                "worker_error_status_code": exc.status_code,
+            }
 
     worker_user = str(status_payload.get("username", ""))
     interactive_session = bool(status_payload.get("interactive_session", False))
@@ -696,12 +750,130 @@ def _worker_status_payload(
     return {
         **base_payload,
         **status_payload,
+        **recovery_payload,
         "desktop_worker_ready": ready,
         "desktop_session_ready": checks["interactive_session"]
         and checks["session_not_zero"]
         and checks["desktop_session_state_active"],
         "checks": checks,
         "reason": reason,
+    }
+
+
+def _try_recover_desktop_worker(
+    *,
+    client: DesktopWorkerClient,
+    task_name: str,
+    timeout_seconds: float,
+    interval_seconds: float,
+    worker_process_name: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "worker_recovery_enabled": True,
+        "worker_recovery_attempted": False,
+        "worker_recovery_task_name": task_name,
+        "worker_process_name": worker_process_name,
+    }
+    process_probe = _desktop_worker_process_exists(worker_process_name)
+    payload.update(process_probe)
+    if process_probe.get("worker_process_exists"):
+        return {
+            **payload,
+            "reason": "desktop worker process exists but health is unavailable",
+        }
+
+    payload["worker_recovery_attempted"] = True
+    if not task_name.strip():
+        return {**payload, "reason": "desktop worker recovery task is not configured"}
+
+    task_result = _run_desktop_worker_recovery_task(task_name)
+    payload.update(task_result)
+    if not task_result.get("worker_recovery_task_started"):
+        return payload
+
+    deadline = time.monotonic() + max(timeout_seconds, 0.0)
+    while True:
+        try:
+            status_payload = client.health().data
+        except DesktopWorkerClientError as exc:
+            payload["worker_recovery_last_error"] = str(exc)
+        else:
+            return {
+                **payload,
+                "worker_recovery_succeeded": True,
+                "recovered_status_payload": status_payload,
+            }
+        if time.monotonic() >= deadline:
+            return {
+                **payload,
+                "worker_recovery_succeeded": False,
+                "reason": "desktop worker did not become healthy after task start",
+            }
+        time.sleep(
+            min(max(interval_seconds, 0.1), max(deadline - time.monotonic(), 0.0))
+        )
+
+
+def _desktop_worker_process_exists(worker_process_name: str) -> dict[str, Any]:
+    try:
+        import psutil  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        return {
+            "worker_process_probe_available": False,
+            "worker_process_exists": False,
+            "worker_process_probe_error": "psutil is not installed",
+        }
+
+    wanted = worker_process_name.casefold()
+    try:
+        for process in psutil.process_iter(["name"]):
+            try:
+                if str(process.info.get("name") or "").casefold() == wanted:
+                    return {
+                        "worker_process_probe_available": True,
+                        "worker_process_exists": True,
+                    }
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                continue
+    except (psutil.Error, OSError) as exc:
+        return {
+            "worker_process_probe_available": True,
+            "worker_process_exists": False,
+            "worker_process_probe_error": type(exc).__name__,
+        }
+    return {
+        "worker_process_probe_available": True,
+        "worker_process_exists": False,
+    }
+
+
+def _run_desktop_worker_recovery_task(task_name: str) -> dict[str, Any]:
+    # Recovery intentionally delegates to Task Scheduler instead of spawning
+    # the worker from Guest Agent, keeping the process chain out of the agent.
+    command = [
+        r"C:\Windows\System32\schtasks.exe",
+        "/Run",
+        "/TN",
+        task_name,
+    ]
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            creationflags=creationflags,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "worker_recovery_task_started": False,
+            "recovery_error": type(exc).__name__,
+        }
+    return {
+        "worker_recovery_task_started": completed.returncode == 0,
+        "worker_recovery_task_returncode": completed.returncode,
     }
 
 
@@ -733,6 +905,11 @@ def _run_desktop_worker_execute_action(
     desktop_worker_expected_user: str,
     desktop_worker_require_interactive_session: bool,
     desktop_worker_required_for_execution: bool,
+    desktop_worker_recovery_enabled: bool,
+    desktop_worker_recovery_task_name: str,
+    desktop_worker_recovery_timeout_seconds: float,
+    desktop_worker_recovery_interval_seconds: float,
+    desktop_worker_process_name: str,
 ) -> dict[str, Any]:
     worker_status = _worker_status_payload(
         enabled=desktop_worker_enabled,
@@ -740,6 +917,11 @@ def _run_desktop_worker_execute_action(
         expected_user=desktop_worker_expected_user,
         require_interactive_session=desktop_worker_require_interactive_session,
         required_for_execution=desktop_worker_required_for_execution,
+        recovery_enabled=desktop_worker_recovery_enabled,
+        recovery_task_name=desktop_worker_recovery_task_name,
+        recovery_timeout_seconds=desktop_worker_recovery_timeout_seconds,
+        recovery_interval_seconds=desktop_worker_recovery_interval_seconds,
+        worker_process_name=desktop_worker_process_name,
     )
     if not worker_status.get("desktop_worker_ready"):
         raise WorkspaceError(
@@ -760,8 +942,31 @@ def _run_desktop_worker_execute_action(
     )
     try:
         worker_response = desktop_worker_client.execute(worker_payload)
-    except DesktopWorkerClientError:
+    except DesktopWorkerClientError as exc:
         _record_worker_state_file_best_effort(workdir_path, case_id)
+        if desktop_worker_recovery_enabled and exc.source == "network":
+            recovery_payload = _try_recover_desktop_worker(
+                client=desktop_worker_client,
+                task_name=desktop_worker_recovery_task_name,
+                timeout_seconds=desktop_worker_recovery_timeout_seconds,
+                interval_seconds=desktop_worker_recovery_interval_seconds,
+                worker_process_name=desktop_worker_process_name,
+            )
+            if recovery_payload.get("worker_recovery_succeeded"):
+                raise DesktopWorkerClientError(
+                    "Desktop Worker recovered after execute request failure: "
+                    + str(exc),
+                    source="network",
+                ) from exc
+            raise DesktopWorkerClientError(
+                "Desktop Worker recovery failed after execute request failure: "
+                + str(
+                    recovery_payload.get("reason")
+                    or recovery_payload.get("recovery_error")
+                    or exc
+                ),
+                source="network",
+            ) from exc
         raise
     record_worker_execution_started(workdir_path, case_id, worker_response.data)
     return worker_response.data

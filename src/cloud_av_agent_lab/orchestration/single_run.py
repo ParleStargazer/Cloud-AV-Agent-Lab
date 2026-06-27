@@ -90,6 +90,9 @@ NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS = {
 }
 NONFATAL_REMOTE_EXECUTION_502_MARKERS = {
     "desktop worker execute request failed: timeouterror": "execution_request_timeout",
+    "desktop worker recovered after execute request failure": (
+        "execution_request_timeout"
+    ),
 }
 SENSITIVE_MESSAGE_RE = re.compile(
     r"(?i)\b(authorization|bearer|token|secret|password|credential|api[_-]?key|"

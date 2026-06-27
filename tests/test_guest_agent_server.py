@@ -193,6 +193,106 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(payload["data"]["worker_error_source"], "network")
         self.assertNotIn("worker-token", response.text)
 
+    def test_worker_status_recovers_worker_with_scheduled_task(self) -> None:
+        client = TestClient(
+            create_app(
+                workdir=self.workdir,
+                token=TOKEN,
+                upload_token=UPLOAD_TOKEN,
+                desktop_worker_enabled=True,
+                desktop_worker_token="worker-token",
+                desktop_worker_recovery_enabled=True,
+                desktop_worker_expected_user="AvTester-Admin",
+                app_version="test-version",
+            )
+        )
+        with (
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.health",
+                side_effect=[
+                    DesktopWorkerClientError(
+                        "Desktop Worker health request failed: ConnectionError",
+                        source="network",
+                    ),
+                    DesktopWorkerStatus(
+                        ready=True,
+                        data={
+                            "worker_pid": 4321,
+                            "worker_session_id": 1,
+                            "interactive_session": True,
+                            "desktop_session_state": "active",
+                            "username": "AvTester-Admin",
+                            "busy": False,
+                        },
+                    ),
+                ],
+            ),
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app._desktop_worker_process_exists",
+                return_value={
+                    "worker_process_probe_available": True,
+                    "worker_process_exists": False,
+                },
+            ) as process_probe,
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app._run_desktop_worker_recovery_task",
+                return_value={
+                    "worker_recovery_task_started": True,
+                    "worker_recovery_task_returncode": 0,
+                },
+            ) as recovery_task,
+        ):
+            response = client.get("/worker/status", headers=self._headers())
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["data"]
+        self.assertTrue(payload["desktop_worker_ready"])
+        self.assertTrue(payload["worker_recovery_attempted"])
+        self.assertTrue(payload["worker_recovery_succeeded"])
+        process_probe.assert_called_once_with("desktop-worker.exe")
+        recovery_task.assert_called_once_with("Start-Worker")
+        self.assertNotIn("worker-token", response.text)
+
+    def test_worker_status_does_not_start_task_when_worker_process_exists(self) -> None:
+        client = TestClient(
+            create_app(
+                workdir=self.workdir,
+                token=TOKEN,
+                upload_token=UPLOAD_TOKEN,
+                desktop_worker_enabled=True,
+                desktop_worker_token="worker-token",
+                desktop_worker_recovery_enabled=True,
+                app_version="test-version",
+            )
+        )
+        with (
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.health",
+                side_effect=DesktopWorkerClientError(
+                    "Desktop Worker health request failed: ConnectionError",
+                    source="network",
+                ),
+            ),
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app._desktop_worker_process_exists",
+                return_value={
+                    "worker_process_probe_available": True,
+                    "worker_process_exists": True,
+                },
+            ),
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app._run_desktop_worker_recovery_task",
+            ) as recovery_task,
+        ):
+            response = client.get("/worker/status", headers=self._headers())
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["data"]
+        self.assertFalse(payload["desktop_worker_ready"])
+        self.assertFalse(payload["worker_recovery_attempted"])
+        self.assertIn("process exists", payload["reason"])
+        recovery_task.assert_not_called()
+
     def test_worker_product_warmup_forwards_to_ready_desktop_worker(self) -> None:
         client = TestClient(
             create_app(
@@ -1040,6 +1140,94 @@ class GuestAgentServerTests(unittest.TestCase):
         state = json.loads((workspace / "case_state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["execution"]["execution_via"], "desktop_worker")
         self.assertEqual(state["execution"]["run_id"], "run-1")
+
+    def test_action_execute_recovers_worker_via_task_without_retrying_execution(
+        self,
+    ) -> None:
+        client = TestClient(
+            create_app(
+                workdir=self.workdir,
+                token=TOKEN,
+                upload_token=UPLOAD_TOKEN,
+                execution_enabled=True,
+                execution_token=EXECUTION_TOKEN,
+                desktop_worker_enabled=True,
+                desktop_worker_token="worker-token",
+                desktop_worker_recovery_enabled=True,
+                desktop_worker_expected_user="AvTester-Admin",
+                app_version="test-version",
+            )
+        )
+        upload_headers = self._upload_headers()
+        upload_headers["X-Original-Filename"] = "proof.exe"
+        client.post(
+            "/prepare-case",
+            headers=self._headers(),
+            json=_prepare_payload(),
+        )
+        client.post(
+            "/cases/case-001__tencent-pc-manager/sample",
+            headers=upload_headers,
+            content=b"MZ harmless placeholder",
+        )
+
+        ready_status = DesktopWorkerStatus(
+            ready=True,
+            data={
+                "worker_pid": 111,
+                "worker_session_id": 1,
+                "interactive_session": True,
+                "desktop_session_state": "active",
+                "username": "AvTester-Admin",
+                "busy": False,
+            },
+        )
+        with (
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.health",
+                side_effect=[ready_status, ready_status],
+            ),
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.execute",
+                side_effect=DesktopWorkerClientError(
+                    "Desktop Worker execute request failed: ConnectionError",
+                    source="network",
+                ),
+            ) as execute,
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app._desktop_worker_process_exists",
+                return_value={
+                    "worker_process_probe_available": True,
+                    "worker_process_exists": False,
+                },
+            ),
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app._run_desktop_worker_recovery_task",
+                return_value={
+                    "worker_recovery_task_started": True,
+                    "worker_recovery_task_returncode": 0,
+                },
+            ) as recovery_task,
+        ):
+            response = client.post(
+                "/cases/case-001__tencent-pc-manager/actions",
+                headers=self._execution_headers(),
+                json={
+                    "action": "execute_uploaded_sample",
+                    "sample_id": "case-001",
+                    "expected_sha256": "0" * 64,
+                    "run_id": "run-1",
+                },
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn(
+            "Desktop Worker recovered after execute request failure",
+            response.json()["detail"],
+        )
+        execute.assert_called_once()
+        recovery_task.assert_called_once_with("Start-Worker")
+        self.assertNotIn("worker-token", response.text)
 
     def test_action_execute_records_desktop_worker_launch_failure_state(self) -> None:
         client = TestClient(

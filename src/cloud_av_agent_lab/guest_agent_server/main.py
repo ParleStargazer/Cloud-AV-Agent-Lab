@@ -79,6 +79,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="timeout for Control Agent to query Desktop Worker health",
     )
     parser.add_argument(
+        "--disable-desktop-worker-recovery",
+        action="store_true",
+        help=(
+            "disable recovery via the pre-created scheduled task when Desktop "
+            "Worker disappears"
+        ),
+    )
+    parser.add_argument(
+        "--desktop-worker-recovery-task-name",
+        default="Start-Worker",
+        help="pre-created Windows scheduled task used to restart Desktop Worker",
+    )
+    parser.add_argument(
+        "--desktop-worker-recovery-timeout-seconds",
+        type=float,
+        default=10.0,
+        help="time to wait for Desktop Worker health after triggering the task",
+    )
+    parser.add_argument(
+        "--desktop-worker-recovery-interval-seconds",
+        type=float,
+        default=1.0,
+        help="poll interval while waiting for Desktop Worker recovery",
+    )
+    parser.add_argument(
+        "--desktop-worker-process-name",
+        default="desktop-worker.exe",
+        help="process image name used for read-only worker disappearance checks",
+    )
+    parser.add_argument(
         "--desktop-worker-expected-user",
         default="AvTester-Admin",
         help="expected interactive test administrator account for Desktop Worker",
@@ -138,6 +168,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         desktop_worker_timeout_seconds=args.desktop_worker_timeout_seconds,
         desktop_worker_expected_user=args.desktop_worker_expected_user,
         desktop_worker_require_interactive_session=not args.allow_worker_session_0,
+        desktop_worker_recovery_enabled=(
+            args.enable_desktop_worker and not args.disable_desktop_worker_recovery
+        ),
+        desktop_worker_recovery_task_name=args.desktop_worker_recovery_task_name,
+        desktop_worker_recovery_timeout_seconds=(
+            args.desktop_worker_recovery_timeout_seconds
+        ),
+        desktop_worker_recovery_interval_seconds=(
+            args.desktop_worker_recovery_interval_seconds
+        ),
+        desktop_worker_process_name=args.desktop_worker_process_name,
     )
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
