@@ -84,6 +84,26 @@ class GuestAgentClient:
             ),
         )
 
+    def warm_up_security_product(
+        self,
+        product_id: str,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
+        if not self.config.desktop_worker.enabled:
+            raise GuestAgentError(
+                "Guest Agent desktop worker integration is disabled in config",
+                source="local",
+            )
+        return self._request(
+            f"worker/product-warmup/{quote(product_id, safe='')}",
+            method="POST",
+            timeout_seconds=(
+                self.config.desktop_worker.timeout_seconds
+                if timeout_seconds is None
+                else timeout_seconds
+            ),
+        )
+
     def prepare_case(
         self,
         case: TestCase,

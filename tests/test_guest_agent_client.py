@@ -239,6 +239,67 @@ class GuestAgentClientTests(TestCase):
         self.assertEqual(error.exception.source, "local")
         self.assertIn("desktop worker", str(error.exception).casefold())
 
+    def test_warm_up_security_product_uses_worker_proxy(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+            timeout_seconds=5,
+            desktop_worker=GuestAgentDesktopWorkerConfig(
+                enabled=True,
+                timeout_seconds=2,
+            ),
+        )
+        network = FakeNetworkClient(
+            NetworkResponse(
+                status=200,
+                headers={},
+                body=(
+                    b'{"status":"ok","message":"desktop worker product warm-up '
+                    b'handled","data":{"product_id":"qihoo-360",'
+                    b'"warmup_state":"started"}}'
+                ),
+            )
+        )
+        client = GuestAgentClient(
+            config,
+            network=network,
+            env={"GUEST_TOKEN": "secret"},
+        )
+
+        response = client.warm_up_security_product("qihoo-360")
+
+        self.assertEqual(response.data["warmup_state"], "started")
+        self.assertEqual(len(network.calls), 1)
+        call = network.calls[0]
+        self.assertEqual(call["method"], "POST")
+        self.assertEqual(
+            call["url"],
+            "http://guest-agent.local:8080/worker/product-warmup/qihoo-360",
+        )
+        self.assertEqual(call["timeout_seconds"], 2)
+        headers = call["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+
+    def test_warm_up_security_product_requires_desktop_worker_config(self) -> None:
+        config = GuestAgentConfig(
+            enabled=True,
+            base_url="http://guest-agent.local:8080",
+            token_env="GUEST_TOKEN",
+        )
+        client = GuestAgentClient(
+            config,
+            network=FakeNetworkClient(),
+            env={"GUEST_TOKEN": "secret"},
+        )
+
+        with self.assertRaises(GuestAgentError) as error:
+            client.warm_up_security_product("qihoo-360")
+
+        self.assertEqual(error.exception.source, "local")
+        self.assertIn("desktop worker", str(error.exception).casefold())
+
     def test_case_report_uses_network_client(self) -> None:
         config = GuestAgentConfig(
             enabled=True,

@@ -55,6 +55,7 @@ from cloud_av_agent_lab.orchestration.prompts import prompt_bool, prompt_default
 from cloud_av_agent_lab.orchestration.single_run import (
     DEFAULT_POST_EXECUTION_COLLECTION_DELAY_SECONDS,
     DEFAULT_POST_EXECUTION_PROBE_INTERVAL_SECONDS,
+    DEFAULT_PRODUCT_WARMUP_COOLDOWN_SECONDS,
     DEFAULT_SETTLING_COOLDOWN_SECONDS,
     DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS,
     SingleRunError,
@@ -73,6 +74,7 @@ LIFECYCLE_COMMANDS = {
     "cloud-reboot": ("reboot_vm", "RebootInstances"),
 }
 RESTORE_SNAPSHOT_COMMAND = "cloud-restore-snapshot"
+PRODUCT_WARMUP_PRODUCTS = frozenset({"qihoo-360"})
 GUEST_UPLOAD_STATUS_INITIAL_WAIT_SECONDS = 10.0
 GUEST_UPLOAD_STATUS_POLL_INTERVAL_SECONDS = 2.0
 GUEST_UPLOAD_STATUS_TIMEOUT_SECONDS = 30.0
@@ -426,6 +428,29 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="cooldown after Guest Agent is ready",
     )
+    single_run_warmup = single_run.add_mutually_exclusive_group()
+    single_run_warmup.add_argument(
+        "--enable-product-warmup",
+        dest="product_warmup_enabled",
+        action="store_true",
+        default=None,
+        help=(
+            "enable product-specific warm-up before prepare-case; currently "
+            "supported for qihoo-360 only"
+        ),
+    )
+    single_run_warmup.add_argument(
+        "--disable-product-warmup",
+        dest="product_warmup_enabled",
+        action="store_false",
+        help="disable product-specific warm-up",
+    )
+    single_run.add_argument(
+        "--product-warmup-cooldown-seconds",
+        type=float,
+        default=None,
+        help="cooldown after product warm-up is requested",
+    )
     single_run.add_argument(
         "--upload-status-timeout-seconds",
         type=float,
@@ -604,6 +629,29 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="per-case cooldown after Guest Agent and Desktop Worker are ready",
+    )
+    multi_run_warmup = multi_run.add_mutually_exclusive_group()
+    multi_run_warmup.add_argument(
+        "--enable-product-warmup",
+        dest="product_warmup_enabled",
+        action="store_true",
+        default=None,
+        help=(
+            "enable product-specific warm-up before prepare-case; currently "
+            "supported for qihoo-360 only"
+        ),
+    )
+    multi_run_warmup.add_argument(
+        "--disable-product-warmup",
+        dest="product_warmup_enabled",
+        action="store_false",
+        help="disable product-specific warm-up",
+    )
+    multi_run.add_argument(
+        "--product-warmup-cooldown-seconds",
+        type=float,
+        default=None,
+        help="per-case cooldown after product warm-up is requested",
     )
     multi_run.add_argument(
         "--upload-status-timeout-seconds",
@@ -1179,6 +1227,17 @@ def _handle_multi_run(
         args.settling_cooldown_seconds,
         DEFAULT_SETTLING_COOLDOWN_SECONDS,
     )
+    product_warmup_enabled = _product_warmup_value_for_product(
+        parser,
+        product_id=args.product,
+        value=args.product_warmup_enabled,
+    )
+    product_warmup_cooldown_seconds = _delay_value_or_default(
+        parser,
+        "--product-warmup-cooldown-seconds",
+        args.product_warmup_cooldown_seconds,
+        DEFAULT_PRODUCT_WARMUP_COOLDOWN_SECONDS,
+    )
     upload_status_timeout_seconds = _delay_value_or_default(
         parser,
         "--upload-status-timeout-seconds",
@@ -1199,6 +1258,8 @@ def _handle_multi_run(
         DEFAULT_POST_EXECUTION_PROBE_INTERVAL_SECONDS,
     )
     args.settling_cooldown_seconds = settling_cooldown_seconds
+    args.product_warmup_enabled = product_warmup_enabled
+    args.product_warmup_cooldown_seconds = product_warmup_cooldown_seconds
     args.upload_status_timeout_seconds = upload_status_timeout_seconds
     args.post_execution_collection_delay_seconds = (
         post_execution_collection_delay_seconds
@@ -1289,6 +1350,8 @@ def _handle_multi_run(
                 cleanup_strategy=args.cleanup_strategy,
                 fastmode=bool(args.fastmode),
                 settling_cooldown_seconds=settling_cooldown_seconds,
+                product_warmup_enabled=product_warmup_enabled,
+                product_warmup_cooldown_seconds=product_warmup_cooldown_seconds,
                 upload_status_timeout_seconds=upload_status_timeout_seconds,
                 post_execution_collection_delay_seconds=(
                     post_execution_collection_delay_seconds
@@ -1321,6 +1384,10 @@ def _handle_multi_run(
         parser.exit(2, f"error: {exc}\n")
 
     settling_cooldown_seconds = artifacts.batch_plan.execution.settling_cooldown_seconds
+    product_warmup_enabled = artifacts.batch_plan.execution.product_warmup_enabled
+    product_warmup_cooldown_seconds = (
+        artifacts.batch_plan.execution.product_warmup_cooldown_seconds
+    )
     upload_status_timeout_seconds = (
         artifacts.batch_plan.execution.upload_status_timeout_seconds
     )
@@ -1332,6 +1399,8 @@ def _handle_multi_run(
         artifacts.batch_plan.execution.post_execution_probe_interval_seconds
     )
     args.settling_cooldown_seconds = settling_cooldown_seconds
+    args.product_warmup_enabled = product_warmup_enabled
+    args.product_warmup_cooldown_seconds = product_warmup_cooldown_seconds
     args.upload_status_timeout_seconds = upload_status_timeout_seconds
     args.post_execution_collection_delay_seconds = (
         post_execution_collection_delay_seconds
@@ -1482,6 +1551,18 @@ def _multi_run_prompt_missing_inputs(
         args.settling_cooldown_seconds,
         DEFAULT_SETTLING_COOLDOWN_SECONDS,
     )
+    args.product_warmup_enabled = _product_warmup_value_for_product(
+        parser,
+        product_id=args.product,
+        value=args.product_warmup_enabled,
+    )
+    if args.product_warmup_enabled:
+        args.product_warmup_cooldown_seconds = _delay_value_or_prompt(
+            parser,
+            "Product warm-up cooldown seconds",
+            args.product_warmup_cooldown_seconds,
+            DEFAULT_PRODUCT_WARMUP_COOLDOWN_SECONDS,
+        )
     args.upload_status_timeout_seconds = _delay_value_or_prompt(
         parser,
         "Upload status timeout seconds",
@@ -1591,6 +1672,33 @@ def _product_probe_value_for_product(
     return False, availability.available, availability.skip_reason
 
 
+def _product_warmup_value_for_product(
+    parser: argparse.ArgumentParser,
+    *,
+    product_id: str,
+    value: bool | None,
+) -> bool:
+    supported = product_id in PRODUCT_WARMUP_PRODUCTS
+    if supported:
+        if value is not None:
+            return bool(value)
+        if not sys.stdin.isatty():
+            return False
+        return prompt_bool(
+            "是否启用安全产品 warm-up？yes/no：当前会在 360 测试前打开 "
+            "360 主界面，帮助产品初始化，但可能改变测试前环境状态",
+            default=False,
+        )
+    if value is True:
+        supported_text = ", ".join(sorted(PRODUCT_WARMUP_PRODUCTS))
+        parser.exit(
+            2,
+            "error: [Local Check] product warm-up is not available for "
+            f"{product_id!r}; supported warm-up products: {supported_text}\n",
+        )
+    return False
+
+
 def _delay_value_or_default(
     parser: argparse.ArgumentParser,
     label: str,
@@ -1648,6 +1756,14 @@ def _confirm_multi_run_real_operation(
     print(f"Guest Agent: {args.guest_agent_url}")
     print(f"Desktop Worker: {args.desktop_worker_url or '<not configured>'}")
     print(f"Settling cooldown seconds: {args.settling_cooldown_seconds:g}")
+    print(
+        "Product warm-up: " + ("enabled" if args.product_warmup_enabled else "disabled")
+    )
+    if args.product_warmup_enabled:
+        print(
+            "Product warm-up cooldown seconds: "
+            f"{args.product_warmup_cooldown_seconds:g}"
+        )
     print(f"Upload status timeout seconds: {args.upload_status_timeout_seconds:g}")
     print(
         "Post-execution collection delay seconds: "
@@ -1748,6 +1864,24 @@ def _single_run_options_from_args(
         args.settling_cooldown_seconds,
         DEFAULT_SETTLING_COOLDOWN_SECONDS,
     )
+    product_warmup_enabled = _product_warmup_value_for_product(
+        parser,
+        product_id=product_id,
+        value=args.product_warmup_enabled,
+    )
+    product_warmup_cooldown_seconds = _delay_value_or_default(
+        parser,
+        "--product-warmup-cooldown-seconds",
+        args.product_warmup_cooldown_seconds,
+        DEFAULT_PRODUCT_WARMUP_COOLDOWN_SECONDS,
+    )
+    if product_warmup_enabled and args.product_warmup_cooldown_seconds is None:
+        product_warmup_cooldown_seconds = _delay_value_or_prompt(
+            parser,
+            "Product warm-up cooldown seconds",
+            args.product_warmup_cooldown_seconds,
+            DEFAULT_PRODUCT_WARMUP_COOLDOWN_SECONDS,
+        )
     upload_status_timeout_seconds = _delay_value_or_prompt(
         parser,
         "Upload status timeout seconds",
@@ -1786,6 +1920,8 @@ def _single_run_options_from_args(
         guest_ready_interval_seconds=args.guest_ready_interval_seconds,
         guest_ready_successes=args.guest_ready_successes,
         settling_cooldown_seconds=settling_cooldown_seconds,
+        product_warmup_enabled=product_warmup_enabled,
+        product_warmup_cooldown_seconds=product_warmup_cooldown_seconds,
         upload_poll_timeout_seconds=upload_status_timeout_seconds,
         execution_poll_timeout_seconds=args.execution_poll_timeout_seconds,
         execution_poll_interval_seconds=args.execution_poll_interval_seconds,
@@ -1840,6 +1976,15 @@ def _confirm_single_run_real_operation(
         + ("enabled" if options.require_desktop_worker else "disabled")
     )
     print(f"Settling cooldown seconds: {options.settling_cooldown_seconds:g}")
+    print(
+        "Product warm-up: "
+        + ("enabled" if options.product_warmup_enabled else "disabled")
+    )
+    if options.product_warmup_enabled:
+        print(
+            "Product warm-up cooldown seconds: "
+            f"{options.product_warmup_cooldown_seconds:g}"
+        )
     print(f"Upload status timeout seconds: {options.upload_poll_timeout_seconds:g}")
     print(
         "Post-execution collection delay seconds: "

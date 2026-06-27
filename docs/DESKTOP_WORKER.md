@@ -12,6 +12,9 @@ The current MVP implements:
   `.exe` and controlled `.bat` / `.cmd` samples.
 - Authenticated `GET /execution-status/{case_id}` for low-intrusion process
   observation.
+- Authenticated `POST /product-actions/warm-up/{product_id}` for a narrow
+  product warm-up action. The current allowlist supports only `qihoo-360` and
+  opens `C:\Program Files (x86)\360\360Safe\360Safe.exe`.
 - Worker binds to `127.0.0.1` / `localhost` only.
 - Worker reports pid, session id, interactive-session flag, desktop session
   state, username, version, bind host, and busy state.
@@ -46,6 +49,15 @@ arguments, interpreter, or path fields. Standard streams are redirected to
 `DEVNULL`, Windows uses `CREATE_NO_WINDOW`, `close_fds=True` is set, and a
 minimal allowlisted environment is passed so tokens, cloud secrets, proxy
 variables, and real config paths are not inherited by the child process.
+
+Product warm-up is deliberately separate from sample execution. It is an
+optional environment preparation action used before `prepare-case`, currently
+for 360 only, to bring up the product UI in the interactive desktop session.
+Clients may only send `product_id`; they cannot provide path, command, shell,
+interpreter, or arguments. Worker resolves the fixed product executable itself,
+starts it with `shell=False`, redirects standard streams to `DEVNULL`, and
+records that no client-supplied command fields were used. Warm-up does not prove
+real-time protection is enabled; it is only a best-effort initialization aid.
 
 The Worker must not be exposed to the network:
 

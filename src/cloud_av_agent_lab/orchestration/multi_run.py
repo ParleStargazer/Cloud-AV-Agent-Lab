@@ -22,6 +22,7 @@ MULTI_RUN_AGGREGATE_SUMMARY_SCHEMA_VERSION = "multi-run-aggregate-summary.v1"
 MULTI_RUN_PREFLIGHT_REPORT_SCHEMA_VERSION = "multi-run-preflight-report.v1"
 MULTI_RUN_VERSION = "multi-run.v1"
 DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS = 15.0
+DEFAULT_MULTI_RUN_PRODUCT_WARMUP_COOLDOWN_SECONDS = 20.0
 DEFAULT_MULTI_RUN_UPLOAD_STATUS_TIMEOUT_SECONDS = 30.0
 DEFAULT_MULTI_RUN_POST_EXECUTION_COLLECTION_DELAY_SECONDS = 45.0
 DEFAULT_MULTI_RUN_POST_EXECUTION_PROBE_INTERVAL_SECONDS = 1.0
@@ -996,6 +997,10 @@ class BatchExecutionPolicy:
     fastmode: bool = False
     case_timeout_seconds: float | None = None
     settling_cooldown_seconds: float = DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS
+    product_warmup_enabled: bool = False
+    product_warmup_cooldown_seconds: float = (
+        DEFAULT_MULTI_RUN_PRODUCT_WARMUP_COOLDOWN_SECONDS
+    )
     upload_status_timeout_seconds: float = (
         DEFAULT_MULTI_RUN_UPLOAD_STATUS_TIMEOUT_SECONDS
     )
@@ -1027,6 +1032,8 @@ class BatchExecutionPolicy:
             "fastmode": self.fastmode,
             "case_timeout_seconds": self.case_timeout_seconds,
             "settling_cooldown_seconds": self.settling_cooldown_seconds,
+            "product_warmup_enabled": self.product_warmup_enabled,
+            "product_warmup_cooldown_seconds": self.product_warmup_cooldown_seconds,
             "upload_status_timeout_seconds": self.upload_status_timeout_seconds,
             "post_execution_collection_delay_seconds": (
                 self.post_execution_collection_delay_seconds
@@ -1224,6 +1231,10 @@ def create_multi_run_batch_plan(
     cleanup_strategy: CleanupStrategy = "per_case",
     fastmode: bool = False,
     settling_cooldown_seconds: float = DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS,
+    product_warmup_enabled: bool = False,
+    product_warmup_cooldown_seconds: float = (
+        DEFAULT_MULTI_RUN_PRODUCT_WARMUP_COOLDOWN_SECONDS
+    ),
     upload_status_timeout_seconds: float = (
         DEFAULT_MULTI_RUN_UPLOAD_STATUS_TIMEOUT_SECONDS
     ),
@@ -1249,6 +1260,10 @@ def create_multi_run_batch_plan(
         allowed = ", ".join(CLEANUP_STRATEGIES)
         raise MultiRunPlanError(f"cleanup_strategy must be one of: {allowed}")
     _ensure_non_negative_delay("settling_cooldown_seconds", settling_cooldown_seconds)
+    _ensure_non_negative_delay(
+        "product_warmup_cooldown_seconds",
+        product_warmup_cooldown_seconds,
+    )
     _ensure_non_negative_delay(
         "upload_status_timeout_seconds", upload_status_timeout_seconds
     )
@@ -1301,6 +1316,8 @@ def create_multi_run_batch_plan(
         cleanup_strategy=cleanup_strategy,
         fastmode=fastmode,
         settling_cooldown_seconds=settling_cooldown_seconds,
+        product_warmup_enabled=product_warmup_enabled,
+        product_warmup_cooldown_seconds=product_warmup_cooldown_seconds,
         upload_status_timeout_seconds=upload_status_timeout_seconds,
         post_execution_collection_delay_seconds=(
             post_execution_collection_delay_seconds
@@ -1342,6 +1359,8 @@ def create_multi_run_batch_plan(
             plan_only=plan_only,
             fastmode=fastmode,
             settling_cooldown_seconds=settling_cooldown_seconds,
+            product_warmup_enabled=product_warmup_enabled,
+            product_warmup_cooldown_seconds=product_warmup_cooldown_seconds,
             upload_status_timeout_seconds=upload_status_timeout_seconds,
             post_execution_collection_delay_seconds=(
                 post_execution_collection_delay_seconds
@@ -1401,6 +1420,8 @@ def create_multi_run_batch_plan(
             "cleanup_strategy": cleanup_strategy,
             "fastmode": fastmode,
             "settling_cooldown_seconds": settling_cooldown_seconds,
+            "product_warmup_enabled": product_warmup_enabled,
+            "product_warmup_cooldown_seconds": product_warmup_cooldown_seconds,
             "upload_status_timeout_seconds": upload_status_timeout_seconds,
             "post_execution_collection_delay_seconds": (
                 post_execution_collection_delay_seconds
@@ -1496,6 +1517,10 @@ def render_multi_run_generated_config(
     cleanup_strategy: CleanupStrategy = "per_case",
     fastmode: bool = False,
     settling_cooldown_seconds: float = DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS,
+    product_warmup_enabled: bool = False,
+    product_warmup_cooldown_seconds: float = (
+        DEFAULT_MULTI_RUN_PRODUCT_WARMUP_COOLDOWN_SECONDS
+    ),
     upload_status_timeout_seconds: float = (
         DEFAULT_MULTI_RUN_UPLOAD_STATUS_TIMEOUT_SECONDS
     ),
@@ -1535,6 +1560,9 @@ def render_multi_run_generated_config(
             f"cleanup_strategy = {_toml_string(cleanup_strategy)}",
             f"fastmode = {_toml_bool(fastmode)}",
             f"settling_cooldown_seconds = {float(settling_cooldown_seconds):g}",
+            f"product_warmup_enabled = {_toml_bool(product_warmup_enabled)}",
+            "product_warmup_cooldown_seconds = "
+            f"{float(product_warmup_cooldown_seconds):g}",
             f"upload_status_timeout_seconds = {float(upload_status_timeout_seconds):g}",
             "post_execution_collection_delay_seconds = "
             f"{float(post_execution_collection_delay_seconds):g}",
@@ -1771,6 +1799,10 @@ class SingleRunRequest:
     skip_initial_restore: bool = False
     environment_reused_from_case_id: str = ""
     settling_cooldown_seconds: float = DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS
+    product_warmup_enabled: bool = False
+    product_warmup_cooldown_seconds: float = (
+        DEFAULT_MULTI_RUN_PRODUCT_WARMUP_COOLDOWN_SECONDS
+    )
     upload_status_timeout_seconds: float = (
         DEFAULT_MULTI_RUN_UPLOAD_STATUS_TIMEOUT_SECONDS
     )
@@ -1819,6 +1851,8 @@ class SingleRunRequest:
             "skip_initial_restore": self.skip_initial_restore,
             "environment_reused_from_case_id": self.environment_reused_from_case_id,
             "settling_cooldown_seconds": self.settling_cooldown_seconds,
+            "product_warmup_enabled": self.product_warmup_enabled,
+            "product_warmup_cooldown_seconds": self.product_warmup_cooldown_seconds,
             "upload_status_timeout_seconds": self.upload_status_timeout_seconds,
             "post_execution_collection_delay_seconds": (
                 self.post_execution_collection_delay_seconds
@@ -1984,6 +2018,10 @@ class RealSingleRunRunner:
                     defer_final_cleanup=request.defer_final_cleanup,
                     skip_initial_restore=request.skip_initial_restore,
                     settling_cooldown_seconds=request.settling_cooldown_seconds,
+                    product_warmup_enabled=request.product_warmup_enabled,
+                    product_warmup_cooldown_seconds=(
+                        request.product_warmup_cooldown_seconds
+                    ),
                     upload_poll_timeout_seconds=(request.upload_status_timeout_seconds),
                     post_execution_collection_delay_seconds=(
                         request.post_execution_collection_delay_seconds
@@ -3024,6 +3062,10 @@ def render_multi_run_aggregate_markdown(summary: Mapping[str, Any]) -> str:
                 f"{runtime_parameters.get('effective_cleanup_strategy', '')}",
                 "- settling cooldown seconds: "
                 f"{runtime_parameters.get('settling_cooldown_seconds', '')}",
+                "- product warm-up: "
+                f"{_enabled_label(runtime_parameters.get('product_warmup_enabled'))}",
+                "- product warm-up cooldown seconds: "
+                f"{runtime_parameters.get('product_warmup_cooldown_seconds', '')}",
                 "- upload status timeout seconds: "
                 f"{runtime_parameters.get('upload_status_timeout_seconds', '')}",
                 "- post-execution default delay seconds: "
@@ -3125,6 +3167,14 @@ def load_batch_plan(path: Path | str) -> BatchPlan:
             execution_payload.get("settling_cooldown_seconds"),
             plan_path,
             DEFAULT_MULTI_RUN_SETTLING_COOLDOWN_SECONDS,
+        ),
+        product_warmup_enabled=bool(
+            execution_payload.get("product_warmup_enabled", False)
+        ),
+        product_warmup_cooldown_seconds=_optional_float_with_default(
+            execution_payload.get("product_warmup_cooldown_seconds"),
+            plan_path,
+            DEFAULT_MULTI_RUN_PRODUCT_WARMUP_COOLDOWN_SECONDS,
         ),
         upload_status_timeout_seconds=_optional_float_with_default(
             execution_payload.get("upload_status_timeout_seconds"),
@@ -3340,6 +3390,10 @@ def _single_run_request_for_entry(
         skip_initial_restore=skip_initial_restore,
         environment_reused_from_case_id=environment_reused_from_case_id,
         settling_cooldown_seconds=plan.execution.settling_cooldown_seconds,
+        product_warmup_enabled=plan.execution.product_warmup_enabled,
+        product_warmup_cooldown_seconds=(
+            plan.execution.product_warmup_cooldown_seconds
+        ),
         upload_status_timeout_seconds=plan.execution.upload_status_timeout_seconds,
         post_execution_collection_delay_seconds=(
             plan.execution.post_execution_collection_delay_seconds
@@ -4149,6 +4203,10 @@ def _build_runtime_parameters(
         ),
         "settling_cooldown_seconds": _runtime_float(
             execution, "settling_cooldown_seconds"
+        ),
+        "product_warmup_enabled": _runtime_bool(execution, "product_warmup_enabled"),
+        "product_warmup_cooldown_seconds": _runtime_float(
+            execution, "product_warmup_cooldown_seconds"
         ),
         "upload_status_timeout_seconds": _runtime_float(
             execution, "upload_status_timeout_seconds"

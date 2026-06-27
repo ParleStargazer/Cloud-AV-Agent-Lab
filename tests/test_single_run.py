@@ -385,6 +385,41 @@ class SingleRunTests(TestCase):
                 (result.run_dir / "case_security_product_readiness.json").is_file()
             )
 
+    def test_product_warmup_runs_after_worker_ready_before_prepare_case(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.exe"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            client = FakeGuestClient()
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="qihoo-360",
+                    product_warmup_enabled=True,
+                    product_warmup_cooldown_seconds=4.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertEqual(client.warmup_products, ["qihoo-360"])
+            self.assertLess(
+                client.calls.index("warm_up_security_product"),
+                client.calls.index("prepare_case"),
+            )
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            warmup = run_state["stages"]["product_warmup"]
+            self.assertTrue(warmup["enabled"])
+            self.assertEqual(warmup["status"], "ok")
+            self.assertEqual(warmup["state"], "started")
+            self.assertEqual(warmup["action"], "open_main_ui")
+            self.assertEqual(warmup["cooldown_seconds"], 4.0)
+            self.assertFalse(warmup["client_supplied_path"])
+
     def test_single_run_windows_defender_product_flows_through_all_stages(
         self,
     ) -> None:
@@ -1703,6 +1738,7 @@ class FakeGuestClient:
         self.readiness_products: list[str] = []
         self.collection_products: list[str] = []
         self.probe_products: list[str] = []
+        self.warmup_products: list[str] = []
         self.upload_md5s: list[str] = []
 
     def health(self, timeout_seconds: float | None = None) -> GuestAgentResponse:
@@ -1721,6 +1757,27 @@ class FakeGuestClient:
                 "desktop_session_state": "active" if self.worker_ready else "unknown",
                 "username": "AvTester-Admin",
                 "reason": self.worker_reason,
+            },
+        )
+
+    def warm_up_security_product(
+        self,
+        product_id: str,
+        timeout_seconds: float | None = None,
+    ) -> GuestAgentResponse:
+        self.calls.append("warm_up_security_product")
+        self.warmup_products.append(product_id)
+        return GuestAgentResponse(
+            status="ok",
+            message="desktop worker product warm-up handled",
+            data={
+                "product_id": product_id,
+                "action": "open_main_ui",
+                "warmup_state": "started",
+                "pid": 9876,
+                "client_supplied_path": False,
+                "client_supplied_command": False,
+                "client_supplied_args": False,
             },
         )
 
@@ -1922,6 +1979,8 @@ def _options(
     guest_ready_successes: int = 2,
     post_execution_collection_delay_seconds: float = 45.0,
     post_execution_quarantine_delay_seconds: float = 3.0,
+    product_warmup_enabled: bool = False,
+    product_warmup_cooldown_seconds: float = 0.0,
     product_probe_enabled: bool = False,
     post_execution_probe_interval_seconds: float = 1.0,
     product_probe_available: bool = False,
@@ -1947,6 +2006,8 @@ def _options(
         guest_ready_interval_seconds=0.1,
         guest_ready_successes=guest_ready_successes,
         settling_cooldown_seconds=0,
+        product_warmup_enabled=product_warmup_enabled,
+        product_warmup_cooldown_seconds=product_warmup_cooldown_seconds,
         upload_poll_interval_seconds=0.1,
         upload_poll_timeout_seconds=upload_poll_timeout_seconds,
         execution_poll_interval_seconds=execution_poll_interval_seconds,

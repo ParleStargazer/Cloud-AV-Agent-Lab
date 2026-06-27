@@ -112,6 +112,22 @@ class DesktopWorkerClient:
             ) from exc
         return _decode_worker_response("execution-status", response)
 
+    def product_warmup(self, product_id: str) -> DesktopWorkerResponse:
+        path = f"product-actions/warm-up/{quote(product_id, safe='')}"
+        try:
+            response = self.network.request_json(
+                method="POST",
+                url=urljoin(self.base_url, path),
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout_seconds=self.timeout_seconds,
+            )
+        except Exception as exc:
+            raise DesktopWorkerClientError(
+                f"Desktop Worker product warm-up request failed: {type(exc).__name__}",
+                source="network",
+            ) from exc
+        return _decode_worker_response("product-warmup", response)
+
 
 def _decode_worker_status(response: NetworkResponse) -> DesktopWorkerStatus:
     decoded = _decode_worker_payload("health", response)

@@ -452,6 +452,49 @@ class DesktopWorkerTests(TestCase):
         self.assertEqual(payload["detail"]["error_type"], "RuntimeError")
         self.assertNotIn(TOKEN, response.text)
 
+    def test_product_warmup_opens_qihoo_360_fixed_main_ui(self) -> None:
+        with (
+            patch(
+                "cloud_av_agent_lab.desktop_worker.product_warmup.Path.is_file",
+                return_value=True,
+            ),
+            patch(
+                "cloud_av_agent_lab.desktop_worker.product_warmup.subprocess.Popen"
+            ) as popen,
+        ):
+            popen.return_value.pid = 9876
+            response = self.client.post(
+                "/product-actions/warm-up/qihoo-360",
+                headers=self._headers(),
+                json={},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["product_id"], "qihoo-360")
+        self.assertEqual(data["action"], "open_main_ui")
+        self.assertEqual(data["warmup_state"], "started")
+        self.assertEqual(data["pid"], 9876)
+        self.assertFalse(data["client_supplied_path"])
+        self.assertFalse(data["client_supplied_command"])
+        self.assertFalse(data["client_supplied_args"])
+        args, kwargs = popen.call_args
+        self.assertEqual(args[0], [r"C:\Program Files (x86)\360\360Safe\360Safe.exe"])
+        self.assertFalse(kwargs["shell"])
+        self.assertTrue(kwargs["close_fds"])
+
+    def test_product_warmup_rejects_client_supplied_command_fields(self) -> None:
+        response = self.client.post(
+            "/product-actions/warm-up/qihoo-360",
+            headers=self._headers(),
+            json={"path": r"C:\Temp\anything.exe", "args": ["/unsafe"]},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("unsupported product warm-up fields", response.text)
+        self.assertIn("path", response.text)
+        self.assertIn("args", response.text)
+
 
 def _prepare_worker_case(
     workdir: Path,

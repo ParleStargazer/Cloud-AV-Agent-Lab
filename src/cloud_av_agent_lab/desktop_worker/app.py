@@ -11,7 +11,23 @@ from cloud_av_agent_lab.desktop_worker.execution import (
     WorkerExecutionError,
     WorkerExecutionRegistry,
 )
+from cloud_av_agent_lab.desktop_worker.product_warmup import (
+    ProductWarmupError,
+    warm_up_security_product,
+)
 from cloud_av_agent_lab.desktop_worker.status import build_worker_health
+
+FORBIDDEN_PRODUCT_WARMUP_FIELDS = {
+    "path",
+    "sample_path",
+    "cmd",
+    "command",
+    "args",
+    "arguments",
+    "shell",
+    "interpreter",
+    "powershell",
+}
 
 
 def create_app(
@@ -89,6 +105,35 @@ def create_app(
             "data": data,
         }
 
+    @app.post("/product-actions/warm-up/{product_id}")
+    def product_warmup(
+        product_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        authorize(authorization)
+        forbidden = _forbidden_warmup_fields(payload or {})
+        if forbidden:
+            joined = ", ".join(forbidden)
+            raise HTTPException(
+                status_code=400,
+                detail=f"unsupported product warm-up fields: {joined}",
+            )
+        try:
+            data = warm_up_security_product(product_id)
+        except ProductWarmupError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except Exception as exc:
+            raise _internal_worker_error(
+                "desktop worker product warm-up failed",
+                exc,
+            ) from exc
+        return {
+            "status": "ok",
+            "message": "desktop worker product warm-up handled",
+            "data": data,
+        }
+
     return app
 
 
@@ -108,4 +153,10 @@ def _internal_worker_error(message: str, exc: Exception) -> HTTPException:
             "message": message,
             "error_type": type(exc).__name__,
         },
+    )
+
+
+def _forbidden_warmup_fields(payload: dict[str, Any]) -> list[str]:
+    return sorted(
+        key for key in payload if str(key).casefold() in FORBIDDEN_PRODUCT_WARMUP_FIELDS
     )

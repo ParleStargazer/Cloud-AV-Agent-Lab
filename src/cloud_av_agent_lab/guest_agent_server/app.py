@@ -138,6 +138,47 @@ def create_app(
             "data": payload,
         }
 
+    @app.post("/worker/product-warmup/{product_id}")
+    def worker_product_warmup(
+        product_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        authorize(authorization)
+        worker_status_payload = _worker_status_payload(
+            enabled=desktop_worker_enabled,
+            client=desktop_worker_client,
+            expected_user=desktop_worker_expected_user,
+            require_interactive_session=desktop_worker_require_interactive_session,
+            required_for_execution=desktop_worker_required_for_execution,
+        )
+        if not worker_status_payload.get("desktop_worker_ready"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "desktop worker is required for product warm-up but is not ready: "
+                    + str(worker_status_payload.get("reason") or "unknown")
+                ),
+            )
+        if desktop_worker_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="desktop worker client is not configured",
+            )
+        try:
+            worker_response = desktop_worker_client.product_warmup(product_id)
+        except DesktopWorkerClientError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY
+                if exc.source == "network"
+                else status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return {
+            "status": "ok",
+            "message": "desktop worker product warm-up handled",
+            "data": worker_response.data,
+        }
+
     @app.post("/prepare-case")
     def prepare_case(
         payload: dict[str, Any] = Body(...),

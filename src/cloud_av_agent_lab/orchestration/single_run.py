@@ -45,6 +45,7 @@ DEFAULT_GUEST_READY_SUCCESSES = 2
 DEFAULT_SETTLING_COOLDOWN_SECONDS = 15.0
 DEFAULT_FASTMODE_REUSE_GUEST_READY_SUCCESSES = 1
 DEFAULT_FASTMODE_REUSE_SETTLING_COOLDOWN_SECONDS = 3.0
+DEFAULT_PRODUCT_WARMUP_COOLDOWN_SECONDS = 20.0
 DEFAULT_UPLOAD_INITIAL_WAIT_SECONDS = 0.0
 DEFAULT_UPLOAD_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS = 30.0
@@ -185,6 +186,8 @@ class SingleRunOptions:
     guest_ready_interval_seconds: float = DEFAULT_GUEST_READY_INTERVAL_SECONDS
     guest_ready_successes: int = DEFAULT_GUEST_READY_SUCCESSES
     settling_cooldown_seconds: float = DEFAULT_SETTLING_COOLDOWN_SECONDS
+    product_warmup_enabled: bool = False
+    product_warmup_cooldown_seconds: float = DEFAULT_PRODUCT_WARMUP_COOLDOWN_SECONDS
     upload_initial_wait_seconds: float = DEFAULT_UPLOAD_INITIAL_WAIT_SECONDS
     upload_poll_interval_seconds: float = DEFAULT_UPLOAD_POLL_INTERVAL_SECONDS
     upload_poll_timeout_seconds: float = DEFAULT_UPLOAD_POLL_TIMEOUT_SECONDS
@@ -691,6 +694,17 @@ def _run_single_case_locked(
             state.mark_stage("environment", "desktop_worker_gate", "disabled")
 
         with state.step("settling_cooldown"):
+            warmup_result = _warm_up_security_product_warning_only(
+                client=client,
+                state=state,
+                product_id=product_id,
+                enabled=options.product_warmup_enabled,
+                dry_run=options.dry_run,
+                cooldown_seconds=options.product_warmup_cooldown_seconds,
+                sleep=sleep,
+            )
+            if warmup_result["status"] == "warning":
+                warning_count += 1
             LOGGER.info(
                 "Settling cooldown started: %.0fs",
                 settling_cooldown_seconds,
@@ -1587,6 +1601,83 @@ def _check_security_product_readiness_warning_only(
         confidence,
     )
     return {"status": status, "state": readiness_state}
+
+
+def _warm_up_security_product_warning_only(
+    *,
+    client: GuestAgentClient,
+    state: RunState,
+    product_id: str,
+    enabled: bool,
+    dry_run: bool,
+    cooldown_seconds: float,
+    sleep: Callable[[float], None],
+) -> dict[str, str]:
+    stage = "product_warmup"
+    state.mark_stage(stage, "enabled", enabled)
+    state.mark_stage(stage, "product_id", product_id)
+    state.mark_stage(stage, "cooldown_seconds", max(cooldown_seconds, 0.0))
+    state.mark_stage("environment", "product_warmup_enabled", enabled)
+    if not enabled:
+        state.mark_stage(stage, "status", "skipped")
+        state.mark_stage(stage, "reason", "product warm-up is disabled")
+        return {"status": "skipped"}
+    if dry_run:
+        state.mark_stage(stage, "status", "skipped")
+        state.mark_stage(stage, "reason", "dry-run does not start product UI")
+        LOGGER.info("Product warm-up skipped in dry-run mode")
+        return {"status": "skipped"}
+
+    try:
+        response = client.warm_up_security_product(
+            product_id,
+            timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+        )
+    except GuestAgentError as exc:
+        reason = _sanitize_readiness_message(str(exc))
+        state.mark_stage(stage, "status", "warning")
+        state.mark_stage(stage, "reason", reason)
+        state.mark_stage(stage, "error_source", exc.source)
+        state.mark_stage(stage, "error_status_code", exc.status_code)
+        state.add_warning(stage, reason)
+        LOGGER.warning(
+            "Product warm-up failed for %s; continuing as warning-only: %s",
+            product_id,
+            reason,
+        )
+        return {"status": "warning"}
+
+    data = response.data
+    state.mark_stage(stage, "status", "ok")
+    state.mark_stage(stage, "state", str(data.get("warmup_state", "unknown")))
+    state.mark_stage(stage, "action", str(data.get("action", "")))
+    state.mark_stage(stage, "pid", data.get("pid"))
+    state.mark_stage(
+        stage,
+        "client_supplied_path",
+        bool(data.get("client_supplied_path")),
+    )
+    state.mark_stage(
+        stage,
+        "client_supplied_command",
+        bool(data.get("client_supplied_command")),
+    )
+    state.mark_stage(
+        stage,
+        "client_supplied_args",
+        bool(data.get("client_supplied_args")),
+    )
+    LOGGER.info(
+        "Product warm-up requested: product=%s action=%s state=%s",
+        product_id,
+        str(data.get("action", "")),
+        str(data.get("warmup_state", "unknown")),
+    )
+    if cooldown_seconds > 0:
+        LOGGER.info("Product warm-up cooldown started: %.0fs", cooldown_seconds)
+        sleep(max(cooldown_seconds, 0.0))
+        LOGGER.info("Product warm-up cooldown finished")
+    return {"status": "ok"}
 
 
 def _ensure_security_product_readiness_stage_recorded(

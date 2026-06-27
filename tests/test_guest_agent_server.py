@@ -191,6 +191,64 @@ class GuestAgentServerTests(unittest.TestCase):
         self.assertEqual(payload["data"]["worker_error_source"], "network")
         self.assertNotIn("worker-token", response.text)
 
+    def test_worker_product_warmup_forwards_to_ready_desktop_worker(self) -> None:
+        client = TestClient(
+            create_app(
+                workdir=self.workdir,
+                token=TOKEN,
+                upload_token=UPLOAD_TOKEN,
+                desktop_worker_enabled=True,
+                desktop_worker_token="worker-token",
+                desktop_worker_expected_user="AvTester-Admin",
+                app_version="test-version",
+            )
+        )
+        with (
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.health",
+                return_value=DesktopWorkerStatus(
+                    ready=True,
+                    data={
+                        "worker_pid": 4321,
+                        "worker_session_id": 1,
+                        "interactive_session": True,
+                        "desktop_session_state": "active",
+                        "username": "AvTester-Admin",
+                        "bind_host": "127.0.0.1",
+                        "version": "test-version",
+                        "busy": False,
+                    },
+                ),
+            ),
+            patch(
+                "cloud_av_agent_lab.guest_agent_server.app.DesktopWorkerClient.product_warmup",
+                return_value=DesktopWorkerResponse(
+                    status="ok",
+                    message="desktop worker product warm-up handled",
+                    data={
+                        "product_id": "qihoo-360",
+                        "action": "open_main_ui",
+                        "warmup_state": "started",
+                        "pid": 9876,
+                        "client_supplied_path": False,
+                        "client_supplied_command": False,
+                        "client_supplied_args": False,
+                    },
+                ),
+            ) as warmup,
+        ):
+            response = client.post(
+                "/worker/product-warmup/qihoo-360",
+                headers=self._headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["data"]["warmup_state"], "started")
+        self.assertEqual(payload["data"]["action"], "open_main_ui")
+        warmup.assert_called_once_with("qihoo-360")
+        self.assertNotIn("worker-token", response.text)
+
     def test_desktop_worker_client_decodes_nested_error_detail(self) -> None:
         class FakeNetwork:
             def request_json(self, **kwargs):
