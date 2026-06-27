@@ -3907,9 +3907,9 @@ def _fastmode_gate_decision(
     if not _summary_contains_fastmode_strong_evidence(summary):
         return False, "strong_evidence_missing"
     if _fastmode_warning_exception_required(result):
-        if not _qihoo_execute_timeout_fastmode_exception(root, result, summary):
-            return False, "warnings_without_qihoo_execute_timeout_exception"
-        return True, "qihoo_execute_timeout_high_confidence_strong_evidence"
+        if not _qihoo_execution_warning_fastmode_exception(root, result, summary):
+            return False, "warnings_without_qihoo_execution_evidence_exception"
+        return True, "qihoo_execution_warning_high_confidence_strong_evidence"
     return True, "evaluator_detected_or_blocked_high_confidence_strong_evidence"
 
 
@@ -3931,7 +3931,7 @@ def _unmatched_instruction_fastmode_exception(
     return _run_state_has_unmatched_instruction(run_state)
 
 
-def _qihoo_execute_timeout_fastmode_exception(
+def _qihoo_execution_warning_fastmode_exception(
     root: Path,
     result: SingleRunRunnerResult,
     summary: Mapping[str, Any],
@@ -3943,13 +3943,12 @@ def _qihoo_execute_timeout_fastmode_exception(
     run_state = _read_optional_json_mapping(root / result.run_state_path)
     if not run_state:
         return False
-    execution = _execution_stage_from_run_state(run_state)
     execution_state = _execution_state_from_run_state(run_state)
-    observation_exit_reason = str(execution.get("observation_exit_reason") or "")
-    return (
-        execution_state == "execution_request_timeout"
-        and observation_exit_reason == "execute_request_timeout_before_polling"
-    )
+    return execution_state in {
+        "execution_request_timeout",
+        "execution_error",
+        "launch_failed",
+    }
 
 
 def _run_state_has_unmatched_instruction(payload: Mapping[str, Any]) -> bool:

@@ -65,6 +65,7 @@ TERMINAL_EXECUTION_STATES = {
 }
 POST_EXECUTION_COLLECTION_WAIT_STATES = TERMINAL_EXECUTION_STATES | {
     "execution_request_timeout",
+    "execution_error",
 }
 NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS = {
     "desktop worker is required for real execution but is not ready": (
@@ -1848,6 +1849,8 @@ def _execute_after_upload_observation(
         )
     except GuestAgentError as exc:
         execution_state = _nonfatal_remote_execution_state(exc)
+        if not execution_state and product_id == "qihoo-360":
+            execution_state = "execution_error"
         if execution_state:
             reason = f"execution action did not start: {exc}"
             LOGGER.warning("%s", reason)
@@ -2000,6 +2003,8 @@ def _nonfatal_remote_execution_state(error: GuestAgentError) -> str:
 def _pre_polling_execution_exit_reason(execution_state: str) -> str:
     if execution_state == "execution_request_timeout":
         return "execute_request_timeout_before_polling"
+    if execution_state == "execution_error":
+        return "execution_error_before_polling"
     if execution_state == "unmatched_instruction":
         return "unmatched_instruction_before_polling"
     return "launch_failed_before_polling"
@@ -2020,6 +2025,8 @@ def _post_execution_delay_log_reason(execution_state: str) -> str:
         return "launch failure"
     if execution_state == "execution_request_timeout":
         return "execute request timeout"
+    if execution_state == "execution_error":
+        return "execution error"
     return "execution exit"
 
 

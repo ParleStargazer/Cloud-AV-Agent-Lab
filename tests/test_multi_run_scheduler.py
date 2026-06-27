@@ -408,7 +408,7 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertTrue(state["cases"][0]["fastmode_eligible"])
             self.assertEqual(
                 state["cases"][0]["fastmode_reason"],
-                "qihoo_execute_timeout_high_confidence_strong_evidence",
+                "qihoo_execution_warning_high_confidence_strong_evidence",
             )
             self.assertEqual(
                 [case["cleanup_status"] for case in state["cases"]],
@@ -435,13 +435,40 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertFalse(state["cases"][0]["fastmode_eligible"])
             self.assertEqual(
                 state["cases"][0]["fastmode_reason"],
-                "warnings_without_qihoo_execute_timeout_exception",
+                "warnings_without_qihoo_execution_evidence_exception",
             )
             self.assertEqual(
                 [case["cleanup_status"] for case in state["cases"]],
                 ["deferred_to_next_case", "restored"],
             )
             self.assertFalse(runner.requests[1].skip_initial_restore)
+
+    def test_fastmode_reuses_environment_after_qihoo_execution_error_with_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            batch_dir, runner = _plan_and_execute(
+                tmp,
+                indexes=(1, 2),
+                fastmode=True,
+                runner=QihooExecutionErrorStrongAttributionRunner(),
+            )
+
+            state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
+            self.assertTrue(state["cases"][0]["fastmode_eligible"])
+            self.assertEqual(
+                state["cases"][0]["fastmode_reason"],
+                "qihoo_execution_warning_high_confidence_strong_evidence",
+            )
+            self.assertEqual(
+                [case["cleanup_status"] for case in state["cases"]],
+                ["deferred_to_next_case", "restored"],
+            )
+            self.assertTrue(runner.requests[1].skip_initial_restore)
+            self.assertEqual(
+                runner.requests[1].environment_reused_from_case_id,
+                state["cases"][0]["case_id"],
+            )
 
     def test_fastmode_reuses_environment_for_unmatched_instruction(
         self,
@@ -1032,6 +1059,39 @@ class WarningStrongAttributionRunner(StrongAttributionRunner):
             result,
             final_status="completed_with_warnings",
             warnings=("execute request timeout before polling",),
+            run_state_path=run_state_path.relative_to(batch_root).as_posix(),
+        )
+
+
+class QihooExecutionErrorStrongAttributionRunner(StrongAttributionRunner):
+    def run(self, request: SingleRunRequest) -> SingleRunRunnerResult:
+        result = super().run(request)
+        batch_root = request.case_dir.parent.parent
+        summary_path = batch_root / result.case_summary_path
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        summary["product_id"] = "qihoo-360"
+        summary_path.write_text(json.dumps(summary), encoding="utf-8")
+        run_state_path = request.case_dir / "single_run" / "run_state.json"
+        run_state_path.write_text(
+            json.dumps(
+                {
+                    "stages": {
+                        "execution": {
+                            "state": "execution_error",
+                            "observation_exit_reason": (
+                                "execution_error_before_polling"
+                            ),
+                        }
+                    },
+                    "execution_action_state": "execution_error",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return replace(
+            result,
+            final_status="completed_with_warnings",
+            warnings=("execution error before collection",),
             run_state_path=run_state_path.relative_to(batch_root).as_posix(),
         )
 

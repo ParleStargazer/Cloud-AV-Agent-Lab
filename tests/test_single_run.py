@@ -1404,6 +1404,90 @@ class SingleRunTests(TestCase):
             )
             self.assertEqual(collection["evidence_count"], 1)
 
+    def test_qihoo_execute_error_continues_to_delay_and_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.exe"
+            sample_path.write_bytes(b"MZ harmless placeholder")
+            sleeps: list[float] = []
+            client = FakeGuestClient(
+                execute_error=GuestAgentError(
+                    "Guest Agent cases/case/actions returned HTTP 502 Bad Gateway: "
+                    "Desktop Worker execute request failed: unexpected worker loss",
+                    status_code=502,
+                    source="remote",
+                ),
+                probe_states=["strong_signal_observed"],
+            )
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="qihoo-360",
+                    product_probe_available=True,
+                    product_probe_enabled=True,
+                    execution_product_probe_enabled=True,
+                    post_execution_collection_delay_seconds=25.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            self.assertEqual(client.collection_products, ["qihoo-360"])
+            self.assertIn(1.0, sleeps)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            execution = run_state["stages"]["execution"]
+            self.assertEqual(execution["action_status"], "not_started")
+            self.assertEqual(execution["state"], "execution_error")
+            self.assertEqual(execution["error_status_code"], 502)
+            self.assertEqual(
+                execution["observation_exit_reason"],
+                "execution_error_before_polling",
+            )
+            collection = run_state["stages"]["collection"]
+            self.assertEqual(
+                collection["product_probe_exit_reason"],
+                "strong_signal_observed",
+            )
+
+    def test_non_qihoo_unknown_execute_error_still_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.exe"
+            sample_path.write_bytes(b"MZ harmless placeholder")
+            client = FakeGuestClient(
+                execute_error=GuestAgentError(
+                    "Guest Agent cases/case/actions returned HTTP 502 Bad Gateway: "
+                    "Desktop Worker execute request failed: unexpected worker loss",
+                    status_code=502,
+                    source="remote",
+                ),
+                probe_states=["strong_signal_observed"],
+            )
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="tencent-pc-manager",
+                    product_probe_available=True,
+                    product_probe_enabled=True,
+                    execution_product_probe_enabled=True,
+                    post_execution_collection_delay_seconds=25.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda _seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "failed")
+            self.assertEqual(client.collection_products, [])
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            self.assertIn("unexpected worker loss", run_state["errors"][-1]["message"])
+
     def test_invalid_executable_is_marked_unmatched_instruction_without_delay(
         self,
     ) -> None:
