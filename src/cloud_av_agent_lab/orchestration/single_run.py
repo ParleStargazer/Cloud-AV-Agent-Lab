@@ -63,6 +63,9 @@ TERMINAL_EXECUTION_STATES = {
     "launch_failed",
     "terminated_or_disappeared",
 }
+POST_EXECUTION_COLLECTION_WAIT_STATES = TERMINAL_EXECUTION_STATES | {
+    "execution_request_timeout",
+}
 NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS = {
     "desktop worker is required for real execution but is not ready": (
         "desktop_worker_not_ready"
@@ -79,6 +82,9 @@ NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS = {
     "handler_id does not match": "execution_handler_mismatch",
     "uploaded sample failed to start": "launch_failed",
     "execute_uploaded_sample requires a previously uploaded sample": "not_uploaded",
+}
+NONFATAL_REMOTE_EXECUTION_502_MARKERS = {
+    "desktop worker execute request failed: timeouterror": "execution_request_timeout",
 }
 SENSITIVE_MESSAGE_RE = re.compile(
     r"(?i)\b(authorization|bearer|token|secret|password|credential|api[_-]?key|"
@@ -999,11 +1005,7 @@ def _run_single_case_locked(
                     execution_result["status"],
                 )
             elif delay_seconds > 0:
-                reason = (
-                    "launch failure"
-                    if execution_state == "launch_failed"
-                    else "execution exit"
-                )
+                reason = _post_execution_delay_log_reason(execution_state)
                 LOGGER.info(
                     "post-execution collection delay started after "
                     "%s: %.0fs to allow security product action "
@@ -1858,7 +1860,7 @@ def _execute_after_upload_observation(
                 **_default_execution_probe_result_fields(
                     product_probe_enabled=product_probe_enabled,
                     product_probe_supported=product_probe_supported,
-                    exit_reason="launch_failed_before_polling",
+                    exit_reason=_pre_polling_execution_exit_reason(execution_state),
                 ),
             }
         raise
@@ -1974,13 +1976,26 @@ def _default_execution_probe_result_fields(
 
 
 def _nonfatal_remote_execution_state(error: GuestAgentError) -> str:
-    if error.source != "remote" or error.status_code not in {400, 404, 409}:
+    if error.source != "remote":
         return ""
     text = str(error).casefold()
+    if error.status_code == 502:
+        for marker, execution_state in NONFATAL_REMOTE_EXECUTION_502_MARKERS.items():
+            if marker.casefold() in text:
+                return execution_state
+        return ""
+    if error.status_code not in {400, 404, 409}:
+        return ""
     for marker, execution_state in NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS.items():
         if marker.casefold() in text:
             return execution_state
     return ""
+
+
+def _pre_polling_execution_exit_reason(execution_state: str) -> str:
+    if execution_state == "execution_request_timeout":
+        return "execute_request_timeout_before_polling"
+    return "launch_failed_before_polling"
 
 
 def _should_wait_after_execution_for_collection(
@@ -1988,7 +2003,17 @@ def _should_wait_after_execution_for_collection(
 ) -> bool:
     if execution_result.get("status") not in {"observed", "not_started"}:
         return False
-    return execution_result.get("execution_state") in TERMINAL_EXECUTION_STATES
+    return (
+        execution_result.get("execution_state") in POST_EXECUTION_COLLECTION_WAIT_STATES
+    )
+
+
+def _post_execution_delay_log_reason(execution_state: str) -> str:
+    if execution_state == "launch_failed":
+        return "launch failure"
+    if execution_state == "execution_request_timeout":
+        return "execute request timeout"
+    return "execution exit"
 
 
 def _select_post_execution_collection_delay(

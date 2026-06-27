@@ -1355,6 +1355,55 @@ class SingleRunTests(TestCase):
                 "strong_signal_observed",
             )
 
+    def test_desktop_worker_execute_timeout_continues_to_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.exe"
+            sample_path.write_bytes(b"MZ harmless placeholder")
+            client = FakeGuestClient(
+                execute_error=GuestAgentError(
+                    "Guest Agent cases/case/actions returned HTTP 502 Bad Gateway: "
+                    "Desktop Worker execute request failed: TimeoutError",
+                    status_code=502,
+                    source="remote",
+                ),
+                probe_states=["strong_signal_observed"],
+            )
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="qihoo-360",
+                    product_probe_available=True,
+                    product_probe_enabled=True,
+                    execution_product_probe_enabled=True,
+                    post_execution_collection_delay_seconds=25.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=lambda _seconds: None,
+            )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            self.assertEqual(client.collection_products, ["qihoo-360"])
+            self.assertTrue(result.evidence_bundle_path)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            execution = run_state["stages"]["execution"]
+            self.assertEqual(execution["action_status"], "not_started")
+            self.assertEqual(execution["state"], "execution_request_timeout")
+            self.assertEqual(execution["error_status_code"], 502)
+            self.assertEqual(
+                execution["observation_exit_reason"],
+                "execute_request_timeout_before_polling",
+            )
+            collection = run_state["stages"]["collection"]
+            self.assertEqual(
+                collection["product_probe_exit_reason"],
+                "strong_signal_observed",
+            )
+            self.assertEqual(collection["evidence_count"], 1)
+
     def test_product_probe_unsupported_falls_back_to_fixed_delay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
