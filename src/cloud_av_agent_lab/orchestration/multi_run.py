@@ -167,6 +167,24 @@ VERDICTS: tuple[str, ...] = (
 FASTMODE_REUSE_VERDICTS: frozenset[str] = frozenset(
     {"detected_or_blocked", "unmatched_instruction"}
 )
+UNMATCHED_INSTRUCTION_TEXT_MARKERS: tuple[str, ...] = (
+    "reason_code=invalid_executable",
+    "invalid_executable",
+    "winerror=193",
+    "winerror 193",
+    "winerror: 193",
+    "errno=8",
+    "bad exe format",
+    "invalid win32",
+    "not a valid win32",
+    "is not a valid win32",
+    "不是有效的 win32",
+    "reason_code=unsupported_executable_architecture",
+    "unsupported_executable_architecture",
+    "winerror=216",
+    "winerror 216",
+    "winerror: 216",
+)
 NON_EVALUABLE_VERDICTS: tuple[str, ...] = (
     "not_evaluable",
     "unmatched_instruction",
@@ -3949,19 +3967,46 @@ def _qihoo_execution_warning_fastmode_exception(
 def _run_state_has_unmatched_instruction(payload: Mapping[str, Any]) -> bool:
     execution = _execution_stage_from_run_state(payload)
     execution_state = _execution_state_from_run_state(payload)
-    reason = str(
-        execution.get("reason") or payload.get("execution_action_reason") or ""
-    ).casefold()
-    return execution_state == "unmatched_instruction" or any(
-        marker in reason
-        for marker in (
-            "reason_code=invalid_executable",
-            "winerror=193",
-            "不是有效的 win32 应用程序",
-            "reason_code=unsupported_executable_architecture",
-            "winerror=216",
-        )
-    )
+    if execution_state == "unmatched_instruction":
+        return True
+    text = _run_state_execution_diagnostic_text(payload, execution)
+    return any(marker in text for marker in UNMATCHED_INSTRUCTION_TEXT_MARKERS)
+
+
+def _run_state_execution_diagnostic_text(
+    payload: Mapping[str, Any], execution: Mapping[str, Any]
+) -> str:
+    fragments: list[str] = []
+    for key in (
+        "reason",
+        "message",
+        "error",
+        "error_summary",
+        "observation_exit_reason",
+    ):
+        fragments.append(str(execution.get(key) or ""))
+    for key in (
+        "execution_action_reason",
+        "execution_action_error",
+        "error_summary",
+    ):
+        fragments.append(str(payload.get(key) or ""))
+    for list_key in ("warnings", "errors", "fatal_errors"):
+        fragments.extend(_diagnostic_list_texts(payload.get(list_key)))
+    return " ".join(fragment for fragment in fragments if fragment).casefold()
+
+
+def _diagnostic_list_texts(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    fragments: list[str] = []
+    for item in value:
+        if isinstance(item, Mapping):
+            for key in ("stage", "message", "reason", "error", "summary"):
+                fragments.append(str(item.get(key) or ""))
+        elif item is not None:
+            fragments.append(str(item))
+    return fragments
 
 
 def _execution_stage_from_run_state(payload: Mapping[str, Any]) -> Mapping[str, Any]:
