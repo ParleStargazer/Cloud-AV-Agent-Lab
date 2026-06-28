@@ -362,7 +362,7 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
                     summary_path=summary_path,
                     evidence_bundle_path=evidence_path,
                     verdict="inconclusive",
-                    confidence="",
+                    confidence="low",
                     final_status="completed_with_warnings",
                     cleanup_status="restored",
                     emergency_poweroff_status="not_needed",
@@ -373,6 +373,7 @@ class MultiRunFakeRunnerTests(unittest.TestCase):
             )
 
             self.assertEqual(result.verdict, "unmatched_instruction")
+            self.assertEqual(result.confidence, "high")
             self.assertEqual(result.case_status, "completed")
             self.assertEqual(result.failure_kind, None)
 

@@ -370,7 +370,7 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             )
             self.assertEqual(
                 state["cases"][0]["fastmode_reason"],
-                "evaluator_detected_or_blocked_high_confidence_strong_evidence",
+                "evaluator_detected_or_blocked_high_confidence",
             )
             summary = json.loads(
                 (batch_dir / "aggregate_summary.json").read_text(encoding="utf-8")
@@ -408,7 +408,7 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertTrue(state["cases"][0]["fastmode_eligible"])
             self.assertEqual(
                 state["cases"][0]["fastmode_reason"],
-                "qihoo_execution_warning_high_confidence_strong_evidence",
+                "evaluator_detected_or_blocked_high_confidence",
             )
             self.assertEqual(
                 [case["cleanup_status"] for case in state["cases"]],
@@ -420,7 +420,7 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
                 state["cases"][0]["case_id"],
             )
 
-    def test_fastmode_warning_without_qihoo_timeout_does_not_reuse_environment(
+    def test_fastmode_warning_with_high_confidence_reuses_environment(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -432,16 +432,16 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             )
 
             state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
-            self.assertFalse(state["cases"][0]["fastmode_eligible"])
+            self.assertTrue(state["cases"][0]["fastmode_eligible"])
             self.assertEqual(
                 state["cases"][0]["fastmode_reason"],
-                "warnings_without_qihoo_execution_evidence_exception",
+                "evaluator_detected_or_blocked_high_confidence",
             )
             self.assertEqual(
                 [case["cleanup_status"] for case in state["cases"]],
                 ["deferred_to_next_case", "restored"],
             )
-            self.assertFalse(runner.requests[1].skip_initial_restore)
+            self.assertTrue(runner.requests[1].skip_initial_restore)
 
     def test_fastmode_reuses_environment_after_qihoo_execution_error_with_evidence(
         self,
@@ -458,7 +458,7 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertTrue(state["cases"][0]["fastmode_eligible"])
             self.assertEqual(
                 state["cases"][0]["fastmode_reason"],
-                "qihoo_execution_warning_high_confidence_strong_evidence",
+                "evaluator_detected_or_blocked_high_confidence",
             )
             self.assertEqual(
                 [case["cleanup_status"] for case in state["cases"]],
@@ -485,9 +485,10 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             self.assertTrue(state["cases"][0]["fastmode_eligible"])
             self.assertEqual(
                 state["cases"][0]["fastmode_reason"],
-                "unmatched_instruction_execution_incompatible",
+                "evaluator_unmatched_instruction_high_confidence",
             )
             self.assertEqual(state["cases"][0]["verdict"], "unmatched_instruction")
+            self.assertEqual(state["cases"][0]["confidence"], "high")
             self.assertEqual(
                 [case["cleanup_status"] for case in state["cases"]],
                 ["deferred_to_next_case", "restored"],
@@ -518,12 +519,12 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
             )
             self.assertEqual(
                 state["cases"][0]["fastmode_reason"],
-                "evaluator_detected_or_blocked_high_confidence_strong_evidence",
+                "evaluator_detected_or_blocked_high_confidence",
             )
 
-    def test_fastmode_gate_requires_strong_evidence_from_summary(self) -> None:
+    def test_fastmode_gate_uses_evaluator_verdict_without_summary_scan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            batch_dir, _runner = _plan_and_execute(
+            batch_dir, runner = _plan_and_execute(
                 tmp,
                 indexes=(1, 2),
                 fastmode=True,
@@ -531,12 +532,13 @@ class MultiRunSerialSchedulerTests(unittest.TestCase):
 
             state = json.loads((batch_dir / "multi_run_state.json").read_text("utf-8"))
             self.assertTrue(state["fastmode_enabled"])
-            self.assertFalse(state["cases"][0]["fastmode_eligible"])
+            self.assertTrue(state["cases"][0]["fastmode_eligible"])
             self.assertEqual(
                 state["cases"][0]["fastmode_reason"],
-                "case_summary_missing",
+                "evaluator_detected_or_blocked_high_confidence",
             )
-            self.assertFalse(state["cases"][1]["fastmode_used"])
+            self.assertTrue(state["cases"][1]["fastmode_used"])
+            self.assertTrue(runner.requests[1].skip_initial_restore)
             self.assertEqual(
                 [case["cleanup_status"] for case in state["cases"]],
                 ["deferred_to_next_case", "restored"],
@@ -1137,7 +1139,7 @@ class UnmatchedInstructionRunner(StrongAttributionRunner):
             result,
             final_status="completed_with_warnings",
             verdict="unmatched_instruction",
-            confidence="",
+            confidence="high",
             warnings=("invalid executable for current environment",),
             run_state_path=run_state_path.relative_to(batch_root).as_posix(),
         )

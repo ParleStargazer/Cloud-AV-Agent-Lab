@@ -164,6 +164,9 @@ VERDICTS: tuple[str, ...] = (
     "unmatched_instruction",
     "unknown",
 )
+FASTMODE_REUSE_VERDICTS: frozenset[str] = frozenset(
+    {"detected_or_blocked", "unmatched_instruction"}
+)
 NON_EVALUABLE_VERDICTS: tuple[str, ...] = (
     "not_evaluable",
     "unmatched_instruction",
@@ -2262,8 +2265,11 @@ def _single_run_result_to_runner_result(
     failure_kind = _failure_kind_from_single_run(final_status, cleanup_status)
     duration_seconds = _optional_duration_seconds(timing.get("total_seconds"))
     verdict = str(getattr(result, "verdict", "") or "unknown")
+    confidence = str(getattr(result, "confidence", ""))
     if _run_state_has_unmatched_instruction(run_state_payload):
         verdict = "unmatched_instruction"
+    if verdict == "unmatched_instruction":
+        confidence = "high"
     return SingleRunRunnerResult(
         run_id=str(getattr(result, "run_id", request.run_id)),
         case_id=str(getattr(result, "case_id", request.case_id)),
@@ -2275,7 +2281,7 @@ def _single_run_result_to_runner_result(
         summary_status=_summary_status_from_single_run(result, run_state_payload),
         readiness_status=_readiness_status_from_single_run(run_state_payload),
         verdict=verdict,
-        confidence=str(getattr(result, "confidence", "")),
+        confidence=confidence,
         failure_kind=failure_kind,
         result_source="single_run_runner",
         simulated=request.dry_run,
@@ -3893,24 +3899,13 @@ def _fastmode_gate_decision(
         return False, "unsafe_to_continue"
     if classify_runner_result(result) is not None:
         return False, "case_or_environment_failure"
-    if _unmatched_instruction_fastmode_exception(root, result):
-        return True, "unmatched_instruction_execution_incompatible"
-    if result.verdict != "detected_or_blocked":
+    verdict = result.verdict.casefold()
+    confidence = result.confidence.casefold()
+    if verdict not in FASTMODE_REUSE_VERDICTS:
         return False, f"verdict={result.verdict or 'unknown'}"
-    if result.confidence != "high":
+    if confidence != "high":
         return False, f"confidence={result.confidence or 'unknown'}"
-
-    summary_path = root / result.case_summary_path if result.case_summary_path else None
-    summary = _read_optional_json_mapping(summary_path) if summary_path else {}
-    if not summary:
-        return False, "case_summary_missing"
-    if not _summary_contains_fastmode_strong_evidence(summary):
-        return False, "strong_evidence_missing"
-    if _fastmode_warning_exception_required(result):
-        if not _qihoo_execution_warning_fastmode_exception(root, result, summary):
-            return False, "warnings_without_qihoo_execution_evidence_exception"
-        return True, "qihoo_execution_warning_high_confidence_strong_evidence"
-    return True, "evaluator_detected_or_blocked_high_confidence_strong_evidence"
+    return True, f"evaluator_{verdict}_high_confidence"
 
 
 def _fastmode_warning_exception_required(result: SingleRunRunnerResult) -> bool:
