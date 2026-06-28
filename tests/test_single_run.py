@@ -1521,7 +1521,7 @@ class SingleRunTests(TestCase):
                 "strong_signal_observed",
             )
 
-    def test_non_qihoo_unknown_execute_error_still_fails(self) -> None:
+    def test_non_qihoo_unknown_execute_error_continues_to_collection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             sample_path = root / "sample.exe"
@@ -1551,10 +1551,61 @@ class SingleRunTests(TestCase):
                 sleep=lambda _seconds: None,
             )
 
-            self.assertEqual(result.final_status, "failed")
-            self.assertEqual(client.collection_products, [])
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            self.assertEqual(client.collection_products, ["tencent-pc-manager"])
             run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
-            self.assertIn("unexpected worker loss", run_state["errors"][-1]["message"])
+            execution = run_state["stages"]["execution"]
+            self.assertEqual(execution["action_status"], "not_started")
+            self.assertEqual(execution["state"], "execution_error")
+            self.assertEqual(execution["error_status_code"], 502)
+            self.assertEqual(
+                execution["observation_exit_reason"],
+                "execution_error_before_polling",
+            )
+
+    def test_defender_blocked_execution_error_continues_to_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.exe"
+            sample_path.write_bytes(b"MZ harmless placeholder")
+            sleeps: list[float] = []
+            client = FakeGuestClient(
+                execute_error=GuestAgentError(
+                    "Guest Agent cases/01821fae4f0849d6__windows-defender__"
+                    "20260628-130937/actions returned HTTP 400 Bad Request: "
+                    "Desktop Worker execute returned HTTP 400: uploaded sample "
+                    "failed to start: OSError reason_code=blocked_by_security_product "
+                    "winerror=225 errno=22 message=无法成功完成操作，因为文件包含病毒"
+                    "或潜在的垃圾软件。",
+                    status_code=400,
+                    source="remote",
+                )
+            )
+
+            result = run_single_case(
+                _options(
+                    root,
+                    sample_path,
+                    product_id="windows-defender",
+                    post_execution_collection_delay_seconds=45.0,
+                ),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertEqual(result.final_status, "completed_with_warnings")
+            self.assertEqual(client.collection_products, ["windows-defender"])
+            self.assertIn(45.0, sleeps)
+            run_state = json.loads(result.run_state_path.read_text(encoding="utf-8"))
+            execution = run_state["stages"]["execution"]
+            self.assertEqual(execution["action_status"], "not_started")
+            self.assertEqual(execution["state"], "launch_failed")
+            self.assertEqual(execution["error_status_code"], 400)
+            self.assertEqual(
+                execution["observation_exit_reason"],
+                "launch_failed_before_polling",
+            )
 
     def test_invalid_executable_is_marked_unmatched_instruction_without_delay(
         self,

@@ -87,6 +87,10 @@ NONFATAL_REMOTE_EXECUTION_ERROR_MARKERS = {
     "不是有效的 win32 应用程序": "unmatched_instruction",
     "reason_code=unsupported_executable_architecture": "unmatched_instruction",
     "winerror=216": "unmatched_instruction",
+    "reason_code=blocked_by_security_product": "launch_failed",
+    "winerror=225": "launch_failed",
+    "文件包含病毒": "launch_failed",
+    "potentially unwanted software": "launch_failed",
     "uploaded sample failed to start": "launch_failed",
     "execute_uploaded_sample requires a previously uploaded sample": "not_uploaded",
 }
@@ -1957,7 +1961,7 @@ def _execute_after_upload_observation(
         )
     except GuestAgentError as exc:
         execution_state = _nonfatal_remote_execution_state(exc)
-        if not execution_state and product_id == "qihoo-360":
+        if not execution_state and _execution_error_can_continue_to_collection(exc):
             execution_state = "execution_error"
         if execution_state:
             reason = f"execution action did not start: {exc}"
@@ -2106,6 +2110,14 @@ def _nonfatal_remote_execution_state(error: GuestAgentError) -> str:
         if marker.casefold() in text:
             return execution_state
     return ""
+
+
+def _execution_error_can_continue_to_collection(error: GuestAgentError) -> bool:
+    if error.source == "local":
+        return False
+    if error.status_code in {401, 403}:
+        return False
+    return True
 
 
 def _pre_polling_execution_exit_reason(execution_state: str) -> str:
