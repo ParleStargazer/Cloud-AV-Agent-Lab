@@ -208,6 +208,29 @@ class SingleRunTests(TestCase):
                 3.0,
             )
 
+    def test_fastmode_worker_not_ready_retries_before_continue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "eicar.exe"
+            sample_path.write_text("harmless placeholder", encoding="utf-8")
+            sleeps: list[float] = []
+            client = FakeGuestClient(worker_ready_states=[False, True])
+            adapter = FakeCloudAdapter()
+
+            result = run_single_case(
+                _options(root, sample_path, skip_initial_restore=True),
+                cloud_adapter_factory=lambda *args, **kwargs: adapter,
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertGreater(client.worker_status_calls, 1)
+            self.assertIn(1.0, sleeps)
+            run_log = (result.run_dir / "run.log").read_text(encoding="utf-8")
+            self.assertIn("Desktop Worker not ready", run_log)
+            self.assertIn("Desktop Worker ready", run_log)
+
     def test_execution_status_failure_continues_to_collection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -897,10 +920,55 @@ class SingleRunTests(TestCase):
             self.assertGreaterEqual(client.health_calls, 4)
             self.assertGreater(client.case_status_calls, 1)
             self.assertIn(1.0, sleeps)
+            self.assertIn(3.0, sleeps)
             run_log = (result.run_dir / "run.log").read_text(encoding="utf-8")
             self.assertIn("Guest Agent reconnect health ok 2/2", run_log)
             self.assertIn(
+                "Guest Agent reconnected; waiting 3s before retrying upload status "
+                "query",
+                run_log,
+            )
+            self.assertIn(
                 "Guest Agent reconnected; retrying upload status query",
+                run_log,
+            )
+
+    def test_worker_status_network_error_reconnects_before_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sample_path = root / "sample.exe"
+            sample_path.write_bytes(b"harmless")
+            sleeps: list[float] = []
+            client = FakeGuestClient(
+                worker_status_errors=[
+                    GuestAgentError(
+                        "worker status timeout",
+                        source="network",
+                    )
+                ],
+            )
+
+            result = run_single_case(
+                _options(root, sample_path, upload_poll_timeout_seconds=0.0),
+                cloud_adapter_factory=lambda *args, **kwargs: FakeCloudAdapter(),
+                guest_client_factory=lambda config: client,
+                sleep=sleeps.append,
+            )
+
+            self.assertEqual(result.final_status, "completed")
+            self.assertGreaterEqual(client.health_calls, 4)
+            self.assertGreater(client.worker_status_calls, 1)
+            self.assertTrue(client.worker_status_timeouts)
+            self.assertGreaterEqual(min(client.worker_status_timeouts), 30.0)
+            self.assertIn(1.0, sleeps)
+            self.assertIn(3.0, sleeps)
+            run_log = (result.run_dir / "run.log").read_text(encoding="utf-8")
+            self.assertIn(
+                "Guest Agent reconnected; waiting 3s before retrying worker/status",
+                run_log,
+            )
+            self.assertIn(
+                "Guest Agent reconnected; retrying worker/status",
                 run_log,
             )
 
@@ -1930,12 +1998,14 @@ class FakeGuestClient:
         readiness_error: GuestAgentError | None = None,
         execute_error: GuestAgentError | None = None,
         worker_ready: bool = True,
+        worker_ready_states: list[bool] | None = None,
         worker_reason: str = "",
         execution_states: list[str] | None = None,
         probe_states: list[str] | None = None,
         probe_error: GuestAgentError | None = None,
         execution_status_error: GuestAgentError | None = None,
         case_status_errors: list[GuestAgentError] | None = None,
+        worker_status_errors: list[GuestAgentError] | None = None,
     ) -> None:
         self.fail_collect = fail_collect
         self.status_upload_state = status_upload_state
@@ -1943,14 +2013,17 @@ class FakeGuestClient:
         self.readiness_error = readiness_error
         self.execute_error = execute_error
         self.worker_ready = worker_ready
+        self.worker_ready_states = list(worker_ready_states or [])
         self.worker_reason = worker_reason
         self.execution_states = list(execution_states or [])
         self.probe_states = list(probe_states or [])
         self.probe_error = probe_error
         self.execution_status_error = execution_status_error
         self.case_status_errors = list(case_status_errors or [])
+        self.worker_status_errors = list(worker_status_errors or [])
         self.health_calls = 0
         self.worker_status_calls = 0
+        self.worker_status_timeouts: list[float | None] = []
         self.case_status_calls = 0
         self.export_timeouts: list[float | None] = []
         self.execute_dry_runs: list[bool] = []
@@ -1969,14 +2042,22 @@ class FakeGuestClient:
 
     def worker_status(self, timeout_seconds: float | None = None) -> GuestAgentResponse:
         self.worker_status_calls += 1
+        self.worker_status_timeouts.append(timeout_seconds)
+        if self.worker_status_errors:
+            raise self.worker_status_errors.pop(0)
+        worker_ready = (
+            self.worker_ready_states.pop(0)
+            if self.worker_ready_states
+            else self.worker_ready
+        )
         return GuestAgentResponse(
             status="ok",
             message="worker",
             data={
-                "desktop_worker_ready": self.worker_ready,
-                "desktop_session_ready": self.worker_ready,
-                "worker_session_id": 1 if self.worker_ready else 0,
-                "desktop_session_state": "active" if self.worker_ready else "unknown",
+                "desktop_worker_ready": worker_ready,
+                "desktop_session_ready": worker_ready,
+                "worker_session_id": 1 if worker_ready else 0,
+                "desktop_session_state": "active" if worker_ready else "unknown",
                 "username": "AvTester-Admin",
                 "reason": self.worker_reason,
             },

@@ -57,6 +57,7 @@ DEFAULT_POST_EXECUTION_QUARANTINE_DELAY_SECONDS = 3.0
 DEFAULT_GUEST_RECONNECT_TIMEOUT_SECONDS = 10.0
 DEFAULT_GUEST_RECONNECT_INTERVAL_SECONDS = 1.0
 DEFAULT_GUEST_RECONNECT_SUCCESSES = 2
+DEFAULT_GUEST_RECONNECT_SETTLE_SECONDS = 3.0
 TERMINAL_EXECUTION_STATES = {
     "exited_cleanly",
     "exited_with_error",
@@ -446,7 +447,14 @@ def wait_desktop_worker_ready(
     last_reason = ""
     while True:
         elapsed = max(0.0, timeout_seconds - max(deadline - time.monotonic(), 0.0))
-        response = client.worker_status()
+        response = _call_guest_with_reconnect(
+            lambda: client.worker_status(
+                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds()
+            ),
+            client=client,
+            operation="worker/status",
+            sleep=sleep,
+        )
         ready = bool(response.data.get("desktop_worker_ready", False))
         reason = str(response.data.get("reason", ""))
         last_reason = reason
@@ -488,8 +496,19 @@ def check_guest_agent_ready_once(
     return response
 
 
-def check_desktop_worker_ready_once(client: GuestAgentClient) -> GuestAgentResponse:
-    response = client.worker_status()
+def check_desktop_worker_ready_once(
+    client: GuestAgentClient,
+    *,
+    sleep: SleepFunc = time.sleep,
+) -> GuestAgentResponse:
+    response = _call_guest_with_reconnect(
+        lambda: client.worker_status(
+            timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds()
+        ),
+        client=client,
+        operation="worker/status",
+        sleep=sleep,
+    )
     ready = bool(response.data.get("desktop_worker_ready", False))
     if not ready:
         reason = str(response.data.get("reason", "") or "not ready")
@@ -646,7 +665,12 @@ def _run_single_case_locked(
                 lock.heartbeat()
                 try:
                     worker_status = (
-                        check_desktop_worker_ready_once(client)
+                        wait_desktop_worker_ready(
+                            client,
+                            timeout_seconds=DEFAULT_GUEST_RECONNECT_TIMEOUT_SECONDS,
+                            interval_seconds=DEFAULT_GUEST_RECONNECT_INTERVAL_SECONDS,
+                            sleep=sleep,
+                        )
                         if options.skip_initial_restore
                         else wait_desktop_worker_ready(
                             client,
@@ -733,9 +757,14 @@ def _run_single_case_locked(
 
         with state.step("prepare_case"):
             lock.heartbeat()
-            client.prepare_case(
-                case,
-                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+            _call_guest_with_reconnect(
+                lambda: client.prepare_case(
+                    case,
+                    timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+                ),
+                client=client,
+                operation="prepare-case",
+                sleep=sleep,
             )
             case_started = True
             state.mark("case_started", True)
@@ -748,19 +777,25 @@ def _run_single_case_locked(
                 state=state,
                 case_id=case_id,
                 product_id=product_id,
+                sleep=sleep,
             )
             if readiness_result["status"] == "warning":
                 warning_count += 1
 
         with state.step("upload_sample"):
             lock.heartbeat()
-            client.upload_sample(
-                case_id=case_id,
-                sample_id=sample_id,
-                file_path=options.sample_path,
-                sha256=sha256,
-                md5=md5,
-                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+            _call_guest_with_reconnect(
+                lambda: client.upload_sample(
+                    case_id=case_id,
+                    sample_id=sample_id,
+                    file_path=options.sample_path,
+                    sha256=sha256,
+                    md5=md5,
+                    timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+                ),
+                client=client,
+                operation="upload-sample",
+                sleep=sleep,
             )
             upload_response = _poll_upload_status(
                 client,
@@ -1065,10 +1100,15 @@ def _run_single_case_locked(
         with state.step("collect_logs"):
             lock.heartbeat()
             try:
-                collection_response = client.collect_logs(
-                    case_id,
-                    product_id,
-                    timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+                collection_response = _call_guest_with_reconnect(
+                    lambda: client.collect_logs(
+                        case_id,
+                        product_id,
+                        timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+                    ),
+                    client=client,
+                    operation="collect-logs",
+                    sleep=sleep,
                 )
             except GuestAgentError as exc:
                 if exc.source != "remote" or exc.status_code in {401, 403}:
@@ -1104,9 +1144,14 @@ def _run_single_case_locked(
                 stage="case_summary",
                 allow_warning=collection_completed,
             )
-            summary_response = client.case_summary(
-                case_id,
-                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+            summary_response = _call_guest_with_reconnect(
+                lambda: client.case_summary(
+                    case_id,
+                    timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+                ),
+                client=client,
+                operation="case-summary",
+                sleep=sleep,
             )
             summary_path = _write_summary_outputs(run_dir, summary_response.data)
             verdict = str(summary_response.data.get("verdict", ""))
@@ -1125,10 +1170,17 @@ def _run_single_case_locked(
                 stage="export_evidence",
                 allow_warning=collection_completed,
             )
-            evidence_response = client.export_evidence_bundle(
-                case_id,
-                run_dir / f"case_evidence_{case_id}.zip",
-                timeout_seconds=options.normal_evidence_timeout.socket_timeout_seconds(),
+            evidence_response = _call_guest_with_reconnect(
+                lambda: client.export_evidence_bundle(
+                    case_id,
+                    run_dir / f"case_evidence_{case_id}.zip",
+                    timeout_seconds=(
+                        options.normal_evidence_timeout.socket_timeout_seconds()
+                    ),
+                ),
+                client=client,
+                operation="export-evidence",
+                sleep=sleep,
             )
             evidence_path = Path(str(evidence_response.data.get("output_path", "")))
             evidence_saved = True
@@ -1393,6 +1445,41 @@ def _try_fast_fail_salvage(
     return None
 
 
+def _call_guest_with_reconnect(
+    call: Callable[[], GuestAgentResponse],
+    *,
+    client: GuestAgentClient,
+    operation: str,
+    sleep: SleepFunc,
+) -> GuestAgentResponse:
+    try:
+        return call()
+    except GuestAgentError as exc:
+        if exc.source != "network":
+            raise
+        LOGGER.warning(
+            "Guest Agent request failed; attempting reconnect before retry: "
+            "operation=%s error=%s",
+            operation,
+            type(exc).__name__,
+        )
+        recovered, _ = _try_reconnect_guest_agent(client, sleep=sleep)
+        if not recovered:
+            LOGGER.warning(
+                "Guest Agent reconnect failed; giving up request: operation=%s",
+                operation,
+            )
+            raise
+        LOGGER.info(
+            "Guest Agent reconnected; waiting %.0fs before retrying %s",
+            DEFAULT_GUEST_RECONNECT_SETTLE_SECONDS,
+            operation,
+        )
+        sleep(DEFAULT_GUEST_RECONNECT_SETTLE_SECONDS)
+        LOGGER.info("Guest Agent reconnected; retrying %s", operation)
+        return call()
+
+
 def _poll_upload_status(
     client: GuestAgentClient,
     case_id: str,
@@ -1429,6 +1516,16 @@ def _poll_upload_status(
             )
             elapsed = min(timeout_seconds, elapsed + reconnect_elapsed)
             if recovered:
+                LOGGER.info(
+                    "Guest Agent reconnected; waiting %.0fs before retrying upload "
+                    "status query",
+                    DEFAULT_GUEST_RECONNECT_SETTLE_SECONDS,
+                )
+                sleep(DEFAULT_GUEST_RECONNECT_SETTLE_SECONDS)
+                elapsed = min(
+                    timeout_seconds,
+                    elapsed + DEFAULT_GUEST_RECONNECT_SETTLE_SECONDS,
+                )
                 LOGGER.info("Guest Agent reconnected; retrying upload status query")
                 continue
             raise
@@ -1496,6 +1593,7 @@ def _check_security_product_readiness_warning_only(
     state: RunState,
     case_id: str,
     product_id: str,
+    sleep: SleepFunc = time.sleep,
 ) -> dict[str, str]:
     stage = "security_product_readiness"
     if not product_id:
@@ -1526,10 +1624,15 @@ def _check_security_product_readiness_warning_only(
         return {"status": "skipped", "state": "unknown"}
 
     try:
-        response = client.check_security_product_readiness(
-            case_id,
-            product_id,
-            timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+        response = _call_guest_with_reconnect(
+            lambda: client.check_security_product_readiness(
+                case_id,
+                product_id,
+                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+            ),
+            client=client,
+            operation="security-product-readiness",
+            sleep=sleep,
         )
     except Exception:
         reason = (
@@ -1653,9 +1756,14 @@ def _warm_up_security_product_warning_only(
         return {"status": "skipped"}
 
     try:
-        response = client.warm_up_security_product(
-            product_id,
-            timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+        response = _call_guest_with_reconnect(
+            lambda: client.warm_up_security_product(
+                product_id,
+                timeout_seconds=GUEST_CONTROL_TIMEOUT.socket_timeout_seconds(),
+            ),
+            client=client,
+            operation="product-warmup",
+            sleep=sleep,
         )
     except GuestAgentError as exc:
         reason = _sanitize_readiness_message(str(exc))
